@@ -1,7 +1,7 @@
 bl_info = {
     "name": "MMD PMM Bridge",
     "author": "",
-    "version": (0, 0, 1),
+    "version": (0, 1, 0),
     "blender": (5, 2, 0),
     "location": "View3D > Sidebar > MMD Bridge",
     "description": "Live-sync MikuMikuDance .pmm keyframes into Blender through mmd_tools",
@@ -13,6 +13,7 @@ import importlib
 import inspect
 import logging
 import os
+import re
 import struct
 import sys
 import math
@@ -83,6 +84,12 @@ CAMERA_STATE_SIZE = 37
 BONE_STATE_SIZE = 31
 MORPH_STATE_SIZE = 4
 OUTSIDE_PARENT_STATE_SIZE = 16
+LIGHT_STATE_SIZE = 24
+ACCESSORY_NAME_LENGTH = 100
+ACCESSORY_PATH_LENGTH = 256
+ACCESSORY_KEY = struct.Struct("<iiiBii3f3ffBB")
+ACCESSORY_ADDITIONAL = struct.Struct("<iiiiBii3f3ffBB")
+ACCESSORY_STATE_SIZE = 39
 
 
 class PmmError(Exception):
@@ -144,6 +151,28 @@ class PmmModel:
         self.last_frame = 0
 
 
+class AccessoryKey(NamedTuple):
+    frame: int
+    visible: int
+    parent_model: int
+    parent_bone: int
+    position: Tuple[float, float, float]
+    rotation: Tuple[float, float, float]
+    scale: float
+    shadow: int
+
+
+class PmmAccessory:
+    __slots__ = ("index", "name", "path", "draw_order", "keys")
+
+    def __init__(self):
+        self.index = 0
+        self.name = ""
+        self.path = ""
+        self.draw_order = 0
+        self.keys = []
+
+
 class PmmProject:
     __slots__ = (
         "version",
@@ -152,6 +181,8 @@ class PmmProject:
         "camera_keys",
         "light_keys",
         "scene_error",
+        "accessories",
+        "accessory_error",
     )
 
     def __init__(self):
@@ -161,6 +192,8 @@ class PmmProject:
         self.camera_keys = []
         self.light_keys = []
         self.scene_error = ""
+        self.accessories = []
+        self.accessory_error = ""
 
 
 class Reader:
@@ -378,6 +411,61 @@ def read_model(reader):
     return model
 
 
+def accessory_key_from(values):
+    return AccessoryKey(
+        values[0],
+        values[3],
+        values[4],
+        values[5],
+        tuple(values[6:9]),
+        tuple(values[9:12]),
+        values[12],
+        values[13],
+    )
+
+
+def read_accessory_keys(reader):
+    first = reader.unpack(ACCESSORY_KEY)
+    additional = {}
+    for _ in range(reader.count()):
+        v = reader.unpack(ACCESSORY_ADDITIONAL)
+        additional[v[0]] = (v[2], v[4], v[1:])
+    keys = [accessory_key_from(first)]
+    seen = set()
+    cursor = first[2]
+    while cursor != 0 and cursor not in seen:
+        entry = additional.get(cursor)
+        if entry is None:
+            break
+        seen.add(cursor)
+        values = entry[2]
+        keys.append(accessory_key_from(values))
+        cursor = values[2]
+    return normalize_keys(keys)
+
+
+def read_accessories(reader):
+    reader.u8()
+    reader.i32()
+    count = reader.u8()
+    reader.skip(count * ACCESSORY_NAME_LENGTH)
+    found = []
+    for position in range(count):
+        acc = PmmAccessory()
+        acc.index = reader.u8()
+        if acc.index != position:
+            raise PmmError(
+                "accessory record %d out of sync (index %d)" % (position, acc.index)
+            )
+        acc.name = reader.fixed_string(ACCESSORY_NAME_LENGTH)
+        acc.path = reader.fixed_string(ACCESSORY_PATH_LENGTH)
+        acc.draw_order = reader.u8()
+        acc.keys = read_accessory_keys(reader)
+        reader.skip(ACCESSORY_STATE_SIZE)
+        found.append(acc)
+    return found
+
+
 def parse_pmm(data):
     project = PmmProject()
     project.version = read_version(data)
@@ -401,6 +489,13 @@ def parse_pmm(data):
         )
     except PmmError as error:
         project.scene_error = str(error)
+    else:
+        try:
+            reader.skip(LIGHT_STATE_SIZE)
+            project.accessories = read_accessories(reader)
+        except PmmError as error:
+            project.accessory_error = str(error)
+            project.accessories = []
     return project
 
 
@@ -448,7 +543,7 @@ def interpolation_to_vmd(source, layout="CURVE"):
     return bytes(out)
 
 
-def build_vmd(model, layout="CURVE"):
+def build_vmd(model, layout="CURVE", morph_map=None):
     chunks = [struct.pack("<30s20s", VMD_SIGNATURE, encode_name(model.name, 20))]
     bone_frames = []
     for name, keys in zip(model.bone_names, model.bones):
@@ -467,7 +562,7 @@ def build_vmd(model, layout="CURVE"):
     chunks.extend(bone_frames)
     morph_frames = []
     for name, keys in zip(model.morph_names, model.morphs):
-        packed_name = encode_name(name)
+        packed_name = encode_name(morph_map.get(name, name) if morph_map else name)
         for key in keys:
             morph_frames.append(MORPH_FRAME.pack(packed_name, key.frame, key.weight))
     chunks.append(struct.pack("<I", len(morph_frames)))
@@ -516,6 +611,324 @@ def build_scene_vmd(camera_keys):
     return b"".join(chunks)
 
 
+X_TOKEN = re.compile(r'"(?:[^"\\]|\\.)*"|[{}]|[;,]|[^\s{};,"]+')
+
+
+class XBlock:
+    __slots__ = ("kind", "name", "data", "children")
+
+    def __init__(self, kind, name):
+        self.kind = kind
+        self.name = name
+        self.data = []
+        self.children = []
+
+
+class XMaterial(NamedTuple):
+    name: str
+    diffuse: Tuple[float, float, float, float]
+    power: float
+    specular: Tuple[float, float, float]
+    emissive: Tuple[float, float, float]
+    texture: str
+
+
+class XMesh:
+    __slots__ = ("vertices", "faces", "uvs", "face_materials", "materials", "colors")
+
+    def __init__(self):
+        self.vertices = []
+        self.faces = []
+        self.uvs = []
+        self.face_materials = []
+        self.materials = []
+        self.colors = {}
+
+
+class XScene:
+    __slots__ = ("meshes", "warnings", "mode")
+
+    def __init__(self):
+        self.meshes = []
+        self.warnings = []
+        self.mode = "txt"
+
+
+class XError(Exception):
+    pass
+
+
+UNSUPPORTED_BLOCKS = (
+    "SkinWeights",
+    "XSkinMeshHeader",
+    "AnimationSet",
+    "Animation",
+    "AnimTicksPerSecond",
+)
+
+
+def x_header_mode(raw):
+    if len(raw) < 16 or raw[:4] != b"xof ":
+        raise XError("not a DirectX .x file")
+    return raw[8:12].decode("ascii", errors="replace").strip()
+
+
+def x_tokens(text):
+    text = re.sub(r"//[^\n]*|#[^\n]*", "", text)
+    return X_TOKEN.findall(text)
+
+
+def x_number(token):
+    try:
+        return float(token)
+    except ValueError:
+        return None
+
+
+def x_skip_block(tokens, i):
+    depth = 0
+    while i < len(tokens):
+        if tokens[i] == "{":
+            depth += 1
+        elif tokens[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    raise XError("unbalanced braces")
+
+
+def x_parse_body(tokens, i, block):
+    while i < len(tokens):
+        token = tokens[i]
+        if token == "}":
+            return i + 1
+        if token in (";", ","):
+            i += 1
+            continue
+        if token == "{":
+            j = i + 1
+            ref = []
+            while j < len(tokens) and tokens[j] != "}":
+                if tokens[j] not in (";", ","):
+                    ref.append(tokens[j])
+                j += 1
+            child = XBlock("__ref__", ref[0] if ref else "")
+            block.children.append(child)
+            i = j + 1
+            continue
+        if token.startswith('"'):
+            block.data.append(token[1:-1])
+            i += 1
+            continue
+        number = x_number(token)
+        if number is not None:
+            block.data.append(number)
+            i += 1
+            continue
+        kind = token
+        i += 1
+        name = ""
+        if i < len(tokens) and tokens[i] != "{":
+            name = tokens[i]
+            i += 1
+        if i >= len(tokens) or tokens[i] != "{":
+            raise XError("expected '{' after %s" % kind)
+        if kind == "template":
+            i = x_skip_block(tokens, i)
+            continue
+        i += 1
+        child = XBlock(kind, name)
+        if i < len(tokens) and tokens[i].startswith("<") and tokens[i].endswith(">"):
+            i += 1
+        i = x_parse_body(tokens, i, child)
+        block.children.append(child)
+    return i
+
+
+def x_parse_tree(text):
+    root = XBlock("root", "")
+    tokens = x_tokens(text)
+    x_parse_body(tokens, 0, root)
+    return root
+
+
+def x_mat_mul(a, b):
+    return [
+        sum(a[r * 4 + k] * b[k * 4 + c] for k in range(4))
+        for r in range(4)
+        for c in range(4)
+    ]
+
+
+X_IDENTITY = [
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0,
+]
+
+
+def x_collect_materials(root):
+    found = {}
+
+    def walk(block):
+        for child in block.children:
+            if child.kind == "Material" and child.name:
+                found[child.name] = child
+            walk(child)
+
+    walk(root)
+    return found
+
+
+def x_read_material(block, name):
+    d = block.data
+    if len(d) < 11:
+        raise XError("short Material block")
+    texture = ""
+    for child in block.children:
+        if child.kind == "TextureFilename" and child.data:
+            texture = str(child.data[0])
+    return XMaterial(
+        name or "Material",
+        (d[0], d[1], d[2], d[3]),
+        d[4],
+        (d[5], d[6], d[7]),
+        (d[8], d[9], d[10]),
+        texture,
+    )
+
+
+def x_read_mesh(block, matrix, named_materials):
+    d = block.data
+    mesh = XMesh()
+    pos = 0
+    count = int(d[pos])
+    pos += 1
+    raw = d[pos : pos + count * 3]
+    pos += count * 3
+    for k in range(count):
+        x, y, z = raw[k * 3 : k * 3 + 3]
+        m = matrix
+        mesh.vertices.append(
+            (
+                x * m[0] + y * m[4] + z * m[8] + m[12],
+                x * m[1] + y * m[5] + z * m[9] + m[13],
+                x * m[2] + y * m[6] + z * m[10] + m[14],
+            )
+        )
+    face_count = int(d[pos])
+    pos += 1
+    for _ in range(face_count):
+        n = int(d[pos])
+        pos += 1
+        mesh.faces.append(tuple(int(v) for v in d[pos : pos + n]))
+        pos += n
+    for child in block.children:
+        cd = child.data
+        if child.kind == "MeshTextureCoords" and cd:
+            n = int(cd[0])
+            mesh.uvs = [(cd[1 + k * 2], cd[2 + k * 2]) for k in range(n)]
+        elif child.kind == "MeshMaterialList" and len(cd) >= 2:
+            n_mat = int(cd[0])
+            n_idx = int(cd[1])
+            indexes = [int(v) for v in cd[2 : 2 + n_idx]]
+            if n_idx == 1 and face_count > 1:
+                indexes = indexes * face_count
+            mesh.face_materials = indexes
+            for sub in child.children:
+                if sub.kind == "Material":
+                    mesh.materials.append(x_read_material(sub, sub.name))
+                elif sub.kind == "__ref__":
+                    target = named_materials.get(sub.name)
+                    if target is not None:
+                        mesh.materials.append(x_read_material(target, target.name))
+            if n_mat and len(mesh.materials) < n_mat:
+                while len(mesh.materials) < n_mat:
+                    mesh.materials.append(
+                        XMaterial(
+                            "Material",
+                            (0.8, 0.8, 0.8, 1.0),
+                            0.0,
+                            (0.0, 0.0, 0.0),
+                            (0.0, 0.0, 0.0),
+                            "",
+                        )
+                    )
+        elif child.kind == "MeshVertexColors" and cd:
+            n = int(cd[0])
+            for k in range(n):
+                base = 1 + k * 5
+                mesh.colors[int(cd[base])] = (
+                    cd[base + 1],
+                    cd[base + 2],
+                    cd[base + 3],
+                    cd[base + 4],
+                )
+    return mesh
+
+
+def x_walk(block, matrix, scene, named_materials):
+    for child in block.children:
+        if child.kind == "Frame":
+            local = list(X_IDENTITY)
+            for sub in child.children:
+                if sub.kind == "FrameTransformMatrix" and len(sub.data) >= 16:
+                    local = [float(v) for v in sub.data[:16]]
+            x_walk(child, x_mat_mul(local, matrix), scene, named_materials)
+        elif child.kind == "Mesh":
+            scene.meshes.append(x_read_mesh(child, matrix, named_materials))
+            for sub in child.children:
+                if sub.kind in UNSUPPORTED_BLOCKS:
+                    note = (
+                        "%s ignored (skinned/animated .x is not supported)" % sub.kind
+                    )
+                    if note not in scene.warnings:
+                        scene.warnings.append(note)
+        elif child.kind in UNSUPPORTED_BLOCKS:
+            note = "%s ignored (skinned/animated .x is not supported)" % child.kind
+            if note not in scene.warnings:
+                scene.warnings.append(note)
+
+
+def x_decode(raw):
+    raw = raw.replace(b"\x00", b"")
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("cp932", errors="replace")
+
+
+def parse_x_bytes(raw):
+    scene = XScene()
+    scene.mode = x_header_mode(raw)
+    if scene.mode != "txt":
+        return scene
+    body = x_decode(raw[16:])
+    root = x_parse_tree(body)
+    named = x_collect_materials(root)
+    x_walk(root, list(X_IDENTITY), scene, named)
+    for block in root.children:
+        if block.kind in UNSUPPORTED_BLOCKS:
+            note = "%s ignored (skinned/animated .x is not supported)" % block.kind
+            if note not in scene.warnings:
+                scene.warnings.append(note)
+    return scene
+
+
 ACTION_PREFIX = "MMDBridge_"
 CAMERA_COLLECTION = "MMD_Camera"
 LIGHT_COLLECTION = "MMD_Sun"
@@ -526,6 +939,18 @@ TEMP_PREFIX = "mmd_bridge_"
 TEMP_DIR_NAME = "mmd_bridge"
 STALE_TEMP_SECONDS = 300
 FRAME_EPSILON = 1e-4
+CLIP_TRACK_NAME = "MMDBridge"
+UV_KEY_PREFIX = "MMDUV_"
+UV_NODE_PREFIX = "MMDBridgeUV"
+UV_ATTRIBUTE_PREFIX = "MMDBridgeUV_"
+UV_SLIDER_LIMIT = 10.0
+ACCESSORY_COLLECTION = "MMD_Accessories"
+ACCESSORY_PREFIX = "MMDAcc_"
+ACCESSORY_FOLLOW_PREFIX = "MMDBridgeAcc"
+ACCESSORY_UNIT = 10.0
+X_IMPORTER_MODULES = ("io_directx_x", "io_scene_x")
+X_IMPORTER_URL = "https://extensions.blender.org/add-ons/io-directx-x/"
+MMD_TOOLS_URL = "https://extensions.blender.org/add-ons/mmd-tools/"
 
 _follow_items = [("NONE", "None", "")]
 _last_sync = {"digest": None}
@@ -533,6 +958,35 @@ _last_sync = {"digest": None}
 
 def mmd_tools_available():
     return hasattr(bpy.types, "MMD_TOOLS_OT_import_vmd")
+
+
+def addon_loaded(modules):
+    try:
+        names = list(bpy.context.preferences.addons.keys())
+    except Exception:
+        return False
+    return any(name.rsplit(".", 1)[-1] in modules for name in names)
+
+
+def x_importer_available():
+    return addon_loaded(X_IMPORTER_MODULES)
+
+
+def missing_dependencies():
+    missing = []
+    if not mmd_tools_available():
+        missing.append(
+            ("mmd_tools", "mmd_tools is not installed or enabled", MMD_TOOLS_URL)
+        )
+    if not x_importer_available():
+        missing.append(
+            (
+                "DirectX X Importer",
+                "DirectX X Importer is not installed (only needed for binary or compressed .x accessories)",
+                X_IMPORTER_URL,
+            )
+        )
+    return missing
 
 
 def target_usable(obj):
@@ -570,6 +1024,13 @@ def is_mmd_root(self, obj):
     return getattr(obj, "mmd_type", "") == "ROOT"
 
 
+def clip_poll(self, action):
+    return not (
+        action.name.startswith(ACTION_PREFIX + "Scene")
+        or action.name.startswith(ACTION_PREFIX + "Light")
+    )
+
+
 def redraw_all():
     wm = bpy.context.window_manager
     if wm is None:
@@ -582,6 +1043,10 @@ def redraw_all():
 def on_target_changed(self, context):
     name = self.target.name if self.target else None
     log.info("target for PMM model '%s' (%s) set to %s", self.pmm_name, self.key, name)
+    if self.clip is not None:
+        self.clip = None
+    if self.shape_clip is not None:
+        self.shape_clip = None
 
 
 def follow_model_items(self, context):
@@ -828,11 +1293,15 @@ def model_frames(model):
             yield key.frame
 
 
-def snapshot_outside(owners, low, high):
+def snapshot_outside(owners, low, high, sources=None):
     saved = []
     for owner in owners:
-        data = owner.animation_data
-        action = data.action if data else None
+        key = owner.as_pointer()
+        if sources is not None and key in sources:
+            action = sources[key]
+        else:
+            data = owner.animation_data
+            action = data.action if data else None
         if action is None:
             continue
         for fcurve in iter_fcurves(action):
@@ -927,7 +1396,7 @@ def restore_points(saved):
     return restored
 
 
-def reset_animation(targets):
+def reset_animation(targets, keep_keys=False):
     for obj in targets:
         if obj.animation_data:
             obj.animation_data.action = None
@@ -935,7 +1404,7 @@ def reset_animation(targets):
         if obj.type in {"CAMERA", "LIGHT"} and data is not None and data.animation_data:
             data.animation_data.action = None
         shape_keys = getattr(data, "shape_keys", None)
-        if shape_keys is not None:
+        if shape_keys is not None and not keep_keys:
             if shape_keys.animation_data:
                 shape_keys.animation_data.action = None
             for block in shape_keys.key_blocks:
@@ -1045,7 +1514,739 @@ def remove_file(path):
     log.warning("could not remove temp file %s; it will be swept on a later sync", path)
 
 
-def import_model(root, model, settings):
+def morph_collections(root):
+    mmd_root = getattr(root, "mmd_root", None)
+    if mmd_root is None:
+        return []
+    names = (
+        "vertex_morphs",
+        "bone_morphs",
+        "material_morphs",
+        "uv_morphs",
+        "group_morphs",
+    )
+    return [getattr(mmd_root, name) for name in names if hasattr(mmd_root, name)]
+
+
+def resolve_morph_names(root, meshes, model):
+    entries = []
+    seen = set()
+    for collection in morph_collections(root):
+        for morph in collection:
+            if morph.name not in seen:
+                seen.add(morph.name)
+                entries.append((morph.name, getattr(morph, "name_e", "")))
+    for mesh in meshes:
+        keys = getattr(getattr(mesh, "data", None), "shape_keys", None)
+        if keys is None:
+            continue
+        for block in keys.key_blocks:
+            if block.name not in seen:
+                seen.add(block.name)
+                entries.append((block.name, ""))
+    by_english = {}
+    for name, name_e in entries:
+        if name_e and name_e not in by_english:
+            by_english[name_e] = name
+    resolved = {}
+    for pmm_name in model.morph_names:
+        if pmm_name in seen:
+            resolved[pmm_name] = pmm_name
+        elif pmm_name in by_english:
+            resolved[pmm_name] = by_english[pmm_name]
+        else:
+            prefix = pmm_name.encode("cp932", errors="ignore")
+            if prefix:
+                candidates = [
+                    n
+                    for n, _ in entries
+                    if n.encode("cp932", errors="ignore").startswith(prefix)
+                ]
+                if len(candidates) == 1:
+                    resolved[pmm_name] = candidates[0]
+    return resolved, [name for name, _ in entries]
+
+
+def report_morphs(model, resolved, available):
+    animated = [
+        n
+        for n, keys in zip(model.morph_names, model.morphs)
+        if any(abs(k.weight) > 1e-6 for k in keys)
+    ]
+    log.info("morphs with non-zero keys: %d %s", len(animated), animated[:20])
+    renamed = [(n, resolved[n]) for n in animated if n in resolved and resolved[n] != n]
+    if renamed:
+        log.info("morph name remap: %s", renamed)
+    missing = [n for n in animated if n not in resolved]
+    if missing:
+        log.warning("PMM morphs with no Blender match: %s", missing)
+        log.warning("Blender morph names available (first 80): %s", available[:80])
+
+
+def sample_morph(keys, frame):
+    if frame <= keys[0].frame:
+        return keys[0].weight
+    if frame >= keys[-1].frame:
+        return keys[-1].weight
+    for a, b in zip(keys, keys[1:]):
+        if a.frame <= frame <= b.frame:
+            span = b.frame - a.frame
+            if span == 0:
+                return a.weight
+            return a.weight + (b.weight - a.weight) * (frame - a.frame) / span
+    return keys[-1].weight
+
+
+def group_morph_table(root):
+    mmd_root = getattr(root, "mmd_root", None)
+    groups = getattr(mmd_root, "group_morphs", None)
+    if groups is None:
+        return {}
+    return {group.name: group for group in groups}
+
+
+def uv_morph_table(root):
+    mmd_root = getattr(root, "mmd_root", None)
+    morphs = getattr(mmd_root, "uv_morphs", None)
+    if morphs is None:
+        return {}
+    return {morph.name: morph for morph in morphs}
+
+
+def expand_group_morph(groups, name, factor, depth=0):
+    group = groups.get(name)
+    if group is None or depth > 6:
+        return []
+    leaves = []
+    for offset in group.data:
+        scaled = factor * offset.factor
+        if offset.morph_type == "group_morphs":
+            leaves.extend(expand_group_morph(groups, offset.name, scaled, depth + 1))
+        else:
+            leaves.append((offset.morph_type, offset.name, scaled))
+    return leaves
+
+
+def rewrite_fcurve(fcurve, frames, values):
+    points = fcurve.keyframe_points
+    try:
+        points.clear()
+    except AttributeError:
+        while len(points):
+            points.remove(points[0], fast=True)
+    for frame, value in zip(frames, values):
+        point = points.insert(frame, value, options={"FAST"})
+        point.interpolation = "LINEAR"
+    fcurve.update()
+
+
+def uv_key_name(leaf):
+    raw = (UV_KEY_PREFIX + leaf).encode("utf-8")[:63]
+    return raw.decode("utf-8", errors="ignore")
+
+
+def uv_attribute_name(index):
+    return "%s%d" % (UV_ATTRIBUTE_PREFIX, index)
+
+
+def uv_group_axis(name, morph_name):
+    if not name.startswith("UV_") or len(name) < 6:
+        return None
+    if name[3:-2] != morph_name or name[-2] not in "+-" or name[-1] not in "XYZW":
+        return None
+    return name[-2], "XYZW".index(name[-1])
+
+
+def uv_offset_map(mesh_obj, morph):
+    offsets = {}
+    if morph.data_type == "VERTEX_GROUP":
+        scale = morph.vertex_group_scale
+        axes = {}
+        for group in mesh_obj.vertex_groups:
+            found = uv_group_axis(group.name, morph.name)
+            if found is not None:
+                axes[group.index] = found
+        if axes:
+            for vertex in mesh_obj.data.vertices:
+                for member in vertex.groups:
+                    entry = axes.get(member.group)
+                    if entry is None or member.weight <= 0:
+                        continue
+                    sign, axis = entry
+                    slot = offsets.setdefault(vertex.index, [0.0, 0.0, 0.0, 0.0])
+                    slot[axis] += (
+                        -member.weight * scale if sign == "-" else member.weight * scale
+                    )
+    else:
+        for item in morph.data:
+            slot = offsets.setdefault(item.index, [0.0, 0.0, 0.0, 0.0])
+            for axis in range(4):
+                slot[axis] += item.offset[axis]
+    return offsets
+
+
+def uv_natively_bound(mesh_obj, morph_name):
+    for modifier in mesh_obj.modifiers:
+        if (
+            modifier.type == "UV_WARP"
+            and modifier.name.startswith("mmd_bind")
+            and uv_group_axis(modifier.vertex_group, morph_name)
+        ):
+            return True
+    return False
+
+
+def strip_uv_nodes(material):
+    tree = getattr(material, "node_tree", None)
+    if tree is None:
+        return
+    nodes = tree.nodes
+    for head in [n for n in nodes if n.name.startswith(UV_NODE_PREFIX + "_Add0")]:
+        tex = nodes.get(head.get("mmd_bridge_tex", ""))
+        if tex is not None and head.inputs[0].is_linked:
+            tree.links.new(head.inputs[0].links[0].from_socket, tex.inputs["Vector"])
+    for node in [n for n in nodes if n.name.startswith(UV_NODE_PREFIX)]:
+        nodes.remove(node)
+    anim = tree.animation_data
+    if anim is not None:
+        for fcurve in [fc for fc in anim.drivers if UV_NODE_PREFIX in fc.data_path]:
+            anim.drivers.remove(fcurve)
+
+
+def clear_uv_channels(mesh_obj):
+    mesh = mesh_obj.data
+    for attribute in [
+        a for a in mesh.attributes if a.name.startswith(UV_ATTRIBUTE_PREFIX)
+    ]:
+        mesh.attributes.remove(attribute)
+    for material in mesh.materials:
+        if material is not None:
+            strip_uv_nodes(material)
+
+
+def add_uv_driver(tree, weight_node, key, block_name):
+    path = 'nodes["%s"].outputs[0].default_value' % weight_node.name
+    fcurve = tree.driver_add(path)
+    driver = fcurve.driver
+    driver.type = "SUM"
+    variable = driver.variables.new()
+    variable.name = "w"
+    variable.type = "SINGLE_PROP"
+    target = variable.targets[0]
+    target.id_type = "KEY"
+    target.id = key
+    escaped = block_name.replace("\\", "\\\\").replace('"', '\\"')
+    target.data_path = 'key_blocks["%s"].value' % escaped
+
+
+def find_base_texture(nodes):
+    tex = nodes.get("mmd_base_tex")
+    if tex is not None and tex.bl_idname == "ShaderNodeTexImage":
+        return tex
+    for node in nodes:
+        if node.bl_idname != "ShaderNodeTexImage" or node.image is None:
+            continue
+        if node.name.startswith(("mmd_toon_tex", "mmd_sphere_tex", UV_NODE_PREFIX)):
+            continue
+        return node
+    return None
+
+
+def build_uv_nodes(material, specs):
+    tree = getattr(material, "node_tree", None)
+    if tree is None:
+        return False
+    nodes, links = tree.nodes, tree.links
+    tex = find_base_texture(nodes)
+    if tex is None:
+        return False
+    vector = tex.inputs["Vector"]
+    if vector.is_linked:
+        previous = vector.links[0].from_socket
+    else:
+        coord = nodes.new("ShaderNodeTexCoord")
+        coord.name = UV_NODE_PREFIX + "_Coord"
+        previous = coord.outputs["UV"]
+    for number, spec in enumerate(specs):
+        attribute = nodes.new("ShaderNodeAttribute")
+        attribute.name = "%s_Attr%d" % (UV_NODE_PREFIX, number)
+        attribute.attribute_type = "GEOMETRY"
+        attribute.attribute_name = spec["attribute"]
+        weight = nodes.new("ShaderNodeValue")
+        weight.name = "%s_Weight%d" % (UV_NODE_PREFIX, number)
+        scale = nodes.new("ShaderNodeVectorMath")
+        scale.name = "%s_Scale%d" % (UV_NODE_PREFIX, number)
+        scale.operation = "SCALE"
+        add = nodes.new("ShaderNodeVectorMath")
+        add.name = "%s_Add%d" % (UV_NODE_PREFIX, number)
+        add.operation = "ADD"
+        if number == 0:
+            add["mmd_bridge_tex"] = tex.name
+        links.new(attribute.outputs["Vector"], scale.inputs[0])
+        links.new(weight.outputs[0], scale.inputs[3])
+        links.new(previous, add.inputs[0])
+        links.new(scale.outputs[0], add.inputs[1])
+        previous = add.outputs[0]
+        add_uv_driver(tree, weight, spec["key"], spec["block"])
+    links.new(previous, vector)
+    return True
+
+
+def touched_material_indices(mesh, vertex_ids):
+    found = set()
+    for polygon in mesh.polygons:
+        if polygon.material_index in found:
+            continue
+        for vertex in polygon.vertices:
+            if vertex in vertex_ids:
+                found.add(polygon.material_index)
+                break
+    return found
+
+
+def uv_leaf_names(model, resolved, groups, uv_morphs):
+    leaves = []
+    for name, mkeys in zip(model.morph_names, model.morphs):
+        if not any(abs(k.weight) > 1e-6 for k in mkeys):
+            continue
+        target = resolved.get(name)
+        if target is None:
+            continue
+        if target in groups:
+            for kind, leaf, factor in expand_group_morph(groups, target, 1.0):
+                if kind == "uv_morphs" and abs(factor) > 1e-9 and leaf not in leaves:
+                    leaves.append(leaf)
+        elif target in uv_morphs and target not in leaves:
+            leaves.append(target)
+    return leaves
+
+
+def prepare_uv_channels(root, meshes, model, resolved, enabled):
+    for mesh_obj in meshes:
+        if mesh_obj.type == "MESH" and mesh_obj.mode != "EDIT":
+            clear_uv_channels(mesh_obj)
+    if not enabled:
+        return []
+    uv_morphs = uv_morph_table(root)
+    if not uv_morphs:
+        return []
+    leaves = uv_leaf_names(model, resolved, group_morph_table(root), uv_morphs)
+    channels = []
+    per_mesh = {}
+    for leaf in leaves:
+        morph = uv_morphs[leaf]
+        if morph.uv_index != 0:
+            log.warning(
+                "UV morph '%s' targets additional UV %d; only the base UV is supported",
+                leaf,
+                morph.uv_index,
+            )
+            continue
+        for mesh_obj in meshes:
+            if mesh_obj.type != "MESH" or mesh_obj.mode == "EDIT":
+                continue
+            if uv_natively_bound(mesh_obj, leaf):
+                log.info(
+                    "UV morph '%s' on '%s' is bound by mmd_tools (UV Warp modifiers); leaving it to mmd_tools",
+                    leaf,
+                    mesh_obj.name,
+                )
+                continue
+            offsets = uv_offset_map(mesh_obj, morph)
+            usable = {
+                i: (o[0], -o[1])
+                for i, o in offsets.items()
+                if abs(o[0]) > 1e-9 or abs(o[1]) > 1e-9
+            }
+            if not usable:
+                log.warning(
+                    "UV morph '%s' has no X/Y offsets on '%s'", leaf, mesh_obj.name
+                )
+                continue
+            number = per_mesh.get(mesh_obj.as_pointer(), 0)
+            per_mesh[mesh_obj.as_pointer()] = number + 1
+            channels.append(
+                {"leaf": leaf, "mesh": mesh_obj, "offsets": usable, "number": number}
+            )
+    by_mesh = {}
+    for channel in channels:
+        mesh_obj = channel["mesh"]
+        mesh = mesh_obj.data
+        count = len(mesh.vertices)
+        attribute = uv_attribute_name(channel["number"])
+        flat = [0.0] * (3 * count)
+        for index, (dx, dy) in channel["offsets"].items():
+            if 0 <= index < count:
+                flat[3 * index] = dx
+                flat[3 * index + 1] = dy
+        created = mesh.attributes.new(
+            name=attribute, type="FLOAT_VECTOR", domain="POINT"
+        )
+        created.data.foreach_set("vector", flat)
+        if mesh.shape_keys is None:
+            mesh_obj.shape_key_add(name="Basis", from_mix=False)
+        block_name = uv_key_name(channel["leaf"])
+        block = mesh.shape_keys.key_blocks.get(block_name)
+        if block is None:
+            block = mesh_obj.shape_key_add(name=block_name, from_mix=False)
+            block.value = 0.0
+        block.slider_min = -UV_SLIDER_LIMIT
+        block.slider_max = UV_SLIDER_LIMIT
+        channel["attribute"] = attribute
+        channel["block"] = block.name
+        channel["key"] = mesh.shape_keys
+        by_mesh.setdefault(mesh_obj.as_pointer(), []).append(channel)
+        mesh.update()
+    applied = 0
+    for group in by_mesh.values():
+        mesh = group[0]["mesh"].data
+        indices = set()
+        for channel in group:
+            channel["materials"] = touched_material_indices(
+                mesh, set(channel["offsets"])
+            )
+            indices.update(channel["materials"])
+        for index in sorted(indices):
+            if index >= len(mesh.materials) or mesh.materials[index] is None:
+                continue
+            material = mesh.materials[index]
+            specs = [c for c in group if index in c["materials"]]
+            if build_uv_nodes(material, specs):
+                applied += 1
+                log.info(
+                    "UV morph shader nodes added to material '%s': %s",
+                    material.name,
+                    [c["leaf"] for c in specs],
+                )
+            else:
+                log.warning(
+                    "material '%s' has no base texture node; UV morph skipped for %s",
+                    material.name,
+                    [c["leaf"] for c in specs],
+                )
+    log.info(
+        "UV morph channels: %d on %d mesh(es), %d material(s) patched",
+        len(channels),
+        len(by_mesh),
+        applied,
+    )
+    return channels
+
+
+def collect_contributions(model, resolved, groups, uv_morphs):
+    contributions = {}
+    group_driven = set()
+    skipped = []
+    for name, mkeys in zip(model.morph_names, model.morphs):
+        if not any(abs(k.weight) > 1e-6 for k in mkeys):
+            continue
+        target = resolved.get(name)
+        if target is None:
+            continue
+        if target in groups:
+            for kind, leaf, factor in expand_group_morph(groups, target, 1.0):
+                if kind in ("vertex_morphs", "uv_morphs"):
+                    contributions.setdefault((kind, leaf), []).append((mkeys, factor))
+                    group_driven.add((kind, leaf))
+                else:
+                    skipped.append((name, kind, leaf, round(factor, 3)))
+        elif target in uv_morphs:
+            contributions.setdefault(("uv_morphs", target), []).append((mkeys, 1.0))
+        else:
+            contributions.setdefault(("vertex_morphs", target), []).append((mkeys, 1.0))
+    return contributions, group_driven, skipped
+
+
+def ensure_morph_keys(hosts, model, resolved, root):
+    groups = group_morph_table(root)
+    contributions, group_driven, skipped = collect_contributions(
+        model, resolved, groups, uv_morph_table(root)
+    )
+    written = []
+    driven_skipped = []
+    for host in hosts:
+        keys = getattr(getattr(host, "data", None), "shape_keys", None)
+        if keys is None:
+            continue
+        anim = keys.animation_data
+        action = anim.action if anim else None
+        existing = (
+            {fc.data_path for fc in iter_fcurves(action)}
+            if action is not None
+            else set()
+        )
+        driven = {fc.data_path for fc in anim.drivers} if anim is not None else set()
+        blocks = {block.name: block for block in keys.key_blocks}
+        for (kind, leaf), items in contributions.items():
+            block = blocks.get(leaf if kind == "vertex_morphs" else uv_key_name(leaf))
+            if block is None:
+                continue
+            path = block.path_from_id("value")
+            if path in driven:
+                driven_skipped.append(leaf)
+                continue
+            if (kind, leaf) not in group_driven and path in existing:
+                continue
+            frames = sorted({k.frame for mkeys, _ in items for k in mkeys})
+            values = []
+            for frame in frames:
+                total = sum(
+                    factor * sample_morph(mkeys, frame) for mkeys, factor in items
+                )
+                values.append(min(max(total, block.slider_min), block.slider_max))
+            block.value = values[0]
+            try:
+                keys.keyframe_insert(data_path=path, frame=frames[0])
+            except (RuntimeError, TypeError, ValueError) as error:
+                log.warning("could not key shape key '%s': %s", block.name, error)
+                continue
+            anim = keys.animation_data
+            action = anim.action if anim else None
+            fcurve = (
+                next((fc for fc in iter_fcurves(action) if fc.data_path == path), None)
+                if action
+                else None
+            )
+            if fcurve is None:
+                log.warning("could not create an fcurve for shape key '%s'", block.name)
+                continue
+            rewrite_fcurve(fcurve, frames, values)
+            written.append(block.name)
+    if written:
+        log.info(
+            "keyed %d shape key(s) directly (group morph expansion, UV channels, or morphs mmd_tools skipped): %s",
+            len(written),
+            written[:20],
+        )
+    if driven_skipped:
+        log.info(
+            "shape keys driven by mmd_tools morph binding were left to their drivers: %s",
+            sorted(set(driven_skipped))[:20],
+        )
+    if skipped:
+        log.warning(
+            "group morph offsets that are not shape keys or UV morphs were not applied (material/bone): %s",
+            skipped[:20],
+        )
+    return written
+
+
+def bind_slot(target, action):
+    if not hasattr(target, "action_slot"):
+        return
+    suitable = getattr(target, "action_suitable_slots", None)
+    slot = None
+    if suitable is not None and len(suitable):
+        slot = suitable[0]
+    else:
+        slots = getattr(action, "slots", None)
+        if slots is not None and len(slots):
+            slot = slots[0]
+    if slot is None:
+        return
+    try:
+        target.action_slot = slot
+    except (AttributeError, TypeError, RuntimeError, ValueError):
+        pass
+
+
+def strips_using(anim, action):
+    found = []
+    for track in anim.nla_tracks:
+        for strip in track.strips:
+            if strip.action == action:
+                found.append((track, strip))
+    return found
+
+
+def fit_strip(strip, action):
+    start, end = action.frame_range
+    if end <= start:
+        end = start + 1.0
+    try:
+        strip.action_frame_end = end
+        strip.action_frame_start = start
+    except (AttributeError, TypeError, RuntimeError, ValueError):
+        try:
+            strip.action_frame_start = start
+            strip.action_frame_end = end
+        except (AttributeError, TypeError, RuntimeError, ValueError):
+            log.warning("could not fit NLA strip '%s' to %s-%s", strip.name, start, end)
+
+
+def find_bridge_clip(owner, track_name):
+    anim = owner.animation_data
+    if anim is None:
+        return None
+    for track in anim.nla_tracks:
+        if track.name == track_name:
+            for strip in track.strips:
+                if strip.action is not None and is_bridge_action(strip.action):
+                    return strip.action
+    return None
+
+
+def find_bridge_clip_any(owner, track_names):
+    for track_name in track_names:
+        found = find_bridge_clip(owner, track_name)
+        if found is not None:
+            return found
+    return None
+
+
+def primary_key_owner(key_owners, placeholder):
+    placeholder_key = getattr(getattr(placeholder, "data", None), "shape_keys", None)
+    pool = [
+        k for k in key_owners if placeholder_key is None or k != placeholder_key
+    ] or list(key_owners)
+    if not pool:
+        return None
+    return max(pool, key=lambda k: len(k.key_blocks))
+
+
+def add_clip_strip(anim, action, track_name):
+    start = int(math.floor(action.frame_range[0]))
+    reuse = next((t for t in anim.nla_tracks if t.name == track_name), None)
+    candidates = [reuse] if reuse is not None else []
+    candidates.append(None)
+    for track in candidates:
+        created = track is None
+        if created:
+            track = anim.nla_tracks.new()
+            track.name = track_name
+        try:
+            strip = track.strips.new(action.name, start, action)
+        except (RuntimeError, ValueError, TypeError) as error:
+            log.warning("could not add NLA strip for '%s': %s", action.name, error)
+            if created:
+                anim.nla_tracks.remove(track)
+            continue
+        bind_slot(strip, action)
+        fit_strip(strip, action)
+        log.info(
+            "clip '%s' placed on NLA track '%s' at frame %d",
+            action.name,
+            track.name,
+            start,
+        )
+        return strip
+    return None
+
+
+def place_clip(owner, clip, track_name, clip_name, active_before, keep_active=False):
+    anim = owner.animation_data
+    fresh = anim.action if anim else None
+    if fresh is None:
+        log.warning("clip: importer left no action on '%s'", owner.name)
+        return clip
+    if clip is not None and clip != fresh:
+        name = clip.name
+        fake = clip.use_fake_user
+        clip.name = name + ".old"
+        clip.user_remap(fresh)
+        fresh.name = name
+        fresh.use_fake_user = fake
+        clip.use_fake_user = False
+        if clip.users == 0:
+            bpy.data.actions.remove(clip)
+        log.info("clip '%s' content replaced", name)
+        clip = fresh
+    elif clip is None:
+        fresh.name = clip_name
+        clip = fresh
+        log.info("clip '%s' created", clip.name)
+    existing = strips_using(anim, clip)
+    for _track, strip in existing:
+        bind_slot(strip, clip)
+        fit_strip(strip, clip)
+    if keep_active:
+        bind_slot(anim, clip)
+        log.info("clip '%s' stays the active action on '%s'", clip.name, owner.name)
+        return clip
+    if not existing and add_clip_strip(anim, clip, track_name) is None:
+        log.warning(
+            "clip '%s' kept as the active action because no NLA strip could be added",
+            clip.name,
+        )
+        return clip
+    restore = None
+    if (
+        active_before is not None
+        and active_before != clip
+        and not is_bridge_action(active_before)
+    ):
+        restore = active_before
+    anim.action = restore
+    if restore is not None:
+        bind_slot(anim, restore)
+        log.info("restored active action '%s' on '%s'", restore.name, owner.name)
+    return clip
+
+
+def release_stash(stash, restore):
+    for owner, action, fake in stash.values():
+        if action is None:
+            continue
+        try:
+            action.use_fake_user = fake
+        except ReferenceError:
+            continue
+        if restore and not is_bridge_action(action):
+            anim = owner.animation_data
+            if anim is not None and (
+                anim.action is None or is_bridge_action(anim.action)
+            ):
+                anim.action = action
+
+
+def import_physics_clip(item, armature, settings, label):
+    path = bpy.path.abspath(item.physics_vmd) if item.physics_vmd else ""
+    if not path:
+        return False
+    if not os.path.isfile(path):
+        log.warning("physics VMD not found: %s", path)
+        return False
+    anim = armature.animation_data or armature.animation_data_create()
+    active_before = anim.action
+    stash = {
+        armature.as_pointer(): (
+            armature,
+            active_before,
+            active_before.use_fake_user if active_before else False,
+        )
+    }
+    if active_before is not None:
+        active_before.use_fake_user = True
+    track = CLIP_TRACK_NAME + "_" + label + "_physics"
+    existing = find_bridge_clip(armature, track)
+    placed = False
+    try:
+        anim.action = None
+        run_importer(
+            path, settings, [armature], ACTION_PREFIX + label + "_physics", False
+        )
+        place_clip(
+            armature,
+            existing,
+            track,
+            ACTION_PREFIX + label + "_physics_clip",
+            active_before,
+        )
+        placed = True
+    finally:
+        release_stash(stash, restore=not placed)
+    if settings.physics_disable_rigid_body:
+        world = bpy.context.scene.rigidbody_world
+        if world is not None and world.enabled:
+            world.enabled = False
+            log.info(
+                "rigid body world disabled so it does not fight the baked physics clip"
+            )
+    log.info("baked physics VMD applied as a clip above the PMM clip: %s", path)
+    return True
+
+
+def import_model(root, model, settings, item):
     if not target_usable(root):
         raise RuntimeError(
             "target '%s' has no armature or is not in the scene; reassign the model"
@@ -1067,35 +2268,114 @@ def import_model(root, model, settings):
         [(o.name, o.type) for o in targets],
     )
     diagnose_bones(root, model)
-    data = build_vmd(model, settings.interpolation_layout)
+    morph_map, morph_available = resolve_morph_names(root, meshes, model)
+    report_morphs(model, morph_map, morph_available)
+    data = build_vmd(model, settings.interpolation_layout, morph_map)
+    try:
+        prepare_uv_channels(root, meshes, model, morph_map, settings.uv_morphs)
+    except Exception as error:
+        log.error("UV morph setup failed: %s\n%s", error, traceback.format_exc())
     owners = collect_owners(targets)
+    label = model.name or model.name_en or "model"
+    use_clips = bool(settings.use_clips) and armature is not None
+    arm_track = CLIP_TRACK_NAME + "_" + label + "_motion"
+    shape_track = CLIP_TRACK_NAME + "_" + label + "_shapekey"
+    legacy_arm_track = CLIP_TRACK_NAME + "_" + label
+    legacy_shape_track = legacy_arm_track + "_shapes"
+    key_owners = [o for o in owners if hasattr(o, "key_blocks")] if use_clips else []
+    primary_keys = primary_key_owner(key_owners, placeholder)
+    arm_clip = item.clip if use_clips else None
+    stash = {}
+    sources = {}
+    if use_clips:
+        for owner in [armature] + key_owners:
+            anim = owner.animation_data or owner.animation_data_create()
+            action = anim.action
+            stash[owner.as_pointer()] = (
+                owner,
+                action,
+                action.use_fake_user if action else False,
+            )
+            if action is not None:
+                action.use_fake_user = True
+        sources[armature.as_pointer()] = arm_clip
+        for owner in key_owners:
+            found = find_bridge_clip_any(owner, (shape_track, legacy_shape_track))
+            if (
+                primary_keys is not None
+                and owner == primary_keys
+                and item.shape_clip is not None
+            ):
+                found = item.shape_clip
+            sources[owner.as_pointer()] = found
     low, high = frame_span(model_frames(model))
-    kept = snapshot_outside(owners, low, high)
+    kept = snapshot_outside(owners, low, high, sources if use_clips else None)
     log.info(
-        "PMM frame span for '%s': %s-%s; keeping keys outside it on %d curve(s)",
+        "PMM frame span for '%s': %s-%s; keeping keys outside it on %d curve(s); motion clip=%s; shapekey clip=%s",
         model.name,
         low,
         high,
         len(kept),
+        arm_clip.name if arm_clip else None,
+        item.shape_clip.name if item.shape_clip else None,
     )
-    clear_bridge_nla(owners)
-    reset_animation(targets)
+    plain_owners = [
+        o for o in owners if not (use_clips and (o == armature or o in key_owners))
+    ]
+    clear_bridge_nla(plain_owners)
+    reset_animation(targets, keep_keys=use_clips)
+    for owner in key_owners:
+        owner.animation_data.action = None
     purge_actions(ACTION_PREFIX)
     tmp_path = write_temp_vmd(data, TEMP_PREFIX)
+    placed = False
     try:
-        run_importer(
-            tmp_path,
-            settings,
-            targets,
-            ACTION_PREFIX + (model.name or model.name_en or "model"),
-            False,
-        )
+        try:
+            run_importer(tmp_path, settings, targets, ACTION_PREFIX + label, False)
+        finally:
+            remove_file(tmp_path)
+        ensure_morph_keys(meshes, model, morph_map, root)
+        restored = restore_points(kept)
+        tag_actions(plain_owners, label)
+        log.info("restored %d preserved key(s) for '%s'", restored, model.name)
+        describe_action("armature", armature)
+        if use_clips:
+            arm_ptr = armature.as_pointer()
+            active_arm = stash[arm_ptr][1]
+            keep_active = (
+                arm_clip is not None
+                and active_arm is not None
+                and active_arm == arm_clip
+            )
+            item.clip = place_clip(
+                armature,
+                arm_clip,
+                arm_track,
+                ACTION_PREFIX + label + "_motion_clip",
+                active_arm,
+                keep_active,
+            )
+            for owner in key_owners:
+                ptr = owner.as_pointer()
+                is_primary = primary_keys is not None and owner == primary_keys
+                clip_name = (
+                    ACTION_PREFIX
+                    + label
+                    + ("_shapekey_clip" if is_primary else "_shapekey_" + owner.name)
+                )
+                shape_result = place_clip(
+                    owner, sources[ptr], shape_track, clip_name, stash[ptr][1]
+                )
+                if is_primary and shape_result is not None:
+                    item.shape_clip = shape_result
+            placed = True
     finally:
-        remove_file(tmp_path)
-    restored = restore_points(kept)
-    tag_actions(owners, model.name or model.name_en or "model")
-    log.info("restored %d preserved key(s) for '%s'", restored, model.name)
-    describe_action("armature", armature)
+        release_stash(stash, restore=not placed)
+    if settings.use_physics_vmd and armature is not None:
+        try:
+            import_physics_clip(item, armature, settings, label)
+        except Exception as error:
+            log.error("physics clip failed: %s\n%s", error, traceback.format_exc())
     if settings.update_scene_settings:
         scene = bpy.context.scene
         start, end = scene.frame_start, scene.frame_end
@@ -1122,7 +2402,7 @@ def ensure_collection(scene, name):
 
 def move_to_collection(obj, collection):
     for owner in list(obj.users_collection):
-        if owner is not collection:
+        if owner != collection:
             owner.objects.unlink(obj)
     if obj.name not in collection.objects:
         collection.objects.link(obj)
@@ -1369,7 +2649,7 @@ def import_camera(scene, project, settings):
     describe_action("camera root", root)
     describe_action("camera distance", camera)
     apply_follow(root, project, resolve_follow(project, settings), settings)
-    if settings.set_active_camera and scene.camera is not camera:
+    if settings.set_active_camera and scene.camera != camera:
         scene.camera = camera
         log.info("scene camera set to '%s'", camera.name)
 
@@ -1476,6 +2756,542 @@ def import_scene_elements(scene, project, settings):
     return done
 
 
+def short_name(text, limit=48):
+    out = ""
+    for char in text:
+        if len((out + char).encode("utf-8")) > limit:
+            break
+        out += char
+    return out or "accessory"
+
+
+def accessory_key(acc):
+    return "%d:%s" % (acc.index, acc.name)
+
+
+def refresh_accessories(settings, project):
+    wanted = [accessory_key(a) for a in project.accessories]
+    for index in reversed(range(len(settings.accessories))):
+        if settings.accessories[index].key not in wanted:
+            settings.accessories.remove(index)
+    present = {e.key: e for e in settings.accessories}
+    for acc in project.accessories:
+        key = accessory_key(acc)
+        if key not in present:
+            entry = settings.accessories.add()
+            entry.key = key
+            entry.display = acc.name
+            entry.enabled = True
+            log.info("added accessory slot %s", key)
+    if project.accessory_error:
+        log.warning("accessory section could not be read: %s", project.accessory_error)
+
+
+def find_accessory_file(acc, settings):
+    pmm_dir = os.path.dirname(bpy.path.abspath(settings.filepath))
+    base = acc.path.replace("\\", "/").rsplit("/", 1)[-1] or acc.name
+    candidates = [acc.path]
+    if settings.accessory_dir:
+        candidates.append(os.path.join(bpy.path.abspath(settings.accessory_dir), base))
+    candidates.append(os.path.join(pmm_dir, base))
+    candidates.append(os.path.join(pmm_dir, "Accessory", base))
+    for candidate in candidates:
+        if candidate and os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def resolve_x_texture(name, folder):
+    cleaned = name.replace("\\\\", "\\").replace("\\", "/")
+    base = cleaned.rsplit("/", 1)[-1]
+    for candidate in (
+        cleaned,
+        os.path.join(folder, base),
+        os.path.join(folder, "textures", base),
+    ):
+        if candidate and os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def node_input(node, *names):
+    for name in names:
+        found = node.inputs.get(name)
+        if found is not None:
+            return found
+    return None
+
+
+def node_socket(node, identifier, outputs=False):
+    for socket in node.outputs if outputs else node.inputs:
+        if socket.identifier == identifier:
+            return socket
+    return None
+
+
+def add_color_mix(nodes, links, blend, a_socket, b_socket):
+    mix = nodes.new("ShaderNodeMix")
+    mix.data_type = "RGBA"
+    mix.blend_type = blend
+    mix.inputs[0].default_value = 1.0
+    links.new(a_socket, node_socket(mix, "A_Color"))
+    links.new(b_socket, node_socket(mix, "B_Color"))
+    return node_socket(mix, "Result_Color", outputs=True)
+
+
+def add_sphere_map(nodes, links, image, additive, color_socket):
+    geometry = nodes.new("ShaderNodeNewGeometry")
+    transform = nodes.new("ShaderNodeVectorTransform")
+    transform.vector_type = "NORMAL"
+    transform.convert_from = "WORLD"
+    transform.convert_to = "CAMERA"
+    scale = nodes.new("ShaderNodeVectorMath")
+    scale.operation = "MULTIPLY_ADD"
+    scale.inputs[1].default_value = (0.5, 0.5, 0.0)
+    scale.inputs[2].default_value = (0.5, 0.5, 0.0)
+    texture = nodes.new("ShaderNodeTexImage")
+    texture.image = image
+    texture.extension = "EXTEND"
+    links.new(geometry.outputs["Normal"], transform.inputs["Vector"])
+    links.new(transform.outputs["Vector"], scale.inputs[0])
+    links.new(scale.outputs["Vector"], texture.inputs["Vector"])
+    return add_color_mix(
+        nodes,
+        links,
+        "ADD" if additive else "MULTIPLY",
+        color_socket,
+        texture.outputs["Color"],
+    )
+
+
+def build_x_material(name, xmat, folder, settings):
+    mat = bpy.data.materials.new(name)
+    try:
+        mat.use_nodes = True
+    except Exception:
+        pass
+    tree = mat.node_tree
+    if tree is None:
+        return mat
+    nodes, links = tree.nodes, tree.links
+    bsdf = next((n for n in nodes if n.type == "BSDF_PRINCIPLED"), None)
+    if bsdf is None:
+        bsdf = nodes.new("ShaderNodeBsdfPrincipled")
+        output = next(
+            (n for n in nodes if n.type == "OUTPUT_MATERIAL"), None
+        ) or nodes.new("ShaderNodeOutputMaterial")
+        links.new(bsdf.outputs["BSDF"], output.inputs["Surface"])
+    r, g, b, a = xmat.diffuse
+    base = node_input(bsdf, "Base Color")
+    base.default_value = (r, g, b, 1.0)
+    alpha = node_input(bsdf, "Alpha")
+    alpha.default_value = a
+    rough = node_input(bsdf, "Roughness")
+    if rough is not None:
+        rough.default_value = 0.6
+    spec = node_input(bsdf, "Specular IOR Level", "Specular")
+    if spec is not None:
+        spec.default_value = min(1.0, max(xmat.specular) * 0.5)
+    emission = node_input(bsdf, "Emission Color", "Emission")
+    if emission is not None:
+        emission.default_value = (
+            xmat.emissive[0],
+            xmat.emissive[1],
+            xmat.emissive[2],
+            1.0,
+        )
+    strength = node_input(bsdf, "Emission Strength")
+    if strength is not None:
+        strength.default_value = 0.25
+    parts = [
+        p.strip() for p in xmat.texture.replace("\\\\", "\\").split("*") if p.strip()
+    ]
+    spheres = [p for p in parts if p.lower().endswith((".sph", ".spa"))]
+    plain = [p for p in parts if not p.lower().endswith((".sph", ".spa"))]
+    color_socket = None
+    translucent = a < 0.999
+    if plain:
+        found = resolve_x_texture(plain[0], folder)
+        if found is None:
+            log.warning("texture not found for %s: %s", name, plain[0])
+        else:
+            texture = nodes.new("ShaderNodeTexImage")
+            texture.image = bpy.data.images.load(found, check_existing=True)
+            color_socket = texture.outputs["Color"]
+            links.new(texture.outputs["Alpha"], alpha)
+            translucent = True
+            if min(r, g, b) < 0.99:
+                tint = nodes.new("ShaderNodeRGB")
+                tint.outputs[0].default_value = (r, g, b, 1.0)
+                color_socket = add_color_mix(
+                    nodes, links, "MULTIPLY", color_socket, tint.outputs[0]
+                )
+    if spheres and settings.sphere_maps:
+        if color_socket is None:
+            tint = nodes.new("ShaderNodeRGB")
+            tint.outputs[0].default_value = (r, g, b, 1.0)
+            color_socket = tint.outputs[0]
+        for sphere in spheres:
+            found = resolve_x_texture(sphere, folder)
+            if found is None:
+                log.warning("sphere map not found for %s: %s", name, sphere)
+                continue
+            image = bpy.data.images.load(found, check_existing=True)
+            color_socket = add_sphere_map(
+                nodes, links, image, sphere.lower().endswith(".spa"), color_socket
+            )
+            log.info("sphere map (experimental) %s on %s", sphere, name)
+    elif spheres:
+        log.info("sphere maps disabled; skipping %s on %s", spheres, name)
+    if color_socket is not None:
+        links.new(color_socket, base)
+    if translucent:
+        try:
+            mat.surface_render_method = "BLENDED"
+        except (AttributeError, TypeError):
+            try:
+                mat.blend_method = "BLEND"
+            except AttributeError:
+                pass
+    return mat
+
+
+def merge_x_meshes(xscene):
+    vertices = []
+    faces = []
+    face_materials = []
+    uvs = []
+    colors = []
+    materials = []
+    has_colors = False
+    for mesh in xscene.meshes:
+        vertex_offset = len(vertices)
+        material_offset = len(materials)
+        vertices.extend(mesh.vertices)
+        for k in range(len(mesh.vertices)):
+            uvs.append(mesh.uvs[k] if k < len(mesh.uvs) else (0.0, 0.0))
+            colors.append(mesh.colors.get(k, (1.0, 1.0, 1.0, 1.0)))
+        has_colors = has_colors or bool(mesh.colors)
+        local_materials = list(mesh.materials) or [
+            XMaterial(
+                "Material",
+                (0.8, 0.8, 0.8, 1.0),
+                0.0,
+                (0.0, 0.0, 0.0),
+                (0.0, 0.0, 0.0),
+                "",
+            )
+        ]
+        materials.extend(local_materials)
+        for index, face in enumerate(mesh.faces):
+            faces.append(tuple(v + vertex_offset for v in face))
+            local = (
+                mesh.face_materials[index] if index < len(mesh.face_materials) else 0
+            )
+            face_materials.append(
+                material_offset + min(max(local, 0), len(local_materials) - 1)
+            )
+    return (
+        vertices,
+        faces,
+        face_materials,
+        uvs,
+        colors if has_colors else None,
+        materials,
+    )
+
+
+def create_x_object(name, xscene, folder, settings):
+    vertices, faces, face_materials, uvs, colors, materials = merge_x_meshes(xscene)
+    points = [(x, z, y) for x, y, z in vertices]
+    flipped = [tuple(reversed(face)) for face in faces]
+    mesh = bpy.data.meshes.new(name)
+    mesh.from_pydata(points, [], flipped)
+    mesh.update()
+    for index, xmat in enumerate(materials):
+        try:
+            mesh.materials.append(
+                build_x_material("%s_%d" % (name, index), xmat, folder, settings)
+            )
+        except Exception as error:
+            log.warning("material %d of %s failed: %s", index, name, error)
+            mesh.materials.append(bpy.data.materials.new("%s_%d" % (name, index)))
+    if len(mesh.polygons) == len(face_materials):
+        mesh.polygons.foreach_set("material_index", face_materials)
+    if uvs:
+        flat = []
+        for face in flipped:
+            for vertex in face:
+                u, v = uvs[vertex]
+                flat.extend((u, 1.0 - v))
+        if len(mesh.loops) * 2 == len(flat):
+            layer = mesh.uv_layers.new(name="UVMap")
+            layer.data.foreach_set("uv", flat)
+    if colors is not None:
+        try:
+            attribute = mesh.color_attributes.new("Col", "FLOAT_COLOR", "POINT")
+            attribute.data.foreach_set("color", [c for rgba in colors for c in rgba])
+        except Exception as error:
+            log.warning("vertex colors skipped for %s: %s", name, error)
+    mesh.update()
+    return bpy.data.objects.new(name, mesh)
+
+
+def import_x_with_addon(path):
+    before = set(bpy.data.objects)
+    group = getattr(bpy.ops, "import_scene", None)
+    operator = None
+    for candidate in ("x", "directx", "directx_x", "x_file", "dx"):
+        if group is not None and hasattr(group, candidate):
+            operator = getattr(group, candidate)
+            break
+    if operator is None:
+        raise RuntimeError(
+            "binary/compressed .x needs the DirectX X Importer add-on, but its import operator was not found"
+        )
+    operator(filepath=path)
+    return [o for o in bpy.data.objects if o not in before]
+
+
+def remove_accessory_children(root):
+    for child in list(root.children):
+        data = child.data
+        bpy.data.objects.remove(child, do_unlink=True)
+        if (
+            data is not None
+            and getattr(data, "users", 1) == 0
+            and hasattr(bpy.data, "meshes")
+        ):
+            try:
+                for material in list(data.materials):
+                    if material is not None and material.users <= 1:
+                        bpy.data.materials.remove(material)
+                bpy.data.meshes.remove(data)
+            except (ReferenceError, RuntimeError):
+                pass
+
+
+def find_accessory_root(collection, key):
+    for obj in collection.objects:
+        if obj.get("mmd_bridge_accessory") == key:
+            return obj
+    return None
+
+
+def first_armature(settings):
+    for item in settings.targets:
+        if item.enabled and target_usable(item.target):
+            return find_armature(item.target)
+    return None
+
+
+def resolve_accessory_parent(project, settings, acc, entry):
+    first = acc.keys[0]
+    override = entry.parent_bone if entry is not None else ""
+    by_index = {m.index: m for m in project.models}
+    items = {t.key: t for t in settings.targets}
+    armature = None
+    model = by_index.get(first.parent_model) if first.parent_model >= 0 else None
+    if model is not None:
+        item = items.get(model_key(model))
+        if item is not None and item.target is not None:
+            armature = find_armature(item.target)
+    if override:
+        armature = armature or first_armature(settings)
+        if armature is not None and override in armature.pose.bones:
+            return armature, override
+        log.warning("accessory '%s': override bone '%s' not found", acc.name, override)
+        return None
+    if model is None or first.parent_bone < 0:
+        return None
+    if armature is None:
+        log.warning(
+            "accessory '%s' follows model %d which has no Blender target",
+            acc.name,
+            first.parent_model,
+        )
+        return None
+    if first.parent_bone >= len(model.bone_names):
+        log.warning(
+            "accessory '%s': bone index %d out of range", acc.name, first.parent_bone
+        )
+        return None
+    bone = pose_bone_name(armature, model.bone_names[first.parent_bone])
+    if bone is None:
+        log.warning(
+            "accessory '%s': bone '%s' not found on '%s'",
+            acc.name,
+            model.bone_names[first.parent_bone],
+            armature.name,
+        )
+        return None
+    return armature, bone
+
+
+def apply_accessory_parent(root, project, settings, acc, entry):
+    for constraint in [
+        c for c in root.constraints if c.name.startswith(ACCESSORY_FOLLOW_PREFIX)
+    ]:
+        root.constraints.remove(constraint)
+    parents = {(k.parent_model, k.parent_bone) for k in acc.keys}
+    if len(parents) > 1:
+        log.warning(
+            "accessory '%s' changes parent between keyframes; only the first parent is used",
+            acc.name,
+        )
+    resolved = resolve_accessory_parent(project, settings, acc, entry)
+    if resolved is None:
+        log.info("accessory '%s' has no parent bone", acc.name)
+        return
+    armature, bone = resolved
+    constraint = root.constraints.new(type="CHILD_OF")
+    constraint.name = ACCESSORY_FOLLOW_PREFIX
+    constraint.target = armature
+    constraint.subtarget = bone
+    constraint.use_scale_x = False
+    constraint.use_scale_y = False
+    constraint.use_scale_z = False
+    constraint.set_inverse_pending = False
+    constraint.inverse_matrix = Matrix.Identity(4)
+    constraint.influence = 1.0
+    log.info("accessory '%s' follows %s / %s", acc.name, armature.name, bone)
+
+
+def key_accessory(root, acc, unit):
+    anim = root.animation_data or root.animation_data_create()
+    low, high = frame_span(k.frame for k in acc.keys)
+    kept = snapshot_outside([root], low, high)
+    anim.action = None
+    purge_actions(ACTION_PREFIX + "Acc_")
+    root.rotation_mode = "YXZ"
+    for key in acc.keys:
+        root.location = (
+            key.position[0] * unit,
+            key.position[2] * unit,
+            key.position[1] * unit,
+        )
+        root.rotation_euler = (-key.rotation[0], -key.rotation[2], -key.rotation[1])
+        root.scale = (key.scale, key.scale, key.scale)
+        root.keyframe_insert("location", frame=key.frame)
+        root.keyframe_insert("rotation_euler", frame=key.frame)
+        root.keyframe_insert("scale", frame=key.frame)
+    action = anim.action
+    if action is not None:
+        for fcurve in iter_fcurves(action):
+            for point in fcurve.keyframe_points:
+                point.interpolation = "LINEAR"
+    restore_points(kept)
+    if anim.action is not None:
+        anim.action.name = ACTION_PREFIX + "Acc_" + short_name(acc.name, 40)
+    visible = {bool(k.visible) for k in acc.keys}
+    for child in root.children:
+        child_anim = child.animation_data
+        if child_anim is not None:
+            child_anim.action = None
+        child.hide_viewport = False
+        child.hide_render = False
+        if visible == {True}:
+            continue
+        for key in acc.keys:
+            child.hide_viewport = not key.visible
+            child.hide_render = not key.visible
+            child.keyframe_insert("hide_viewport", frame=key.frame)
+            child.keyframe_insert("hide_render", frame=key.frame)
+        child_action = child.animation_data.action if child.animation_data else None
+        if child_action is not None:
+            child_action.name = ACTION_PREFIX + "Acc_vis_" + short_name(acc.name, 30)
+            for fcurve in iter_fcurves(child_action):
+                for point in fcurve.keyframe_points:
+                    point.interpolation = "CONSTANT"
+
+
+def import_accessory(scene, collection, project, settings, acc, entry, unit):
+    path = find_accessory_file(acc, settings)
+    if path is None:
+        log.warning(
+            "accessory '%s': file not found (PMM path %s); set an Accessory Folder",
+            acc.name,
+            acc.path,
+        )
+        return False
+    key = accessory_key(acc)
+    stamp = "%s|%s" % (path, os.path.getmtime(path))
+    root = find_accessory_root(collection, key)
+    if root is None:
+        root = bpy.data.objects.new(ACCESSORY_PREFIX + short_name(acc.name), None)
+        root.empty_display_type = "PLAIN_AXES"
+        root.empty_display_size = 1.0
+        root["mmd_bridge_accessory"] = key
+        collection.objects.link(root)
+        log.info("created accessory root '%s'", root.name)
+    if root.get("mmd_bridge_stamp") != stamp or not root.children:
+        remove_accessory_children(root)
+        with open(path, "rb") as handle:
+            raw = handle.read()
+        xscene = parse_x_bytes(raw)
+        folder = os.path.dirname(path)
+        for note in xscene.warnings:
+            log.warning("accessory '%s': %s", acc.name, note)
+        if xscene.mode == "txt":
+            child = create_x_object(
+                short_name(acc.name, 40) + "_mesh", xscene, folder, settings
+            )
+            collection.objects.link(child)
+            children = [child]
+            log.info(
+                "accessory '%s': %d mesh part(s) from %s",
+                acc.name,
+                len(xscene.meshes),
+                path,
+            )
+        else:
+            children = import_x_with_addon(path)
+            for child in children:
+                for owner in list(child.users_collection):
+                    owner.objects.unlink(child)
+                collection.objects.link(child)
+        for child in children:
+            child.parent = root
+        root["mmd_bridge_stamp"] = stamp
+    for child in root.children:
+        child.scale = (ACCESSORY_UNIT * unit,) * 3
+    key_accessory(root, acc, unit)
+    apply_accessory_parent(root, project, settings, acc, entry)
+    return True
+
+
+def import_accessories(scene, project, settings):
+    if not settings.sync_accessories:
+        return 0
+    if project.accessory_error:
+        log.warning("accessory section could not be read: %s", project.accessory_error)
+        return 0
+    if not project.accessories:
+        return 0
+    log.info(
+        "accessories: static mesh .x only; no MME shader effects, skinned or animated meshes"
+    )
+    collection = ensure_collection(scene, ACCESSORY_COLLECTION)
+    unit = current_scale(settings)
+    entries = {e.key: e for e in settings.accessories}
+    done = 0
+    for acc in project.accessories:
+        entry = entries.get(accessory_key(acc))
+        if entry is not None and not entry.enabled:
+            log.info("skip accessory '%s': disabled", acc.name)
+            continue
+        if not acc.keys:
+            continue
+        try:
+            if import_accessory(scene, collection, project, settings, acc, entry, unit):
+                done += 1
+        except Exception as error:
+            log.error(
+                "accessory '%s' failed: %s\n%s", acc.name, error, traceback.format_exc()
+            )
+    return done
+
+
 def log_file_state(path, data):
     digest = hashlib.md5(data).hexdigest()[:12]
     stat = os.stat(path)
@@ -1524,6 +3340,7 @@ def sync(scene):
     project = parse_pmm(data)
     log_scene_keys(project)
     refresh_targets(settings, project)
+    refresh_accessories(settings, project)
     log.info(
         "using scale %.4f (%s)",
         current_scale(settings),
@@ -1542,9 +3359,10 @@ def sync(scene):
         if model is None:
             log.warning("skip '%s': not present in PMM", target.pmm_name)
             continue
-        import_model(target.target, model, settings)
+        import_model(target.target, model, settings, target)
         imported += 1
     imported += import_scene_elements(scene, project, settings)
+    imported += import_accessories(scene, project, settings)
     scene.frame_set(scene.frame_current)
     log.info(
         "sync done: %d item(s) imported, %d model(s) in PMM",
@@ -1584,12 +3402,47 @@ def draw_wrapped(layout, text, width=38):
         column.label(text=line)
 
 
+def draw_dependency_notices(layout):
+    for label, message, url in missing_dependencies():
+        box = layout.box()
+        box.alert = True
+        box.label(text=message, icon="ERROR")
+        box.operator("wm.url_open", text="Get %s" % label, icon="URL").url = url
+
+
 class MMDBridgeTarget(PropertyGroup):
     key: StringProperty()
     pmm_name: StringProperty()
     enabled: BoolProperty(name="Enabled", default=True)
     target: PointerProperty(
         name="Target", type=bpy.types.Object, poll=is_mmd_root, update=on_target_changed
+    )
+    clip: PointerProperty(
+        name="Motion Clip",
+        description="Action that receives this model's armature (bone) animation on every sync. Leave empty to create a new clip on its own NLA track",
+        type=bpy.types.Action,
+        poll=clip_poll,
+    )
+    shape_clip: PointerProperty(
+        name="Shapekey Clip",
+        description="Action that receives this model's shape key (morph) animation on every sync, for the main body mesh. Leave empty to create a new clip on its own NLA track. Other shape key holders such as the morph placeholder keep automatic clips",
+        type=bpy.types.Action,
+        poll=clip_poll,
+    )
+    physics_vmd: StringProperty(
+        name="Baked Physics VMD",
+        description="Experimental: VMD baked from MMD with MMDBridge. Applied as a clip above the PMM clip",
+        subtype="FILE_PATH",
+    )
+
+
+class MMDBridgeAccessory(PropertyGroup):
+    key: StringProperty()
+    display: StringProperty()
+    enabled: BoolProperty(name="Enabled", default=True)
+    parent_bone: StringProperty(
+        name="Parent Bone",
+        description="Overrides the parent bone stored in the PMM. Leave empty to use the PMM value",
     )
 
 
@@ -1608,6 +3461,42 @@ class MMDBridgeSettings(PropertyGroup):
         min=0.001,
     )
     scale_warning_dismissed_for: FloatProperty(default=-1.0)
+    sync_accessories: BoolProperty(
+        name="Sync Accessories",
+        description="Import and animate .x accessories stored in the PMM. Static meshes only",
+        default=True,
+    )
+    sphere_maps: BoolProperty(
+        name="Sphere Maps (Experimental)",
+        description="Rebuild .sph/.spa sphere maps from accessory textures with a camera-space normal lookup",
+        default=True,
+    )
+    accessory_dir: StringProperty(
+        name="Accessory Folder",
+        description="Extra folder searched for .x files when the path stored in the PMM does not exist",
+        subtype="DIR_PATH",
+    )
+    accessories: CollectionProperty(type=MMDBridgeAccessory)
+    use_physics_vmd: BoolProperty(
+        name="MMDBridge Physics (Experimental)",
+        description="Layer a VMD baked with MMDBridge above the PMM clip to reproduce MMD's own rigid body results",
+        default=False,
+    )
+    physics_disable_rigid_body: BoolProperty(
+        name="Disable Rigid Body World",
+        description="Turn off Blender's rigid body world while a baked physics clip is applied",
+        default=True,
+    )
+    use_clips: BoolProperty(
+        name="NLA Clips",
+        description="Keep each model's motion and shapekey animation in reusable action clips on NLA tracks instead of as the active action",
+        default=True,
+    )
+    uv_morphs: BoolProperty(
+        name="UV Morphs (Eye Shapes)",
+        description="Apply UV morphs, including the ones inside group morphs, by offsetting the base texture in the material nodes. Needed for effects such as the > < eyes",
+        default=True,
+    )
     update_scene_settings: BoolProperty(
         name="Update Frame Range",
         description="Let mmd_tools set the scene frame range and FPS on every sync; the range is only ever widened",
@@ -1684,7 +3573,12 @@ class MMDBRIDGE_OT_scan(Operator):
             log.error("scan failed: %s", error)
             return {"CANCELLED"}
         refresh_targets(settings, project)
-        self.report({"INFO"}, "Found %d model(s)" % len(project.models))
+        refresh_accessories(settings, project)
+        self.report(
+            {"INFO"},
+            "Found %d model(s), %d accessory(ies)"
+            % (len(project.models), len(project.accessories)),
+        )
         return {"FINISHED"}
 
 
@@ -1710,10 +3604,8 @@ class MMDBRIDGE_PT_main(Panel):
     def draw(self, context):
         layout = self.layout
         settings = context.scene.mmd_bridge
+        draw_dependency_notices(layout)
         if not mmd_tools_available():
-            box = layout.box()
-            box.alert = True
-            box.label(text="Enable the mmd_tools add-on first", icon="ERROR")
             return
         layout.prop(settings, "filepath", text="")
         row = layout.row()
@@ -1746,6 +3638,17 @@ class MMDBRIDGE_PT_main(Panel):
             row.prop(item, "enabled", text="")
             row.label(text=item.pmm_name)
             row.prop(item, "target", text="")
+            if settings.use_clips and item.target is not None:
+                clip_row = box.row(align=True)
+                clip_row.label(text="", icon="NLA")
+                clip_row.prop(item, "clip", text="Motion")
+                shape_row = box.row(align=True)
+                shape_row.label(text="", icon="SHAPEKEY_DATA")
+                shape_row.prop(item, "shape_clip", text="Shapekey")
+                if settings.use_physics_vmd:
+                    physics_row = box.row(align=True)
+                    physics_row.label(text="", icon="PHYSICS")
+                    physics_row.prop(item, "physics_vmd", text="")
         layout.label(text="Log: Text Editor > %s" % LOG_TEXT_NAME)
 
 
@@ -1844,12 +3747,60 @@ class MMDBRIDGE_PT_options(Panel):
         row = layout.row()
         row.enabled = not settings.auto_scale
         row.prop(settings, "scale")
+        layout.prop(settings, "use_clips")
+        layout.prop(settings, "uv_morphs")
+        if settings.uv_morphs:
+            draw_wrapped(
+                layout,
+                "UV morphs are shader based: view them in Material Preview or Rendered, not Solid. The weights live on MMDUV_ shape keys inside the Shapekey Clip.",
+            )
         layout.prop(settings, "update_scene_settings")
         layout.prop(settings, "interpolation_layout")
+        layout.separator()
+        layout.prop(settings, "use_physics_vmd")
+        if settings.use_physics_vmd:
+            layout.prop(settings, "physics_disable_rigid_body")
+            draw_wrapped(
+                layout,
+                "Experimental. MMD's physics solver cannot run inside Blender. Bake the motion in MMD with MMDBridge, set the VMD on each model row, and it is layered above the PMM clip.",
+            )
+
+
+class MMDBRIDGE_PT_accessories(Panel):
+    bl_label = "Accessories (.x)"
+    bl_idname = "MMDBRIDGE_PT_accessories"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "MMD Bridge"
+    bl_parent_id = "MMDBRIDGE_PT_main"
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw(self, context):
+        layout = self.layout
+        settings = context.scene.mmd_bridge
+        layout.prop(settings, "sync_accessories")
+        box = layout.box()
+        box.alert = True
+        draw_wrapped(
+            box,
+            "Static mesh .x files only. MME shader effects (.fx), skinned meshes and animated .x files are not supported.",
+        )
+        layout.prop(settings, "sphere_maps")
+        layout.prop(settings, "accessory_dir")
+        armature = first_armature(settings)
+        if not len(settings.accessories):
+            layout.label(text="Press the refresh icon in Models to read the PMM")
+        for entry in settings.accessories:
+            row = layout.row(align=True)
+            row.prop(entry, "enabled", text="")
+            row.label(text=entry.display)
+            if armature is not None:
+                row.prop_search(entry, "parent_bone", armature.pose, "bones", text="")
 
 
 CLASSES = (
     MMDBridgeTarget,
+    MMDBridgeAccessory,
     MMDBridgeSettings,
     MMDBRIDGE_OT_sync_now,
     MMDBRIDGE_OT_scan,
@@ -1858,6 +3809,7 @@ CLASSES = (
     MMDBRIDGE_PT_camera,
     MMDBRIDGE_PT_readout,
     MMDBRIDGE_PT_options,
+    MMDBRIDGE_PT_accessories,
 )
 
 
