@@ -13,6 +13,7 @@ import importlib
 import inspect
 import logging
 import os
+import platform
 import re
 import struct
 import sys
@@ -183,9 +184,15 @@ class PmmProject:
         "scene_error",
         "accessories",
         "accessory_error",
+        "audio_enabled",
+        "audio_path",
+        "audio_error",
     )
 
     def __init__(self):
+        self.audio_enabled = False
+        self.audio_path = ""
+        self.audio_error = ""
         self.version = 0
         self.models = []
         self.selected_model = 0
@@ -466,6 +473,15 @@ def read_accessories(reader):
     return found
 
 
+def read_audio(reader):
+    reader.skip(AUDIO_STATE_SIZE)
+    enabled = reader.u8() != 0
+    path = reader.fixed_string(AUDIO_PATH_LENGTH)
+    if path and not path.lower().endswith(AUDIO_EXTENSIONS):
+        return False, ""
+    return enabled, path
+
+
 def parse_pmm(data):
     project = PmmProject()
     project.version = read_version(data)
@@ -496,6 +512,11 @@ def parse_pmm(data):
         except PmmError as error:
             project.accessory_error = str(error)
             project.accessories = []
+        else:
+            try:
+                project.audio_enabled, project.audio_path = read_audio(reader)
+            except PmmError as error:
+                project.audio_error = str(error)
     return project
 
 
@@ -944,6 +965,13 @@ UV_KEY_PREFIX = "MMDUV_"
 UV_NODE_PREFIX = "MMDBridgeUV"
 UV_ATTRIBUTE_PREFIX = "MMDBridgeUV_"
 UV_SLIDER_LIMIT = 10.0
+PMM_FPS = 30.0
+AUDIO_STATE_SIZE = 28
+AUDIO_PATH_LENGTH = 256
+AUDIO_STRIP_NAME = "MMDBridge_Audio"
+AUDIO_EXTENSIONS = (".wav", ".mp3", ".ogg", ".flac", ".aac", ".m4a")
+REPORT_TEXT_NAME = "MMDBridgeReport"
+REPORT_LOG_LINES = 300
 ACCESSORY_COLLECTION = "MMD_Accessories"
 ACCESSORY_PREFIX = "MMDAcc_"
 ACCESSORY_FOLLOW_PREFIX = "MMDBridgeAcc"
@@ -953,7 +981,8 @@ X_IMPORTER_URL = "https://extensions.blender.org/add-ons/io-directx-x/"
 MMD_TOOLS_URL = "https://extensions.blender.org/add-ons/mmd-tools/"
 
 _follow_items = [("NONE", "None", "")]
-_last_sync = {"digest": None}
+_last_sync = {"digest": None, "failed": 0}
+_status_icons = {}
 
 
 def mmd_tools_available():
@@ -1047,6 +1076,8 @@ def on_target_changed(self, context):
         self.clip = None
     if self.shape_clip is not None:
         self.shape_clip = None
+    self.state = "NEW"
+    self.status_text = ""
 
 
 def follow_model_items(self, context):
@@ -3292,6 +3323,519 @@ def import_accessories(scene, project, settings):
     return done
 
 
+def scene_fps(scene):
+    render = scene.render
+    return render.fps / (render.fps_base or 1.0)
+
+
+def fps_differs(scene):
+    return abs(scene_fps(scene) - PMM_FPS) > 0.01
+
+
+def retime_factor(scene, settings):
+    if not settings.retime_fps or settings.update_scene_settings:
+        return 1.0
+    if not fps_differs(scene):
+        return 1.0
+    return scene_fps(scene) / PMM_FPS
+
+
+def retime_keys(keys, factor, hold_cuts=False):
+    scaled = {}
+    previous_old = None
+    previous_new = None
+    for key in sorted(keys, key=lambda k: k.frame):
+        new = int(round(key.frame * factor))
+        if hold_cuts and previous_old is not None and key.frame - previous_old <= 1:
+            new = previous_new + 1
+        scaled[new] = key._replace(frame=new)
+        previous_old, previous_new = key.frame, new
+    return [scaled[frame] for frame in sorted(scaled)]
+
+
+def retime_project(project, factor):
+    if abs(factor - 1.0) < 1e-6:
+        return
+    for model in project.models:
+        model.bones = [retime_keys(keys, factor) for keys in model.bones]
+        model.morphs = [retime_keys(keys, factor) for keys in model.morphs]
+        model.last_frame = int(round(model.last_frame * factor))
+    project.camera_keys = retime_keys(project.camera_keys, factor, True)
+    project.light_keys = retime_keys(project.light_keys, factor, True)
+    for acc in project.accessories:
+        acc.keys = retime_keys(acc.keys, factor)
+
+
+def find_audio_file(project, settings):
+    pmm_dir = os.path.dirname(bpy.path.abspath(settings.filepath))
+    stored = project.audio_path.replace("\\", "/")
+    base = stored.rsplit("/", 1)[-1]
+    candidates = []
+    if settings.audio_path:
+        candidates.append(bpy.path.abspath(settings.audio_path))
+    candidates += [project.audio_path, stored]
+    if base:
+        candidates += [
+            os.path.join(pmm_dir, base),
+            os.path.join(pmm_dir, "Audio", base),
+            os.path.join(pmm_dir, "BGM", base),
+        ]
+    for candidate in candidates:
+        if candidate and os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def describe_audio(project, settings):
+    if settings.audio_path:
+        found = os.path.isfile(bpy.path.abspath(settings.audio_path))
+        return "Override file %s" % ("found" if found else "not found")
+    if not project.audio_enabled or not project.audio_path:
+        return "PMM has no audio"
+    base = project.audio_path.replace("\\", "/").rsplit("/", 1)[-1]
+    return "PMM audio: %s (%s)" % (
+        base,
+        (
+            "found"
+            if find_audio_file(project, settings)
+            else "not found, set an Audio File"
+        ),
+    )
+
+
+def sequence_strips(editor):
+    strips = getattr(editor, "strips", None)
+    if strips is None:
+        strips = getattr(editor, "sequences", None)
+    return strips
+
+
+def import_audio(scene, project, settings):
+    if not settings.sync_audio:
+        return False
+    if not settings.audio_path and not (project.audio_enabled and project.audio_path):
+        log.info("PMM has no audio")
+        return False
+    path = find_audio_file(project, settings)
+    if path is None:
+        log.warning(
+            "audio file not found (PMM path %s); set an Audio File in the Audio panel",
+            project.audio_path,
+        )
+        return False
+    editor = scene.sequence_editor or scene.sequence_editor_create()
+    strips = sequence_strips(editor)
+    existing = next((s for s in strips if s.name == AUDIO_STRIP_NAME), None)
+    if existing is not None:
+        sound = getattr(existing, "sound", None)
+        current = (
+            os.path.normcase(os.path.abspath(bpy.path.abspath(sound.filepath)))
+            if sound is not None
+            else ""
+        )
+        if current == os.path.normcase(os.path.abspath(path)):
+            log.info(
+                "audio strip '%s' already uses %s; position left as is",
+                existing.name,
+                path,
+            )
+            return True
+        strips.remove(existing)
+    channel = max((s.channel for s in strips), default=0) + 1
+    strips.new_sound(
+        name=AUDIO_STRIP_NAME, filepath=path, channel=channel, frame_start=0
+    )
+    if hasattr(scene, "use_audio_scrub"):
+        scene.use_audio_scrub = True
+    log.info("audio strip added on channel %d at frame 0: %s", channel, path)
+    if fps_differs(scene) and not settings.retime_fps:
+        log.warning(
+            "scene is %.3f fps and retiming is off, so animation and audio will drift apart",
+            scene_fps(scene),
+        )
+    return True
+
+
+class WarningCapture(logging.Handler):
+    def __init__(self):
+        super().__init__(level=logging.WARNING)
+        self.messages = []
+
+    def emit(self, record):
+        text = record.getMessage()
+        if not text.startswith("mmd_tools reported"):
+            self.messages.append(text)
+
+
+def short_text(text, limit=80):
+    text = " ".join(str(text).split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def sync_target(target, model, settings):
+    capture = WarningCapture()
+    log.addHandler(capture)
+    try:
+        import_model(target.target, model, settings, target)
+    except Exception as error:
+        log.error(
+            "model '%s' failed: %s\n%s", target.pmm_name, error, traceback.format_exc()
+        )
+        target.state = "ERROR"
+        target.status_text = short_text(error)
+        return False
+    finally:
+        log.removeHandler(capture)
+    if capture.messages:
+        target.state = "WARN"
+        target.status_text = "%d warning(s): %s" % (
+            len(capture.messages),
+            short_text(capture.messages[0], 70),
+        )
+    else:
+        target.state = "OK"
+        target.status_text = ""
+    return True
+
+
+def item_state(item):
+    if not item.enabled:
+        return "OFF"
+    if item.target is None:
+        return "ERROR"
+    return item.state or "NEW"
+
+
+def item_status_text(item):
+    if not item.enabled:
+        return ""
+    if item.target is None:
+        return "No target assigned"
+    return item.status_text
+
+
+def status_icon(state):
+    if not _status_icons:
+        available = set()
+        try:
+            available = set(
+                bpy.types.UILayout.bl_rna.functions["label"]
+                .parameters["icon"]
+                .enum_items.keys()
+            )
+        except Exception:
+            pass
+
+        def pick(*names):
+            for name in names:
+                if name in available:
+                    return name
+            return names[-1]
+
+        _status_icons.update(
+            {
+                "ERROR": pick("STRIP_COLOR_01", "SEQUENCE_COLOR_01", "ERROR"),
+                "WARN": pick("STRIP_COLOR_03", "SEQUENCE_COLOR_03", "ERROR"),
+                "OK": pick("STRIP_COLOR_04", "SEQUENCE_COLOR_04", "CHECKMARK"),
+                "NEW": pick("STRIP_COLOR_05", "SEQUENCE_COLOR_05", "DOT"),
+                "OFF": pick("STRIP_COLOR_09", "SEQUENCE_COLOR_09", "RADIOBUT_OFF"),
+            }
+        )
+    return _status_icons.get(state, "BLANK1")
+
+
+def redact_paths(text):
+    text = re.sub(r"([A-Za-z]:[\\/]+Users[\\/]+)[^\\/\"']+", r"\1<user>", text)
+    text = re.sub(r"(/(?:home|Users)/)[^/\"'\s]+", r"\1<user>", text)
+    return text
+
+
+def mmd_tools_version():
+    try:
+        base = mmd_tools_base()
+        module = sys.modules.get(base) or importlib.import_module(base)
+        info = getattr(module, "bl_info", None)
+        if info and "version" in info:
+            return ".".join(str(v) for v in info["version"])
+    except Exception:
+        pass
+    return "unknown"
+
+
+def build_report(context):
+    scene = context.scene
+    settings = scene.mmd_bridge
+    lines = ["MMD PMM Bridge support report"]
+    lines.append(
+        "add-on %s | Blender %s | %s"
+        % (
+            ".".join(str(v) for v in bl_info["version"]),
+            bpy.app.version_string,
+            platform.system(),
+        )
+    )
+    lines.append(
+        "mmd_tools %s (available: %s) | DirectX X Importer available: %s"
+        % (mmd_tools_version(), mmd_tools_available(), x_importer_available())
+    )
+    lines.append(
+        "scene fps %.3f (PMM is %d) | retime factor %.4f"
+        % (scene_fps(scene), PMM_FPS, retime_factor(scene, settings))
+    )
+    lines.append(
+        "PMM file: %s"
+        % (os.path.basename(bpy.path.abspath(settings.filepath)) or "none")
+    )
+    lines.append("status: %s" % settings.status)
+    lines.append(
+        "options: auto_scale=%s scale=%.4f clips=%s uv_morphs=%s retime=%s audio=%s accessories=%s sphere_maps=%s physics=%s frame_range=%s layout=%s camera=%s light=%s"
+        % (
+            settings.auto_scale,
+            current_scale(settings),
+            settings.use_clips,
+            settings.uv_morphs,
+            settings.retime_fps,
+            settings.sync_audio,
+            settings.sync_accessories,
+            settings.sphere_maps,
+            settings.use_physics_vmd,
+            settings.update_scene_settings,
+            settings.interpolation_layout,
+            settings.sync_camera,
+            settings.sync_light,
+        )
+    )
+    lines.append("audio: %s" % (settings.audio_note or "not read"))
+    for item in settings.targets:
+        lines.append(
+            "model '%s' -> %s | %s | motion=%s | shapekey=%s | %s"
+            % (
+                item.pmm_name,
+                item.target.name if item.target else "none",
+                item_state(item),
+                item.clip.name if item.clip else "none",
+                item.shape_clip.name if item.shape_clip else "none",
+                item_status_text(item) or "no issues",
+            )
+        )
+    for entry in settings.accessories:
+        lines.append(
+            "accessory '%s' enabled=%s parent_override=%s"
+            % (entry.display, entry.enabled, entry.parent_bone or "none")
+        )
+    block = bpy.data.texts.get(LOG_TEXT_NAME)
+    lines.append("")
+    lines.append("---- last %d log lines ----" % REPORT_LOG_LINES)
+    if block is not None:
+        lines.extend(block.as_string().splitlines()[-REPORT_LOG_LINES:])
+    else:
+        lines.append("no log text block")
+    return redact_paths("\n".join(lines))
+
+
+BONE_PATH = re.compile(
+    r'^pose\.bones\["((?:[^"\\]|\\.)*)"\]\.(?:location|rotation_quaternion|rotation_euler|scale)$'
+)
+KEY_PATH = re.compile(r'^key_blocks\["((?:[^"\\]|\\.)*)"\]\.value$')
+
+
+def unescape_name(text):
+    return text.replace('\\"', '"').replace("\\\\", "\\")
+
+
+def model_owner_sets(root):
+    _importer, model_mod, _utils = mmd_tools_modules()
+    rig = model_mod.Model(root)
+    armature = rig.armature()
+    placeholder = rig.morph_slider.placeholder()
+    meshes = list(rig.meshes())
+    targets = [root]
+    for extra in [armature, placeholder] + meshes:
+        if extra is not None and extra not in targets:
+            targets.append(extra)
+    return armature, meshes, collect_owners(targets)
+
+
+def remove_action(action):
+    try:
+        action.use_fake_user = False
+        if action.users == 0:
+            bpy.data.actions.remove(action)
+            return True
+    except ReferenceError:
+        pass
+    return False
+
+
+def clean_model_animation(root, counts):
+    armature, _meshes, owners = model_owner_sets(root)
+    bones = set()
+    shape_values = []
+    doomed = []
+    for owner in owners:
+        anim = owner.animation_data
+        if anim is None:
+            continue
+        actions = [
+            strip.action
+            for track in anim.nla_tracks
+            for strip in track.strips
+            if is_bridge_action(strip.action)
+        ]
+        if is_bridge_action(anim.action):
+            actions.append(anim.action)
+            anim.action = None
+        for action in actions:
+            for fcurve in iter_fcurves(action):
+                matched = BONE_PATH.match(fcurve.data_path)
+                if matched:
+                    bones.add(unescape_name(matched.group(1)))
+                matched = KEY_PATH.match(fcurve.data_path)
+                if matched and hasattr(owner, "key_blocks"):
+                    shape_values.append((owner, unescape_name(matched.group(1))))
+        doomed.extend(actions)
+    clear_bridge_nla(owners)
+    return armature, bones, shape_values, doomed
+
+
+def reset_animated(armature, bones, shape_values):
+    count = 0
+    if armature is not None:
+        for name in bones:
+            bone = armature.pose.bones.get(name)
+            if bone is None:
+                continue
+            bone.location = (0.0, 0.0, 0.0)
+            bone.rotation_quaternion = (1.0, 0.0, 0.0, 0.0)
+            bone.rotation_euler = (0.0, 0.0, 0.0)
+            bone.scale = (1.0, 1.0, 1.0)
+            count += 1
+    for keys, name in shape_values:
+        try:
+            block = keys.key_blocks.get(name)
+        except ReferenceError:
+            continue
+        if block is not None and block.name != "Basis":
+            block.value = 0.0
+            count += 1
+    return count
+
+
+def clean_uv_data(root, counts):
+    _armature, meshes, _owners = model_owner_sets(root)
+    for mesh_obj in meshes:
+        if mesh_obj.type != "MESH" or mesh_obj.mode == "EDIT":
+            continue
+        clear_uv_channels(mesh_obj)
+        keys = mesh_obj.data.shape_keys
+        if keys is None:
+            continue
+        for block in [b for b in keys.key_blocks if b.name.startswith(UV_KEY_PREFIX)]:
+            mesh_obj.shape_key_remove(block)
+            counts["uv_keys"] += 1
+
+
+def clean_camera_light(counts):
+    for name in (CAMERA_COLLECTION, LIGHT_COLLECTION):
+        collection = bpy.data.collections.get(name)
+        if collection is None:
+            continue
+        for mmd_type in ("CAMERA", "LIGHT"):
+            root = find_rig_root(collection, mmd_type)
+            while root is not None:
+                remove_rig(root)
+                counts["rigs"] += 1
+                root = find_rig_root(collection, mmd_type)
+        if not collection.objects and not collection.children:
+            bpy.data.collections.remove(collection)
+    purge_actions(ACTION_PREFIX + "Scene")
+    purge_actions(ACTION_PREFIX + "Light")
+
+
+def clean_accessory_objects(counts):
+    collection = bpy.data.collections.get(ACCESSORY_COLLECTION)
+    if collection is not None:
+        for obj in [
+            o for o in collection.objects if o.get("mmd_bridge_accessory") is not None
+        ]:
+            remove_accessory_children(obj)
+            bpy.data.objects.remove(obj, do_unlink=True)
+            counts["accessories"] += 1
+        if not collection.objects and not collection.children:
+            bpy.data.collections.remove(collection)
+    purge_actions(ACTION_PREFIX + "Acc_")
+
+
+def clean_audio_strip(scene, counts):
+    editor = scene.sequence_editor
+    if editor is None:
+        return
+    strips = sequence_strips(editor)
+    for strip in [s for s in strips if s.name == AUDIO_STRIP_NAME]:
+        strips.remove(strip)
+        counts["audio"] += 1
+
+
+def run_clean(scene, settings, options):
+    counts = {
+        "clips": 0,
+        "reset": 0,
+        "uv_keys": 0,
+        "rigs": 0,
+        "accessories": 0,
+        "audio": 0,
+    }
+    for item in settings.targets:
+        root = item.target
+        if root is None:
+            continue
+        try:
+            if options["animation"]:
+                if item.clip is not None and is_bridge_action(item.clip):
+                    item.clip = None
+                if item.shape_clip is not None and is_bridge_action(item.shape_clip):
+                    item.shape_clip = None
+                armature, bones, shape_values, doomed = clean_model_animation(
+                    root, counts
+                )
+                seen = set()
+                for action in doomed:
+                    try:
+                        pointer = action.as_pointer()
+                    except ReferenceError:
+                        continue
+                    if pointer in seen:
+                        continue
+                    seen.add(pointer)
+                    if remove_action(action):
+                        counts["clips"] += 1
+                if options["pose"]:
+                    counts["reset"] += reset_animated(armature, bones, shape_values)
+            if options["uv"]:
+                clean_uv_data(root, counts)
+        except Exception as error:
+            log.error(
+                "clean failed for '%s': %s\n%s",
+                item.pmm_name,
+                error,
+                traceback.format_exc(),
+            )
+            continue
+        item.state = "NEW"
+        item.status_text = "cleaned"
+    if options["animation"]:
+        purge_actions(ACTION_PREFIX)
+    if options["scene"]:
+        clean_camera_light(counts)
+    if options["accessories"]:
+        clean_accessory_objects(counts)
+    if options["audio"]:
+        clean_audio_strip(scene, counts)
+    scene.frame_set(scene.frame_current)
+    log.info("clean done: %s", counts)
+    return counts
+
+
 def log_file_state(path, data):
     digest = hashlib.md5(data).hexdigest()[:12]
     stat = os.stat(path)
@@ -3338,9 +3882,23 @@ def sync(scene):
         data = handle.read()
     log_file_state(path, data)
     project = parse_pmm(data)
+    factor = retime_factor(scene, settings)
+    if factor != 1.0:
+        retime_project(project, factor)
+        log.info(
+            "retimed PMM keys by x%.4f for a %.3f fps scene (PMM is %d fps)",
+            factor,
+            scene_fps(scene),
+            PMM_FPS,
+        )
+    elif settings.retime_fps and settings.update_scene_settings and fps_differs(scene):
+        log.info(
+            "retiming skipped because Update Frame Range will switch the scene to 30 fps"
+        )
     log_scene_keys(project)
     refresh_targets(settings, project)
     refresh_accessories(settings, project)
+    settings.audio_note = describe_audio(project, settings)
     log.info(
         "using scale %.4f (%s)",
         current_scale(settings),
@@ -3348,6 +3906,7 @@ def sync(scene):
     )
     by_key = {model_key(m): m for m in project.models}
     imported = 0
+    failed = 0
     for target in settings.targets:
         if not target.enabled:
             log.info("skip '%s': disabled", target.pmm_name)
@@ -3358,11 +3917,21 @@ def sync(scene):
         model = by_key.get(target.key)
         if model is None:
             log.warning("skip '%s': not present in PMM", target.pmm_name)
+            target.state = "ERROR"
+            target.status_text = "Not present in the PMM"
             continue
-        import_model(target.target, model, settings, target)
-        imported += 1
+        if sync_target(target, model, settings):
+            imported += 1
+        else:
+            failed += 1
+    _last_sync["failed"] = failed
     imported += import_scene_elements(scene, project, settings)
     imported += import_accessories(scene, project, settings)
+    try:
+        if import_audio(scene, project, settings):
+            imported += 1
+    except Exception as error:
+        log.error("audio failed: %s\n%s", error, traceback.format_exc())
     scene.frame_set(scene.frame_current)
     log.info(
         "sync done: %d item(s) imported, %d model(s) in PMM",
@@ -3386,7 +3955,17 @@ def run_sync(scene):
         settings.status = "Sync failed: %s" % error
         redraw_all()
         return False
-    settings.status = "Synced %d item(s) at %s" % (imported, time.strftime("%H:%M:%S"))
+    if _last_sync["failed"]:
+        settings.status = "Synced %d item(s), %d model(s) failed at %s" % (
+            imported,
+            _last_sync["failed"],
+            time.strftime("%H:%M:%S"),
+        )
+    else:
+        settings.status = "Synced %d item(s) at %s" % (
+            imported,
+            time.strftime("%H:%M:%S"),
+        )
     redraw_all()
     return True
 
@@ -3429,6 +4008,8 @@ class MMDBridgeTarget(PropertyGroup):
         type=bpy.types.Action,
         poll=clip_poll,
     )
+    state: StringProperty(default="NEW")
+    status_text: StringProperty()
     physics_vmd: StringProperty(
         name="Baked Physics VMD",
         description="Experimental: VMD baked from MMD with MMDBridge. Applied as a clip above the PMM clip",
@@ -3492,6 +4073,22 @@ class MMDBridgeSettings(PropertyGroup):
         description="Keep each model's motion and shapekey animation in reusable action clips on NLA tracks instead of as the active action",
         default=True,
     )
+    retime_fps: BoolProperty(
+        name="Retime to Scene FPS",
+        description="PMM keyframes are 30 fps. Scale every key frame by scene fps / 30 so motion keeps its real speed in a scene with a different frame rate",
+        default=True,
+    )
+    sync_audio: BoolProperty(
+        name="Sync Audio",
+        description="Add the audio file stored in the PMM to the video sequencer, starting at frame 0",
+        default=True,
+    )
+    audio_path: StringProperty(
+        name="Audio File",
+        description="Audio file to use instead of the one stored in the PMM. Leave empty to use the PMM path, then the PMM folder",
+        subtype="FILE_PATH",
+    )
+    audio_note: StringProperty()
     uv_morphs: BoolProperty(
         name="UV Morphs (Eye Shapes)",
         description="Apply UV morphs, including the ones inside group morphs, by offsetting the base texture in the material nodes. Needed for effects such as the > < eyes",
@@ -3574,10 +4171,120 @@ class MMDBRIDGE_OT_scan(Operator):
             return {"CANCELLED"}
         refresh_targets(settings, project)
         refresh_accessories(settings, project)
+        settings.audio_note = describe_audio(project, settings)
         self.report(
             {"INFO"},
             "Found %d model(s), %d accessory(ies)"
             % (len(project.models), len(project.accessories)),
+        )
+        return {"FINISHED"}
+
+
+class MMDBRIDGE_OT_clean(Operator):
+    bl_idname = "mmd_bridge.clean"
+    bl_label = "Clean"
+    bl_description = "Remove data created by this add-on. Your own actions, clips and shape keys are never touched"
+    bl_options = {"REGISTER", "UNDO"}
+
+    animation: BoolProperty(
+        name="Model animation clips",
+        description="Remove bridge-created motion, shapekey and physics clips and their NLA tracks",
+        default=True,
+    )
+    pose: BoolProperty(
+        name="Reset bones and shape keys the clips animated",
+        description="Return only the bones and shape keys that the removed clips animated to their rest values",
+        default=True,
+    )
+    uv: BoolProperty(
+        name="UV morph data",
+        description="Remove the MMDUV_ shape keys, offset attributes, shader nodes and drivers",
+        default=True,
+    )
+    scene: BoolProperty(
+        name="Camera and light rigs",
+        description="Delete the MMD camera and sun rigs and their animation",
+        default=False,
+    )
+    accessories: BoolProperty(
+        name="Accessories",
+        description="Delete imported accessory objects and their animation",
+        default=False,
+    )
+    audio: BoolProperty(
+        name="Audio strip",
+        description="Remove the sound strip added by the bridge",
+        default=False,
+    )
+
+    @classmethod
+    def poll(cls, context):
+        return mmd_tools_available()
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self, width=380)
+
+    def draw(self, context):
+        layout = self.layout
+        draw_wrapped(
+            layout,
+            "Only data created by this add-on is removed. Actions, clips and shape keys you made or picked yourself are kept.",
+            52,
+        )
+        layout.prop(self, "animation")
+        row = layout.row()
+        row.enabled = self.animation
+        row.prop(self, "pose")
+        layout.prop(self, "uv")
+        layout.prop(self, "scene")
+        layout.prop(self, "accessories")
+        layout.prop(self, "audio")
+
+    def execute(self, context):
+        settings = context.scene.mmd_bridge
+        options = {
+            "animation": self.animation,
+            "pose": self.pose,
+            "uv": self.uv,
+            "scene": self.scene,
+            "accessories": self.accessories,
+            "audio": self.audio,
+        }
+        counts = run_clean(context.scene, settings, options)
+        settings.status = "Cleaned at %s" % time.strftime("%H:%M:%S")
+        self.report(
+            {"INFO"},
+            "Removed %d clip(s), %d UV key(s), %d rig(s), %d accessory(ies), %d audio strip(s); reset %d channel(s)"
+            % (
+                counts["clips"],
+                counts["uv_keys"],
+                counts["rigs"],
+                counts["accessories"],
+                counts["audio"],
+                counts["reset"],
+            ),
+        )
+        redraw_all()
+        return {"FINISHED"}
+
+
+class MMDBRIDGE_OT_copy_report(Operator):
+    bl_idname = "mmd_bridge.copy_report"
+    bl_label = "Support Report"
+    bl_description = "Copy a support report with versions, settings, model status and the recent log to the clipboard. User folders are redacted, but check it before posting"
+
+    def execute(self, context):
+        text = build_report(context)
+        context.window_manager.clipboard = text
+        block = bpy.data.texts.get(REPORT_TEXT_NAME) or bpy.data.texts.new(
+            REPORT_TEXT_NAME
+        )
+        block.clear()
+        block.write(text)
+        self.report(
+            {"INFO"},
+            "Support report copied (%d lines) and saved to the %s text"
+            % (len(text.splitlines()), REPORT_TEXT_NAME),
         )
         return {"FINISHED"}
 
@@ -3612,6 +4319,19 @@ class MMDBRIDGE_PT_main(Panel):
         row.scale_y = 1.5
         row.operator("mmd_bridge.sync_now", icon="FILE_REFRESH")
         layout.label(text=settings.status, icon="INFO")
+        if fps_differs(context.scene):
+            fps_box = layout.box()
+            fps_box.label(
+                text="Scene is %g fps, PMM is %d fps"
+                % (round(scene_fps(context.scene), 3), PMM_FPS),
+                icon="TIME",
+            )
+            fps_box.prop(settings, "retime_fps")
+            if settings.retime_fps and settings.update_scene_settings:
+                draw_wrapped(
+                    fps_box,
+                    "Update Frame Range also switches the scene to 30 fps, so retiming is skipped.",
+                )
         if scale_warning_active(settings):
             box = layout.box()
             header = box.row()
@@ -3634,10 +4354,18 @@ class MMDBRIDGE_PT_main(Panel):
         if not len(settings.targets):
             box.label(text="Press the refresh icon to read the PMM")
         for item in settings.targets:
+            state = item_state(item)
             row = box.row(align=True)
             row.prop(item, "enabled", text="")
+            row.label(text="", icon=status_icon(state))
             row.label(text=item.pmm_name)
             row.prop(item, "target", text="")
+            note = item_status_text(item)
+            if note:
+                note_row = box.row()
+                note_row.alert = state == "ERROR"
+                note_row.scale_y = 0.85
+                note_row.label(text=short_text(note, 60))
             if settings.use_clips and item.target is not None:
                 clip_row = box.row(align=True)
                 clip_row.label(text="", icon="NLA")
@@ -3649,7 +4377,34 @@ class MMDBRIDGE_PT_main(Panel):
                     physics_row = box.row(align=True)
                     physics_row.label(text="", icon="PHYSICS")
                     physics_row.prop(item, "physics_vmd", text="")
+        tools = layout.row(align=True)
+        tools.operator("mmd_bridge.clean", icon="TRASH")
+        tools.operator("mmd_bridge.copy_report", icon="COPYDOWN")
         layout.label(text="Log: Text Editor > %s" % LOG_TEXT_NAME)
+
+
+class MMDBRIDGE_PT_audio(Panel):
+    bl_label = "Audio"
+    bl_idname = "MMDBRIDGE_PT_audio"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "MMD Bridge"
+    bl_parent_id = "MMDBRIDGE_PT_main"
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw(self, context):
+        layout = self.layout
+        settings = context.scene.mmd_bridge
+        layout.prop(settings, "sync_audio")
+        layout.prop(settings, "audio_path")
+        draw_wrapped(
+            layout,
+            settings.audio_note or "Press the refresh icon in Models to read the PMM",
+        )
+        draw_wrapped(
+            layout,
+            "Audio starts at frame 0, the same as MMD. The PMM stores no audio offset.",
+        )
 
 
 class MMDBRIDGE_PT_camera(Panel):
@@ -3804,8 +4559,11 @@ CLASSES = (
     MMDBridgeSettings,
     MMDBRIDGE_OT_sync_now,
     MMDBRIDGE_OT_scan,
+    MMDBRIDGE_OT_clean,
+    MMDBRIDGE_OT_copy_report,
     MMDBRIDGE_OT_dismiss_scale_warning,
     MMDBRIDGE_PT_main,
+    MMDBRIDGE_PT_audio,
     MMDBRIDGE_PT_camera,
     MMDBRIDGE_PT_readout,
     MMDBRIDGE_PT_options,
