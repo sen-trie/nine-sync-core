@@ -58,6 +58,7 @@ from .common import (
     log,
     mme_effect_passes,
     mme_effect_roots,
+    mme_load_controls,
     model_key,
     move_to_collection,
     node_input,
@@ -2269,7 +2270,7 @@ def import_accessory(scene, collection, project, settings, acc, entry, unit):
         runtime = _mme_runtimes.get(root.name)
         if runtime is not None:
             runtime.controls_runtime = {
-                name for name, desc in controls.items() if desc.get("kind") != "const"
+                name for name, desc in mme_load_controls(root).items() if desc.get("kind") != "const"
             }
     apply_accessory_parent(root, project, settings, acc, entry)
     return True

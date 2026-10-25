@@ -287,6 +287,9 @@ MME_UNIFORM_PREFIX = "mmeU_"
 MME_CONTROL_PREFIX = "mmeC_"
 
 
+MME_IGNORED_PROP = "mme_ignored_sources"
+
+
 MME_IMAGE_PREFIX = "MME_"
 
 
@@ -376,11 +379,39 @@ _mme_groups = {}
 _mme_core = {"names": None, "path": None, "stats": {"built": 0, "file": 0, "library": 0}}
 
 
-def mme_load_controls(root):
+def mme_load_controls_raw(root):
     try:
         return json.loads(root.get("mme_controls", "{}"))
     except (TypeError, ValueError):
         return {}
+
+
+def mme_control_source(desc):
+    return (desc.get("source") or (desc.get("from") or "").split(" / ")[0]).strip()
+
+
+def mme_ignored_sources(root):
+    try:
+        return {str(v).lower() for v in json.loads(root.get(MME_IGNORED_PROP, "[]"))}
+    except (TypeError, ValueError):
+        return set()
+
+
+def mme_apply_ignored(root, controls):
+    ignored = mme_ignored_sources(root)
+    if not ignored:
+        return controls
+    out = {}
+    for name, desc in controls.items():
+        source = mme_control_source(desc)
+        if source.lower() in ignored and desc.get("kind") not in ("self", "const"):
+            desc = {"kind": "const", "values": [0.0], "from": desc.get("from", ""), "source": source, "ignored": True}
+        out[name] = desc
+    return out
+
+
+def mme_load_controls(root):
+    return mme_apply_ignored(root, mme_load_controls_raw(root))
 
 
 def mme_param_meta(root):

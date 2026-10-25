@@ -53,6 +53,7 @@ from .common import (
     log,
     mme_effect_roots,
     mme_load_controls,
+    mme_load_controls_raw,
     mme_param_meta,
     model_key,
     pose_bone_name,
@@ -1211,6 +1212,7 @@ def mme_resolve_controls(program, project, settings, acc, root):
                 elif not item:
                     desc = {"kind": "model", "object": target.name if target is not None else ""}
         desc["from"] = "%s%s" % (name, (" / %s" % item) if item else "")
+        desc["source"] = name
         controls[g.name] = desc
     return controls, morph_tracks
 
@@ -1242,7 +1244,7 @@ def mme_build_effect(scene, collection, settings, acc, root, x_path, fx_path, un
     root["mme_x"] = x_path
     root["mme_unit"] = unit
     root["mme_controls"] = json.dumps(controls)
-    runtime.controls_runtime = {name for name, desc in controls.items() if desc.get("kind") != "const"}
+    runtime.controls_runtime = {name for name, desc in mme_load_controls(root).items() if desc.get("kind") != "const"}
     if acc is not None:
         root["mme_acc_name"] = acc.name
         root["mme_tr"] = float(acc.keys[0].opacity) if acc.keys else 1.0
@@ -1326,7 +1328,7 @@ def mme_rebuild_effect(scene, root):
         remove_accessory_children_single(child)
     started = time.time()
     children, _uncovered, _tracks, total = mme_build_effect(
-        scene, collection, settings, None, root, x_path, fx_path, unit, mme_load_controls(root)
+        scene, collection, settings, None, root, x_path, fx_path, unit, mme_load_controls_raw(root)
     )
     for child in children:
         child.scale = (ACCESSORY_UNIT * unit,) * 3
