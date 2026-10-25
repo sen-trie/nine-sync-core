@@ -58,6 +58,7 @@ from .common import (
     log,
     mme_effect_passes,
     mme_effect_roots,
+    mme_ensure_use_props,
     mme_load_controls,
     model_key,
     move_to_collection,
@@ -2265,6 +2266,7 @@ def import_accessory(scene, collection, project, settings, acc, entry, unit):
     key_accessory(root, acc, unit)
     if root.get("mme_fx"):
         root["mme_controls"] = json.dumps(controls)
+        mme_ensure_use_props(root, controls)
         root["mme_unit"] = unit
         mme_key_morph_props(root, tracks)
         runtime = _mme_runtimes.get(root.name)
@@ -2580,8 +2582,8 @@ def build_report(context):
     )
     lines.append("audio: %s" % (settings.audio_note or "not read"))
     lines.append(
-        "effects: on=%s backend=%s density=%.2f live=%s bake_to=%s"
-        % (settings.mme_effects, settings.mme_backend, settings.mme_density, settings.mme_live, settings.mme_bake_target)
+        "effects: on=%s backend=%s density=%.2f tolerance=%.4f live=%s bake_to=%s"
+        % (settings.mme_effects, settings.mme_backend, settings.mme_density, settings.mme_tolerance, settings.mme_live, settings.mme_bake_target)
     )
     for root in mme_effect_roots(scene):
         passes = mme_effect_passes(root)

@@ -34,6 +34,8 @@ from .common import (
     child_of_type,
     find_rig_root,
     log,
+    mme_control_source,
+    mme_control_use_prop,
     mme_load_controls,
     mme_param_meta,
     node_socket,
@@ -70,6 +72,33 @@ from .fx import (
     fx_type_name,
     fx_value_from_list,
 )
+
+
+MME_SIMPLIFY_TR = (1.0, 0.9, 0.75, 0.6, 0.45, 0.3, 0.15, 0.0)
+
+
+MME_GATE_TR = tuple(k / 32.0 for k in range(32, -1, -1))
+
+
+MME_GATE_MARGIN = 2
+
+
+MME_GATE_EPS = 1e-5
+
+
+MME_GATE_ALPHA = 1.0 / 512.0
+
+
+MME_GATE_PROBES = 96
+
+
+MME_TRANSPARENT_BOUNCES = 128
+
+
+MME_PROGRESS_WIDTH = 24
+
+
+MME_PROGRESS_REDRAW = 0.1
 
 
 def mme_group_name(label, tag, key):
@@ -2425,6 +2454,16 @@ class MmeGeoScene:
         return self.const_matrix(np.identity(4), "identity")
 
     def control_values(self, gname, n):
+        values = self.control_values_raw(gname, n)
+        desc = self.controls.get(gname, {})
+        prop = mme_control_use_prop(desc)
+        if prop is None:
+            return values
+        source = mme_control_source(desc)
+        use = self.driven("use:" + prop, "Use " + source, self.prop_spec(self.root, '["%s"]' % prop), float(bool(self.root.get(prop, True))))
+        return [self.B.mul(v, use) for v in values]
+
+    def control_values_raw(self, gname, n):
         desc = self.controls.get(gname, {})
         kind = desc.get("kind")
         g = self.program.globals.get(gname)

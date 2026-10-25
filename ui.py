@@ -21,7 +21,6 @@ from .common import (
     MME_DRIVEN_PROP,
     MME_GN_MODIFIER,
     MME_GROUP_PROP,
-    MME_IGNORED_PROP,
     MME_KEY_PROP,
     MME_PRUNED_PROP,
     MME_SELF_NAMES,
@@ -41,8 +40,8 @@ from .common import (
     fps_differs,
     log,
     mme_control_source,
+    mme_control_use_prop,
     mme_effect_passes,
-    mme_ignored_sources,
     mme_load_controls,
     mme_param_meta,
     redraw_all,
@@ -65,6 +64,9 @@ from .mme_nodes import (
 from .mme import (
     mme_bake_pass,
     mme_clear_bake,
+    mme_progress_begin,
+    mme_progress_end,
+    mme_progress_step,
     mme_rebuild_effect,
     mme_reset_params,
     mme_target_roots,
@@ -201,6 +203,15 @@ class MMDBridgeSettings(PropertyGroup):
         subtype="FACTOR",
         update=lambda self, context: context.scene.update_tag(),
     )
+    mme_tolerance: FloatProperty(
+        name="Geometry Tolerance",
+        description="How far simplified effect strips may drift from the full mesh, as a share of the effect's size. Rows of strip meshes (such as Thunder's 10,000-segment rings and bolts) that the shader output can rebuild by interpolation are merged. 0 keeps every row. Faces that the shader always makes fully transparent are removed regardless. Applies on the next Rebuild",
+        default=0.0005,
+        min=0.0,
+        max=0.05,
+        precision=4,
+        step=0.01,
+    )
     mme_live: BoolProperty(
         name="Live Effect Preview",
         description="Recompute Python-backend effect passes whenever the frame changes in the viewport. Geometry Nodes passes always update. Renders always recompute",
@@ -314,7 +325,7 @@ class MMDBridgeSettings(PropertyGroup):
     targets: CollectionProperty(type=MMDBridgeTarget)
 
 
-STALE_SETTINGS_MESSAGE = "An older copy of \u2468-Sync (MMD PMM Bridge) replaced this add-on's settings. They were re-linked; press the button again, and remove the old copy in Preferences > Add-ons"
+STALE_SETTINGS_MESSAGE = "An older copy of NineSync (MMD PMM Bridge) replaced this add-on's settings. They were re-linked; press the button again, and remove the old copy in Preferences > Add-ons"
 
 
 _relink = {"pending": False}
@@ -542,38 +553,6 @@ class MMDBRIDGE_OT_refresh_effects(Operator):
         return {"FINISHED"}
 
 
-class MMDBRIDGE_OT_toggle_control_source(Operator):
-    bl_idname = "ninesync.toggle_control_source"
-    bl_label = "Use Controller"
-    bl_description = "Use this controller's morphs and bones in the effect. Untick to run the effect as if the controller were not loaded in MMD, so it falls back to its own parameters"
-    bl_options = {"REGISTER", "UNDO"}
-
-    root_name: StringProperty(options={"HIDDEN", "SKIP_SAVE"})
-    source: StringProperty(options={"HIDDEN", "SKIP_SAVE"})
-
-    def execute(self, context):
-        root = bpy.data.objects.get(self.root_name)
-        if root is None or not self.source:
-            return {"CANCELLED"}
-        ignored = mme_ignored_sources(root)
-        key = self.source.lower()
-        if key in ignored:
-            ignored.discard(key)
-        else:
-            ignored.add(key)
-        root[MME_IGNORED_PROP] = json.dumps(sorted(ignored))
-        _mme_runtimes.pop(root.name, None)
-        try:
-            mme_rebuild_effect(context.scene, root)
-        except Exception as error:
-            log.error("effect '%s' rebuild failed: %s\n%s", root.name, error, traceback.format_exc())
-            self.report({"WARNING"}, "%s: %s" % (root.name, short_text(error, 80)))
-        mme_update_scene(context.scene, context.evaluated_depsgraph_get(), force=True)
-        log.info("effect '%s': controller '%s' %s", root.name, self.source, "ignored" if key in ignored else "used")
-        redraw_all()
-        return {"FINISHED"}
-
-
 class MMDBRIDGE_OT_bake_effects(Operator):
     bl_idname = "ninesync.bake_effects"
     bl_label = "Bake Effects"
@@ -598,14 +577,20 @@ class MMDBRIDGE_OT_bake_effects(Operator):
         frame = scene.frame_current
         done = 0
         started = time.time()
-        for obj in passes:
-            try:
-                if self.clear:
-                    done += mme_clear_bake(context, obj)
-                else:
-                    done += mme_bake_pass(context, obj, scene.frame_start, scene.frame_end, settings)
-            except Exception as error:
-                log.error("bake of '%s' failed: %s\n%s", obj.name, error, traceback.format_exc())
+        if not self.clear:
+            mme_progress_begin(context, "NineSync baking", len(passes), scene.frame_start, scene.frame_end)
+        try:
+            for index, obj in enumerate(passes):
+                mme_progress_step(index, obj.name)
+                try:
+                    if self.clear:
+                        done += mme_clear_bake(context, obj)
+                    else:
+                        done += mme_bake_pass(context, obj, scene.frame_start, scene.frame_end, settings)
+                except Exception as error:
+                    log.error("bake of '%s' failed: %s\n%s", obj.name, error, traceback.format_exc())
+        finally:
+            mme_progress_end()
         scene.frame_set(frame)
         if self.clear:
             self.report({"INFO"}, "Cleared %d effect bake(s)" % done)
@@ -975,8 +960,6 @@ def fx_pass_summary(obj):
 def fx_control_text(desc):
     kind = desc.get("kind")
     source = desc.get("from") or ""
-    if desc.get("ignored"):
-        return "ignored: %s (reads 0)" % source
     if kind == "const":
         return "missing: %s (uses %s)" % (source or "target", ", ".join("%g" % v for v in desc.get("values", [0.0])))
     if kind == "self":
@@ -1043,34 +1026,26 @@ def draw_fx_selected(layout, context, root, active):
         groups = {}
         for name, desc in controls.items():
             groups.setdefault(mme_control_source(desc), []).append((name, desc))
-        ignored = mme_ignored_sources(root)
         for source, entries in groups.items():
-            selfish = source.lower() in MME_SELF_NAMES
-            off = source.lower() in ignored
             col = box.column(align=True)
             header = col.row(align=True)
-            if selfish:
+            prop = next((mme_control_use_prop(d) for _n, d in entries if mme_control_use_prop(d)), None)
+            if source.lower() in MME_SELF_NAMES:
                 header.label(text="This accessory", icon="EMPTY_AXIS")
+            elif prop is not None and prop in root:
+                header.prop(root, '["%s"]' % prop, text=source, toggle=True)
             else:
-                toggle = header.operator(
-                    "ninesync.toggle_control_source",
-                    text=source,
-                    icon="CHECKBOX_DEHLT" if off else "CHECKBOX_HLT",
-                    depress=not off,
-                )
-                toggle.root_name = root.name
-                toggle.source = source
+                header.label(text=source, icon="ERROR")
+            off = prop is not None and not bool(root.get(prop, True))
             for name, desc in entries:
                 split = col.split(factor=0.35, align=True)
-                missing = desc.get("kind") == "const" and not desc.get("ignored")
-                split.label(text=name, icon="ERROR" if missing else ("HIDE_ON" if desc.get("ignored") else "LINKED"))
+                missing = desc.get("kind") == "const"
+                split.label(text=name, icon="ERROR" if missing else ("HIDE_ON" if off else "LINKED"))
                 right = split.row()
                 right.alert = missing
-                right.enabled = not desc.get("ignored")
+                right.enabled = not off
                 right.label(text=short_text(fx_control_text(desc), 48))
             box.separator(factor=0.5)
-        if any(not s.lower() in MME_SELF_NAMES for s in groups):
-            draw_wrapped(box, "Untick a controller to run the effect as if it were not loaded in MMD, so the effect falls back to its own parameters (like MainColor).")
     elif tab == "PASSES":
         for obj in mme_effect_passes(root):
             info, backend, loops, flags = fx_pass_summary(obj)
@@ -1144,6 +1119,7 @@ class NINESYNC_PT_fx(Panel):
         col = layout.column()
         col.prop(settings, "mme_backend")
         col.prop(settings, "mme_density", slider=True)
+        col.prop(settings, "mme_tolerance")
         if settings.mme_backend == "PYTHON":
             col.prop(settings, "mme_live")
         col.prop(settings, "mme_standard_view")
@@ -1324,7 +1300,6 @@ CLASSES = (
     MMDBRIDGE_OT_clean,
     MMDBRIDGE_OT_copy_report,
     MMDBRIDGE_OT_refresh_effects,
-    MMDBRIDGE_OT_toggle_control_source,
     MMDBRIDGE_OT_bake_effects,
     MMDBRIDGE_OT_reset_params,
     MMDBRIDGE_OT_dismiss_scale_warning,

@@ -51,7 +51,9 @@ from .common import (
     find_rig_root,
     iter_fcurves,
     log,
+    mme_control_use_prop,
     mme_effect_roots,
+    mme_ensure_use_props,
     mme_load_controls,
     mme_load_controls_raw,
     mme_param_meta,
@@ -81,6 +83,7 @@ from .fx import (
     FxValue,
     fx_classify_global,
     fx_clip_to_world,
+    fx_count,
     fx_entry,
     fx_find_file,
     fx_is_numeric,
@@ -98,6 +101,15 @@ from .fx import (
     fx_vs_globals,
 )
 from .mme_nodes import (
+    MME_GATE_ALPHA,
+    MME_GATE_EPS,
+    MME_GATE_MARGIN,
+    MME_GATE_PROBES,
+    MME_GATE_TR,
+    MME_PROGRESS_REDRAW,
+    MME_PROGRESS_WIDTH,
+    MME_SIMPLIFY_TR,
+    MME_TRANSPARENT_BOUNCES,
     mme_add_driver,
     mme_bake_only_tree,
     mme_build_geo_tree,
@@ -423,6 +435,15 @@ def mme_object_items(obj, depsgraph, unit, item, t):
 
 
 def mme_control_values(desc, root, depsgraph, unit, t):
+    values = mme_control_values_raw(desc, root, depsgraph, unit, t)
+    prop = mme_control_use_prop(desc)
+    if prop is None:
+        return values
+    use = float(bool(mme_eval_prop(root, depsgraph, prop, 1.0)))
+    return [float(v) * use for v in values]
+
+
+def mme_control_values_raw(desc, root, depsgraph, unit, t):
     kind = desc.get("kind")
     if kind == "const":
         return list(desc.get("values", [0.0]))
@@ -658,13 +679,14 @@ def mme_prune_state(state):
     return probe
 
 
-def mme_prune_mask(runtime, data, state, tr_names):
+def mme_prune_mask(runtime, data, state, tr_names, gates=()):
     if not tr_names:
         samples = [None]
     else:
-        samples = MME_PRUNE_TR
+        samples = MME_GATE_TR if gates else MME_PRUNE_TR
     state = mme_prune_state(state)
     keep = np.zeros(data.count, dtype=bool)
+    opened = np.zeros(data.count, dtype=bool) if gates else np.ones(data.count, dtype=bool)
     for value in samples:
         if value is not None:
             for name in tr_names:
@@ -672,7 +694,251 @@ def mme_prune_mask(runtime, data, state, tr_names):
         outputs, _ex = mme_run_vs(runtime, data, state)
         _world, culled = mme_clip_world(outputs, state, data.count)
         keep |= ~culled
-    return keep
+        for semantic, k in gates:
+            found = outputs.get(semantic)
+            if found is None or k >= len(found.c):
+                opened[:] = True
+                continue
+            values = np.broadcast_to(np.asarray(found.c[k], dtype=np.float64), (data.count,))
+            opened |= ~(np.abs(values) <= MME_GATE_EPS)
+    return keep, opened
+
+
+def mme_ps_numpy_alpha(runtime, draw, state, inputs, loop_values, count):
+    program = runtime.program
+    function, args = fx_entry(program, draw.fx_pass.ps)
+    if function is None:
+        return None
+    runtime.material_state(state, draw.subset)
+    ex = FxExec(program, FxNumpyBackend(), FxNumpyEnv(program, state, runtime.textures))
+    for var, values in loop_values.items():
+        ex.overrides[var] = FxValue(("i", ()), [values])
+
+    def provide(ex):
+        def get(semantic, t):
+            if semantic in inputs:
+                comps = list(inputs[semantic])
+            elif semantic == "VFACE":
+                comps = [np.ones(count)]
+            else:
+                comps = [np.zeros(count)] * 4
+            if not fx_is_numeric(t):
+                return ex.zero(t)
+            n = fx_count(t[1])
+            comps = (comps + [np.zeros(count)] * 16)[:n]
+            return FxValue(("f", t[1]), comps)
+
+        return get
+
+    with np.errstate(all="ignore"):
+        outputs = fx_run_entry(ex, function, args, provide(ex))
+        color = outputs.get("COLOR0")
+        if color is None:
+            return None
+        comps = ex.convert(color, ("f", (4,))).c
+        alpha = np.clip(np.broadcast_to(np.asarray(comps[3], dtype=np.float64), (count,)), 0.0, 1.0)
+        discard = np.broadcast_to(np.asarray(ex.discard, dtype=np.float64), (count,))
+        alpha = np.where(discard > 0, 0.0, alpha)
+    return np.nan_to_num(alpha, nan=1.0)
+
+
+def mme_alpha_gates(runtime, draw, state, vs_outputs, tr_names, instances):
+    if draw.fx_pass.ps is None or not vs_outputs:
+        return []
+    count = MME_GATE_PROBES
+    rng = np.random.default_rng(1234)
+    base = {}
+    for semantic, n in vs_outputs.items():
+        base[semantic] = [rng.uniform(0.0, 1.0, count) for _ in range(n)]
+    inst = rng.integers(0, max(1, instances), count)
+    loops = mme_loop_values(draw, inst, 1.0)
+    probe = mme_prune_state(state)
+    samples = MME_PRUNE_TR if tr_names else [None]
+    candidates = [(sem, k) for sem, n in vs_outputs.items() for k in range(n)]
+    closed = {c: True for c in candidates}
+    lit = False
+    try:
+        for value in samples:
+            if value is not None:
+                for name in tr_names:
+                    probe.controls[name] = [value]
+            alpha = mme_ps_numpy_alpha(runtime, draw, probe, base, loops, count)
+            if alpha is None:
+                return []
+            if (alpha > MME_GATE_ALPHA).any():
+                lit = True
+            for semantic, k in candidates:
+                if not closed[(semantic, k)]:
+                    continue
+                inputs = dict(base)
+                comps = list(base[semantic])
+                comps[k] = np.full(count, MME_GATE_EPS)
+                inputs[semantic] = comps
+                gated = mme_ps_numpy_alpha(runtime, draw, probe, inputs, loops, count)
+                if gated is None or (gated > MME_GATE_ALPHA).any():
+                    closed[(semantic, k)] = False
+    except Exception as error:
+        log.debug("alpha gate probe for %s failed: %s", draw.fx_pass.name, error)
+        return []
+    if not lit:
+        return []
+    return [c for c in candidates if closed[c]]
+
+
+def mme_strip_layout(uvs, local_faces):
+    count = len(uvs)
+    if count < 16 or not local_faces:
+        return None
+    for axis in (1, 0):
+        values = np.round(uvs[:, axis], 7)
+        params, rows_of = np.unique(values, return_inverse=True)
+        if len(params) < 8:
+            continue
+        sizes = np.bincount(rows_of)
+        if sizes.min() != sizes.max() or sizes[0] > 8:
+            continue
+        width = int(sizes[0])
+        cols = np.round(uvs[:, 1 - axis], 7)
+        order = np.lexsort((cols, rows_of))
+        grid = order.reshape(len(params), width)
+        col_values = cols[grid]
+        if not np.allclose(col_values, col_values[0][None, :]):
+            continue
+        column = np.empty(count, dtype=np.int64)
+        column[grid.reshape(-1)] = np.tile(np.arange(width), len(params))
+        ok = True
+        lower = []
+        for face in local_faces:
+            rows = {int(rows_of[v]) for v in face}
+            if len(rows) != 2 or max(rows) - min(rows) != 1:
+                ok = False
+                break
+            lower.append(min(rows))
+        if not ok:
+            continue
+        return {"params": params, "grid": grid, "row": rows_of, "column": column, "lower": np.array(lower, dtype=np.int64)}
+    return None
+
+
+def mme_strip_samples(runtime, draw, state, used, rows, layout, instances, tr_names, density):
+    vertices = layout["grid"][rows].reshape(-1)
+    per = len(vertices)
+    src = np.tile(used[vertices], instances)
+    inst = np.repeat(np.arange(instances, dtype=np.int64), per)
+    data = MmePassData(draw, src, inst, mme_loop_values(draw, inst, density), runtime)
+    samples = MME_SIMPLIFY_TR if tr_names else [None]
+    probe = FxSceneState()
+    probe.__dict__.update(state.__dict__)
+    probe.controls = dict(state.controls)
+    positions, varyings, culled = [], [], []
+    for value in samples:
+        if value is not None:
+            for name in tr_names:
+                probe.controls[name] = [value]
+        outputs, _ex = mme_run_vs(runtime, data, probe)
+        world, cull = mme_clip_world(outputs, probe, data.count)
+        comps = []
+        for semantic, out in sorted(outputs.items()):
+            if semantic == "POSITION0" or not fx_is_numeric(out.t):
+                continue
+            for c in out.c:
+                comps.append(np.broadcast_to(np.asarray(c, dtype=np.float64), (data.count,)))
+        positions.append(world)
+        varyings.append(np.stack(comps, axis=-1) if comps else np.zeros((data.count, 0)))
+        culled.append(cull)
+    width = layout["grid"].shape[1]
+    shape = (len(samples), instances, len(rows), width)
+    pos = np.nan_to_num(np.stack(positions).reshape(shape + (3,)))
+    var = np.nan_to_num(np.stack(varyings).reshape(shape + (-1,)))
+    cul = np.stack(culled).reshape(shape)
+    return pos, var, cul
+
+
+def mme_simplify_rows(params, pos, var, cul, tolerance):
+    n = len(params)
+    if n <= 2:
+        return list(range(n))
+    visible = ~cul
+    if visible.any():
+        seen = pos[visible]
+        size = float(np.linalg.norm(seen.max(0) - seen.min(0)))
+    else:
+        size = 0.0
+    pos_tol = max(size * tolerance, 1e-9)
+    if pos.shape[3] > 1:
+        width = np.linalg.norm(pos[:, :, :, -1] - pos[:, :, :, 0], axis=-1)
+        row_tol = np.clip(width * 0.5, pos_tol * 0.1, pos_tol)
+    else:
+        row_tol = np.full(pos.shape[:3], pos_tol)
+    if var.shape[-1]:
+        span = var.reshape(-1, var.shape[-1])
+        ranges = np.maximum(span.max(0) - span.min(0), 1e-6)
+        var = var / ranges
+    var_tol = max(tolerance * 4.0, 1e-3)
+    keep = {0, n - 1}
+    stack = [(0, n - 1)]
+    while stack:
+        a, b = stack.pop()
+        if b - a < 2:
+            continue
+        mid = np.arange(a + 1, b)
+        t = ((params[mid] - params[a]) / max(params[b] - params[a], 1e-12))[None, None, :, None]
+        pa, pb, pm = pos[:, :, a:a + 1], pos[:, :, b:b + 1], pos[:, :, a + 1:b]
+        perr = np.linalg.norm(pa + (pb - pa) * t[..., None] - pm, axis=-1)
+        va, vb, vm = var[:, :, a:a + 1], var[:, :, b:b + 1], var[:, :, a + 1:b]
+        verr = np.abs(va + (vb - va) * t[..., None] - vm).max(axis=-1) if var.shape[-1] else np.zeros_like(perr)
+        ca, cb, cm = cul[:, :, a:a + 1], cul[:, :, b:b + 1], cul[:, :, a + 1:b]
+        all_culled = ca & cb & cm
+        mixed = (ca | cb | cm) & ~all_culled
+        local = np.minimum(np.minimum(row_tol[:, :, a:a + 1], row_tol[:, :, b:b + 1]), row_tol[:, :, a + 1:b])[..., None]
+        score = np.maximum(perr / local, verr / var_tol)
+        score = np.where(all_culled, 0.0, np.where(mixed, np.inf, score))
+        worst = score.max(axis=(0, 1, 3))
+        k = int(np.argmax(worst))
+        if worst[k] > 1.0:
+            split = a + 1 + k
+            keep.add(split)
+            stack.append((a, split))
+            stack.append((split, b))
+    return sorted(keep)
+
+
+def mme_simplify_strip(runtime, draw, state, used, local_faces, instances, tr_names, density, tolerance):
+    if tolerance <= 0 or not local_faces:
+        return local_faces
+    layout = mme_strip_layout(runtime.uvs[used], local_faces)
+    if layout is None:
+        return local_faces
+    lower = layout["lower"]
+    grid = layout["grid"]
+    template = {}
+    for face, r in zip(local_faces, lower):
+        template.setdefault(int(r), []).append(face)
+    pairs = sorted(template)
+    runs, current = [], [pairs[0]]
+    for r in pairs[1:]:
+        if r == current[-1] + 1:
+            current.append(r)
+        else:
+            runs.append(current)
+            current = [r]
+    runs.append(current)
+    column = layout["column"]
+    row_of = layout["row"]
+    out = []
+    for run in runs:
+        rows = np.arange(run[0], run[-1] + 2)
+        if len(rows) <= 3:
+            for r in run:
+                out.extend(template[r])
+            continue
+        pos, var, cul = mme_strip_samples(runtime, draw, state, used, rows, layout, instances, tr_names, density)
+        kept = mme_simplify_rows(layout["params"][rows], pos, var, cul, tolerance)
+        kept_rows = rows[kept]
+        for a, b in zip(kept_rows[:-1], kept_rows[1:]):
+            for face in template[int(a)]:
+                out.append(tuple(int(grid[b, column[v]]) if row_of[v] == a + 1 else int(v) for v in face))
+    return out
 
 
 def mme_build_mesh(name, positions, faces):
@@ -732,8 +998,33 @@ def mme_pass_geometry(runtime, draw, density):
     return used, local_faces, counts, instances
 
 
-def mme_keep_faces(local_faces, keep, offset=0):
-    return [f for f in local_faces if any(keep[v + offset] for v in f)]
+def mme_grow_faces(all_faces, kept, rings):
+    if rings <= 0 or len(kept) == len(all_faces):
+        return kept
+    chosen = set(kept)
+    by_vertex = {}
+    for face in all_faces:
+        for v in face:
+            by_vertex.setdefault(v, []).append(face)
+    frontier = set(kept)
+    for _ in range(rings):
+        grown = set()
+        for face in frontier:
+            for v in face:
+                for other in by_vertex.get(v, ()):
+                    if other not in chosen:
+                        grown.add(other)
+        if not grown:
+            break
+        chosen |= grown
+        frontier = grown
+    return [f for f in all_faces if f in chosen]
+
+
+def mme_keep_faces(local_faces, keep, offset=0, opened=None):
+    if opened is None:
+        return [f for f in local_faces if any(keep[v + offset] for v in f)]
+    return [f for f in local_faces if any(keep[v + offset] for v in f) and any(opened[v + offset] for v in f)]
 
 
 def mme_compact(src, faces):
@@ -787,8 +1078,16 @@ def mme_uniform_driver(program, gname, index, root, controls, scene):
         return {"expr": "var", "vars": [prop_var(root, path)]}
     if kind == "control":
         desc = controls.get(gname, {})
+        use_prop = mme_control_use_prop(desc)
         if desc.get("kind") == "prop":
-            return {"expr": "var", "vars": [prop_var(root, '["%s"]' % desc.get("prop", ""))]}
+            spec = {"expr": "var", "vars": [prop_var(root, '["%s"]' % desc.get("prop", ""))]}
+            if use_prop is not None:
+                spec = {"expr": "var * use", "vars": spec["vars"] + [dict(prop_var(root, '["%s"]' % use_prop), name="use")]}
+            return spec
+        if desc.get("kind") == "model" and use_prop is not None:
+            t = fx_resolve_type(g.type, program)
+            if fx_is_numeric(t) and t[0] == "b":
+                return {"expr": "use", "vars": [dict(prop_var(root, '["%s"]' % use_prop), name="use")]}
         if desc.get("kind") in ("self", "object"):
             obj = root if desc.get("kind") == "self" else bpy.data.objects.get(desc.get("object", ""))
             item = desc.get("item", "").lower()
@@ -880,11 +1179,38 @@ def mme_build_pass(runtime, draw, state, root, collection, unit, density, label,
     data = MmePassData(draw, src, inst, mme_loop_values(draw, inst, density), runtime)
     state.world = mme_world_row(mme_child_matrix(root, unit), unit)
     tr_names = mme_self_tr_globals(runtime, root)
-    keep = mme_prune_mask(runtime, data, state, tr_names)
+    probe_one = MmePassData(draw, used[:1], np.zeros(1, dtype=np.int64), mme_loop_values(draw, np.zeros(1, dtype=np.int64), density), runtime)
+    probe_outputs, _ex = mme_run_vs(runtime, probe_one, state)
+    probe_varyings = {k: len(v.c) for k, v in probe_outputs.items() if k != "POSITION0" and fx_is_numeric(v.t)}
+    gates = mme_alpha_gates(runtime, draw, state, probe_varyings, tr_names, instances)
+    keep, opened = mme_prune_mask(runtime, data, state, tr_names, gates)
     owner = "%s|%s" % (root.get("mmd_bridge_accessory"), label)
+    keep_src = keep.reshape(instances, per).any(axis=0)
+    open_src = opened.reshape(instances, per).any(axis=0)
+    before = len(local_faces)
+    local_faces = mme_keep_faces(local_faces, keep_src)
+    culled_faces = len(local_faces)
+    if gates:
+        local_faces = mme_grow_faces(local_faces, mme_keep_faces(local_faces, keep_src, opened=open_src), MME_GATE_MARGIN)
+    gated_faces = len(local_faces)
+    tolerance = float(getattr(scene.mmd_bridge, "mme_tolerance", 0.0))
+    try:
+        local_faces = mme_simplify_strip(runtime, draw, state, used, local_faces, instances, tr_names, density, tolerance)
+    except Exception as error:
+        log.debug("strip simplification for %s failed: %s", label, error)
+    if before != len(local_faces):
+        log.info(
+            "effect pass %s: %d of %d faces kept (%d never drawn, %d always transparent%s, %d merged along strips)",
+            label,
+            len(local_faces),
+            before,
+            before - culled_faces,
+            culled_faces - gated_faces,
+            " via " + ", ".join("%s.%s" % (sem, "xyzw"[k] if k < 4 else k) for sem, k in gates) if gates else "",
+            gated_faces - len(local_faces),
+        )
     if backend == "GEONODES":
-        keep_src = keep.reshape(instances, per).any(axis=0)
-        faces = mme_keep_faces(local_faces, keep_src)
+        faces = local_faces
         if not faces:
             log.info("effect pass %s draws nothing visible; skipped", label)
             return None
@@ -930,7 +1256,7 @@ def mme_build_pass(runtime, draw, state, root, collection, unit, density, label,
         offset = k * per
         for face in local_faces:
             faces.append(tuple(v + offset for v in face))
-    faces = [f for f in faces if any(keep[v] for v in f)]
+    faces = [f for f in faces if any(keep[v] for v in f) and any(opened[v] for v in f)]
     if not faces:
         log.info("effect pass %s draws nothing visible; skipped", label)
         return None
@@ -1234,6 +1560,19 @@ def mme_key_morph_props(root, morph_tracks):
                     point.interpolation = "LINEAR"
 
 
+def mme_raise_transparent_bounces(scene):
+    cycles = getattr(scene, "cycles", None)
+    if cycles is None or not hasattr(cycles, "transparent_max_bounces"):
+        return
+    if cycles.transparent_max_bounces < MME_TRANSPARENT_BOUNCES:
+        log.info(
+            "raised Cycles transparent bounces from %d to %d so stacked effect layers do not render black",
+            cycles.transparent_max_bounces,
+            MME_TRANSPARENT_BOUNCES,
+        )
+        cycles.transparent_max_bounces = MME_TRANSPARENT_BOUNCES
+
+
 def mme_build_effect(scene, collection, settings, acc, root, x_path, fx_path, unit, controls):
     _mme_runtimes.pop(root.name, None)
     program = fx_parse_file(fx_path)
@@ -1244,6 +1583,7 @@ def mme_build_effect(scene, collection, settings, acc, root, x_path, fx_path, un
     root["mme_x"] = x_path
     root["mme_unit"] = unit
     root["mme_controls"] = json.dumps(controls)
+    mme_ensure_use_props(root, controls)
     runtime.controls_runtime = {name for name, desc in mme_load_controls(root).items() if desc.get("kind") != "const"}
     if acc is not None:
         root["mme_acc_name"] = acc.name
@@ -1260,6 +1600,7 @@ def mme_build_effect(scene, collection, settings, acc, root, x_path, fx_path, un
     state = mme_frame_state(scene, depsgraph, root, runtime, unit)
     density = settings.mme_density
     backend = settings.mme_backend
+    mme_raise_transparent_bounces(scene)
     built_before = _mme_core["stats"]["built"]
     library_before = _mme_core["stats"]["library"]
     file_before = _mme_core["stats"]["file"]
@@ -1444,6 +1785,87 @@ def mme_target_roots(scene, root_name):
     if root_name:
         roots = [r for r in roots if r.name == root_name]
     return roots
+
+
+def mme_progress_bar(fraction, width=MME_PROGRESS_WIDTH):
+    fraction = max(0.0, min(1.0, fraction))
+    filled = int(fraction * width)
+    head = ">" if filled < width else ""
+    return "[%s%s%s] %3d%%" % ("=" * filled, head, " " * (width - filled - len(head)), int(round(fraction * 100)))
+
+
+def mme_progress_begin(context, title, count, start, end):
+    _mme_state["progress"] = {
+        "title": title,
+        "count": max(1, count),
+        "index": 0,
+        "label": "",
+        "start": start,
+        "end": end,
+        "wm": context.window_manager,
+        "workspace": context.workspace,
+        "drawn": 0.0,
+    }
+    try:
+        context.window_manager.progress_begin(0, 100)
+    except (AttributeError, RuntimeError):
+        pass
+    mme_progress_tick(start, force=True)
+
+
+def mme_progress_step(index, label):
+    progress = _mme_state.get("progress")
+    if progress is None:
+        return
+    progress["index"] = index
+    progress["label"] = label
+    mme_progress_tick(progress["start"], force=True)
+
+
+def mme_progress_tick(frame, force=False):
+    progress = _mme_state.get("progress")
+    if progress is None:
+        return
+    span = max(1, progress["end"] - progress["start"] + 1)
+    within = max(0, min(span, frame - progress["start"] + 1)) / span
+    fraction = (progress["index"] + within) / progress["count"]
+    text = "%s  %s  pass %d/%d %s  frame %d/%d" % (
+        progress["title"],
+        mme_progress_bar(fraction),
+        min(progress["index"] + 1, progress["count"]),
+        progress["count"],
+        progress["label"],
+        max(0, frame - progress["start"] + 1),
+        span,
+    )
+    try:
+        progress["wm"].progress_update(fraction * 100.0)
+    except (AttributeError, RuntimeError, ReferenceError):
+        pass
+    now = time.time()
+    if not force and now - progress["drawn"] < MME_PROGRESS_REDRAW:
+        return
+    progress["drawn"] = now
+    try:
+        progress["workspace"].status_text_set(text)
+        bpy.ops.wm.redraw_timer(type="DRAW_WIN_SWAP", iterations=1)
+    except (AttributeError, RuntimeError, ReferenceError):
+        pass
+
+
+def mme_progress_end():
+    progress = _mme_state.get("progress")
+    _mme_state["progress"] = None
+    if progress is None:
+        return
+    try:
+        progress["wm"].progress_end()
+    except (AttributeError, RuntimeError, ReferenceError):
+        pass
+    try:
+        progress["workspace"].status_text_set(None)
+    except (AttributeError, RuntimeError, ReferenceError):
+        pass
 
 
 def mme_bake_pass(context, obj, start, end, settings):

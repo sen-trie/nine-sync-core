@@ -1,10 +1,10 @@
 bl_info = {
-    "name": "\u2468-Sync",
+    "name": "NineSync",
     "author": "",
     "version": (0, 1, 0),
     "blender": (5, 3, 0),
-    "location": "View3D > Sidebar > \u2468-Sync",
-    "description": "NineSync: live-sync MikuMikuDance .pmm projects through mmd_tools and import their MME effects (.fx)",
+    "location": "View3D > Sidebar > NineSync",
+    "description": "\u2468-Sync: live-sync MikuMikuDance .pmm projects through mmd_tools and import their MME effects (.fx)",
     "category": "Import-Export",
 }
 
@@ -30,6 +30,7 @@ from .common import (
     setup_logging,
 )
 from .mme import (
+    mme_progress_tick,
     mme_rebuild_needed,
     mme_run_rebuilds,
     mme_update_scene,
@@ -47,6 +48,8 @@ from .ui import (
 
 @bpy.app.handlers.persistent
 def mme_frame_handler(scene, depsgraph=None):
+    if _mme_state.get("progress") is not None:
+        mme_progress_tick(scene.frame_current)
     if _mme_state["busy"]:
         return
     _mme_state["busy"] = True
@@ -104,7 +107,7 @@ def remove_handlers():
 def register():
     if bpy.app.version < MIN_BLENDER:
         raise RuntimeError(
-            "\u2468-Sync needs Blender %d.%d or newer (this is %s)"
+            "NineSync needs Blender %d.%d or newer (this is %s)"
             % (MIN_BLENDER[0], MIN_BLENDER[1], bpy.app.version_string)
         )
     setup_logging()

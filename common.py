@@ -1,4 +1,5 @@
 import bpy
+import hashlib
 import json
 import logging
 import numpy as np
@@ -8,10 +9,10 @@ import sys
 MIN_BLENDER = (5, 3, 0)
 
 
-NINESYNC_NAME = "\u2468-Sync"
+NINESYNC_NAME = "NineSync"
 
 
-NINESYNC_CATEGORY = "\u2468-Sync"
+NINESYNC_CATEGORY = "NineSync"
 
 
 NINESYNC_MAIN_LABEL = NINESYNC_NAME + ": PMM Bridge"
@@ -290,6 +291,9 @@ MME_CONTROL_PREFIX = "mmeC_"
 MME_IGNORED_PROP = "mme_ignored_sources"
 
 
+MME_USE_PREFIX = "mmeUse_"
+
+
 MME_IMAGE_PREFIX = "MME_"
 
 
@@ -358,7 +362,7 @@ MME_REBUILD_DELAY = 0.6
 _mme_runtimes = {}
 
 
-_mme_state = {"busy": False, "errors": set(), "only": None, "rebuild": set()}
+_mme_state = {"busy": False, "errors": set(), "only": None, "rebuild": set(), "progress": None}
 
 
 MME_CORE_VERSION = 2
@@ -390,28 +394,48 @@ def mme_control_source(desc):
     return (desc.get("source") or (desc.get("from") or "").split(" / ")[0]).strip()
 
 
-def mme_ignored_sources(root):
-    try:
-        return {str(v).lower() for v in json.loads(root.get(MME_IGNORED_PROP, "[]"))}
-    except (TypeError, ValueError):
-        return set()
+def mme_control_toggleable(desc):
+    return desc.get("kind") in ("prop", "model", "bone", "object") and mme_control_source(desc).lower() not in MME_SELF_NAMES
 
 
-def mme_apply_ignored(root, controls):
-    ignored = mme_ignored_sources(root)
-    if not ignored:
-        return controls
-    out = {}
-    for name, desc in controls.items():
+def mme_use_prop(source):
+    text = MME_USE_PREFIX + source
+    if len(text.encode("utf-8")) > 63:
+        text = MME_USE_PREFIX + hashlib.md5(source.encode("utf-8")).hexdigest()[:12]
+    return text
+
+
+def mme_control_use_prop(desc):
+    if not mme_control_toggleable(desc):
+        return None
+    return mme_use_prop(mme_control_source(desc))
+
+
+def mme_ensure_use_props(root, controls):
+    legacy = root.get(MME_IGNORED_PROP)
+    ignored = set()
+    if legacy is not None:
+        try:
+            ignored = {str(v).lower() for v in json.loads(legacy)}
+        except (TypeError, ValueError):
+            ignored = set()
+        del root[MME_IGNORED_PROP]
+    for desc in controls.values():
+        prop = mme_control_use_prop(desc)
+        if prop is None or prop in root:
+            continue
         source = mme_control_source(desc)
-        if source.lower() in ignored and desc.get("kind") not in ("self", "const"):
-            desc = {"kind": "const", "values": [0.0], "from": desc.get("from", ""), "source": source, "ignored": True}
-        out[name] = desc
-    return out
+        root[prop] = source.lower() not in ignored
+        try:
+            root.id_properties_ui(prop).update(
+                description="Use %s in this effect. Untick (or keyframe it off) to run the effect as if the controller were not loaded in MMD, so it falls back to its own parameters" % source
+            )
+        except (TypeError, AttributeError):
+            pass
 
 
 def mme_load_controls(root):
-    return mme_apply_ignored(root, mme_load_controls_raw(root))
+    return mme_load_controls_raw(root)
 
 
 def mme_param_meta(root):
