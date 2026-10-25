@@ -2,7 +2,7 @@ bl_info = {
     "name": "MMD PMM Bridge",
     "author": "",
     "version": (0, 1, 0),
-    "blender": (5, 2, 0),
+    "blender": (5, 3, 0),
     "location": "View3D > Sidebar > MMD Bridge",
     "description": "Live-sync MikuMikuDance .pmm keyframes into Blender through mmd_tools",
     "category": "Import-Export",
@@ -38,6 +38,7 @@ from bpy.props import (
 from bpy.types import Operator, Panel, PropertyGroup
 from mathutils import Matrix, Vector
 
+MIN_BLENDER = (5, 3, 0)
 LOG_TEXT_NAME = "MMDBridgeLog"
 LOG_TEXT_MAX_LINES = 3000
 
@@ -975,7 +976,21 @@ def x_decode(raw):
         return raw.decode("cp932", errors="replace")
 
 
+_x_cache = {}
+
+
 def parse_x_bytes(raw):
+    key = (len(raw), hashlib.md5(raw).hexdigest())
+    found = _x_cache.get(key)
+    if found is not None:
+        return found
+    scene = parse_x_uncached(raw)
+    _x_cache.clear()
+    _x_cache[key] = scene
+    return scene
+
+
+def parse_x_uncached(raw):
     scene = XScene()
     scene.mode = x_header_mode(raw)
     if scene.mode != "txt":
@@ -2077,7 +2092,124 @@ def fx_parse_file(path, defines=None):
     program.folder = folder
     program.files = list(dict.fromkeys(pre.files))
     FxParser(fx_tokenize(text), program).parse()
+    program.params = fx_find_params(program)
     return program
+
+
+def fx_script_values(program, wanted):
+    found = []
+    for technique in program.techniques:
+        script = fx_technique_script(technique, program) or ""
+        for command in script.split(";"):
+            if "=" not in command:
+                continue
+            key, value = command.split("=", 1)
+            if key.strip().lower() == wanted:
+                found.append(value.strip())
+    return found
+
+
+def fx_find_params(program):
+    loop_vars = set(fx_script_values(program, "loopgetindex"))
+    params = {}
+    for g in sorted(program.globals.values(), key=lambda item: item.order):
+        if g.semantic or g.array is not None:
+            continue
+        quals = {str(q).lower() for q in (g.quals or [])}
+        if quals & {"static", "const"}:
+            continue
+        if g.name in loop_vars or g.name in FX_FLAG_DEFAULTS or g.name == "use_texture":
+            continue
+        try:
+            t = fx_resolve_type(g.type, program)
+        except FxError:
+            continue
+        if not fx_is_numeric(t) or len(t[1]) > 1 or (t[1] and t[1][0] > 4):
+            continue
+        has_ui = any(str(k).lower().startswith("ui") for k in g.ann)
+        if g.init is None and not has_ui:
+            continue
+        visible = fx_annotation(g, "UIVisible", program, None)
+        if isinstance(visible, float) and not visible:
+            continue
+        size = fx_count(t[1])
+        default = fx_const_value(program, g.init) if g.init is not None else None
+        if isinstance(default, str):
+            continue
+        if default is None:
+            default = [0.0]
+        if not isinstance(default, list):
+            default = [default]
+        if len(default) == 1 and size > 1:
+            default = default * size
+        default = ([float(v) for v in default] + [0.0] * size)[:size]
+        if t[0] == "i":
+            default = [float(int(v)) for v in default]
+        elif t[0] == "b":
+            default = [1.0 if v else 0.0 for v in default]
+        meta = {
+            "type": t[0],
+            "size": size,
+            "default": default,
+            "label": str(fx_annotation(g, "UIName", program, "") or g.name),
+            "widget": str(fx_annotation(g, "UIWidget", program, "") or "").lower(),
+            "help": str(fx_annotation(g, "UIHelp", program, "") or ""),
+            "order": g.order,
+        }
+        for key in ("UIMin", "UIMax"):
+            value = fx_annotation(g, key, program, None)
+            if isinstance(value, list):
+                value = value[0] if value else None
+            if isinstance(value, float):
+                meta[key[2:].lower()] = value
+        params[g.name] = meta
+    return params
+
+
+def fx_vs_globals(program):
+    names = set()
+    seen = set()
+    stack = []
+    for technique in program.techniques:
+        for fx_pass in technique.passes:
+            if fx_pass.vs is None:
+                continue
+            function, args = fx_entry(program, fx_pass.vs)
+            if function is not None and id(function) not in seen:
+                seen.add(id(function))
+                stack.append(function.body)
+            stack.append(args)
+
+    def walk(node):
+        if isinstance(node, tuple):
+            if len(node) > 1 and node[0] == "id" and isinstance(node[1], str):
+                names.add(node[1])
+            if len(node) > 1 and node[0] == "call" and isinstance(node[1], str):
+                for function in program.functions.get(node[1], []):
+                    if id(function) not in seen:
+                        seen.add(id(function))
+                        stack.append(function.body)
+            for item in node:
+                walk(item)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    visited = set()
+    while stack:
+        walk(stack.pop())
+        for name in list(names - visited):
+            visited.add(name)
+            g = program.globals.get(name)
+            if g is not None and g.init is not None:
+                stack.append(g.init)
+    return names
+
+
+def fx_structural_params(program):
+    params = getattr(program, "params", {})
+    used = fx_vs_globals(program) | set(fx_script_values(program, "loopbycount"))
+    return sorted(name for name in params if name in used)
 
 
 def fx_resolve_type(name, program):
@@ -2172,6 +2304,10 @@ class FxSampler:
 
 class FxNumpyBackend:
     vectorized = True
+    wants_text = False
+
+    def statement(self, text):
+        pass
 
     def const(self, x):
         return np.float64(x)
@@ -2247,6 +2383,27 @@ class FxNumpyBackend:
     def truth(self, a):
         return (np.asarray(a) != 0).astype(np.float64)
 
+    def land(self, a, b):
+        return np.multiply(self.truth(a), self.truth(b))
+
+    def lor(self, a, b):
+        return np.maximum(self.truth(a), self.truth(b))
+
+    def lnot(self, a):
+        return 1.0 - self.truth(a)
+
+    def imod(self, a, b):
+        return np.fmod(a, b)
+
+    def enter(self, name):
+        pass
+
+    def leave(self):
+        pass
+
+    def tag(self, x, label):
+        pass
+
 
 FX_NP_UNARY = {
     "abs": np.abs,
@@ -2300,6 +2457,9 @@ class FxLoop:
     def __init__(self):
         self.brk = 0.0
         self.cont = 0.0
+
+
+FX_TEXT_STATEMENTS = ("expr", "decl", "return", "if", "for", "do")
 
 
 class FxExec:
@@ -2399,6 +2559,8 @@ class FxExec:
             self.frames, self.mask = saved_frames, saved_mask
             self.evaluating.discard(name)
         self.cache[name] = value
+        if self.B.wants_text:
+            self.tag(value, name)
         return value
 
     def default_global(self, g):
@@ -2571,9 +2733,11 @@ class FxExec:
         self.mask = 1.0
         self.frames.append(frame)
         self.depth += 1
+        self.B.enter(function.name)
         try:
             self.exec_block(function.body[1])
         finally:
+            self.B.leave()
             self.depth -= 1
             self.frames.pop()
             self.mask = saved_mask
@@ -2593,6 +2757,8 @@ class FxExec:
 
     def exec(self, node):
         kind = node[0]
+        if self.B.wants_text and kind in FX_TEXT_STATEMENTS:
+            self.B.statement(fx_stmt_text(node))
         if kind == "expr":
             self.eval(node[1])
         elif kind == "decl":
@@ -2650,6 +2816,24 @@ class FxExec:
                 scope[name] = self.eval_init(init, vt)
             else:
                 scope[name] = self.convert(self.eval(init), vt)
+            if init is not None:
+                self.tag(scope[name], name)
+
+    def tag(self, value, label):
+        if fx_is_numeric(value.t):
+            comps = value.c
+            dims = value.t[1]
+            for k, comp in enumerate(comps):
+                if len(comps) == 1:
+                    suffix = ""
+                elif len(dims) == 2:
+                    suffix = "[%d][%d]" % divmod(k, dims[1])
+                else:
+                    suffix = "." + "xyzw"[k] if k < 4 else "[%d]" % k
+                self.B.tag(comp, label + suffix)
+        elif isinstance(value.t, FxStruct):
+            for name, member in value.c.items():
+                self.tag(member, "%s.%s" % (label, name))
 
     def condition(self, expr):
         value = self.eval(expr)
@@ -2809,7 +2993,7 @@ class FxExec:
         if op == "-":
             return FxValue(value.t, [B.neg(x) for x in value.c])
         if op == "!":
-            return FxValue(("b", value.t[1]), [B.sub(1.0, B.truth(x)) for x in value.c])
+            return FxValue(("b", value.t[1]), [B.lnot(x) for x in value.c])
         if op == "~":
             return FxValue(value.t, [B.bitnot(x) for x in value.c])
         raise FxError("unary %s" % op)
@@ -2867,15 +3051,17 @@ class FxExec:
                     comps = [B.idiv(x, y) for x, y in zip(ca, cb)]
                 else:
                     comps = [B.div(x, y) for x, y in zip(ca, cb)]
+            elif base == "i":
+                comps = [B.imod(x, y) for x, y in zip(ca, cb)]
             else:
                 comps = [B.mod(x, y) for x, y in zip(ca, cb)]
             return FxValue((base, dims), comps)
         if op in ("<", "<=", ">", ">=", "==", "!="):
             return FxValue(("b", dims), [B.cmp(op, x, y) for x, y in zip(ca, cb)])
         if op == "&&":
-            return FxValue(("b", dims), [B.mul(B.truth(x), B.truth(y)) for x, y in zip(ca, cb)])
+            return FxValue(("b", dims), [B.land(x, y) for x, y in zip(ca, cb)])
         if op == "||":
-            return FxValue(("b", dims), [B.max(B.truth(x), B.truth(y)) for x, y in zip(ca, cb)])
+            return FxValue(("b", dims), [B.lor(x, y) for x, y in zip(ca, cb)])
         if op in ("&", "|", "^", "<<", ">>"):
             result_base = "b" if fa == "b" and fb == "b" and op in ("&", "|", "^") else "i"
             return FxValue((result_base, dims), [B.bitop(op, x, y) for x, y in zip(ca, cb)])
@@ -2888,7 +3074,9 @@ class FxExec:
             current = self.eval(target)
             value = self.binary(op[:-1], current, value)
         self.assign(target, value)
-        return self.eval(target)
+        result = self.eval(target)
+        self.tag(result, fx_target_label(target))
+        return result
 
     def eval_tern(self, node):
         c = self.condition(node[1])
@@ -3162,6 +3350,21 @@ class FxExec:
         comps = [c * size if len(c) == 1 else c[:size] for c in comps]
         base = "f" if any(v.t[0] == "f" for v in values) else "i"
         return FxValue((base, result_dims), [fn(*parts) for parts in zip(*comps)])
+
+
+def fx_target_label(node):
+    kind = node[0]
+    if kind == "id":
+        return node[1]
+    if kind == "member":
+        return "%s.%s" % (fx_target_label(node[1]), node[2])
+    if kind == "index":
+        inner = node[2]
+        index = inner[1] if inner[0] in ("num", "id") else "i"
+        if isinstance(index, float) and index.is_integer():
+            index = int(index)
+        return "%s[%s]" % (fx_target_label(node[1]), index)
+    return "value"
 
 
 FX_EVAL = {
@@ -3710,12 +3913,14 @@ def fx_pick_technique(program, subset, pass_types=("object", "object_ss")):
     return None
 
 
-def fx_global_int(program, name):
+def fx_global_int(program, name, values=None):
     name = name.strip()
     try:
         return int(float(name))
     except ValueError:
         pass
+    if values and name in values:
+        return max(0, int(values[name][0]))
     g = program.globals.get(name)
     if g is None or g.init is None:
         return 1
@@ -3725,7 +3930,7 @@ def fx_global_int(program, name):
     return int(value) if value is not None else 1
 
 
-def fx_plan_draws(program, subset_count):
+def fx_plan_draws(program, subset_count, values=None):
     draws = []
     order = 0
     for subset in range(subset_count):
@@ -3751,7 +3956,7 @@ def fx_plan_draws(program, subset_count):
             if key in ("rendercolortarget", "rendercolortarget0"):
                 target = value
             elif key == "loopbycount":
-                stack.append([value, fx_global_int(program, value), None])
+                stack.append([value, fx_global_int(program, value, values), None])
             elif key == "loopgetindex":
                 if stack:
                     stack[-1][2] = value
@@ -3831,6 +4036,8 @@ def fx_run_entry(ex, function, compile_args, inputs):
             args.append(FxValue(pt, members))
         else:
             args.append(ex.convert(inputs(fx_norm_semantic(param.semantic), pt), pt))
+        if ex.B.wants_text:
+            ex.tag(args[-1], param.name)
     result, outs = ex.run_function(function, args)
     outputs = {}
     rt = fx_resolve_type(function.ret, program)
@@ -4012,13 +4219,15 @@ def fx_classify_global(g, program):
         return ("flag", g.name)
     if g.init is None and g.name == "use_texture":
         return ("flag", g.name)
+    if g.name in getattr(program, "params", {}):
+        return ("param", g.name)
     return None
 
 
 def fx_source_is_runtime(source):
     if source is None:
         return False
-    return source[0] in ("matrix", "position", "direction", "light_color", "time", "elapsed", "viewport", "control")
+    return source[0] in ("matrix", "position", "direction", "light_color", "time", "elapsed", "viewport", "control", "param")
 
 
 class FxSceneState:
@@ -4034,6 +4243,7 @@ class FxSceneState:
         self.elapsed = 1.0 / 30.0
         self.viewport = (1920.0, 1080.0)
         self.controls = {}
+        self.params = {}
         self.flags = dict(FX_FLAG_DEFAULTS)
         self.material = {
             "diffuse": (1.0, 1.0, 1.0, 1.0),
@@ -4128,6 +4338,8 @@ class FxSceneState:
             if source[1] == "use_texture":
                 return [1.0 if self.material.get("texture") else 0.0]
             return [float(self.flags.get(source[1], 0.0))]
+        if kind == "param":
+            return list(self.params.get(source[1], [0.0]))
         return [0.0]
 
 
@@ -6238,13 +6450,7 @@ def add_sphere_map(nodes, links, image, additive, color_socket):
 
 def build_x_material(name, xmat, folder, settings):
     mat = bpy.data.materials.new(name)
-    try:
-        mat.use_nodes = True
-    except Exception:
-        pass
     tree = mat.node_tree
-    if tree is None:
-        return mat
     nodes, links = tree.nodes, tree.links
     bsdf = next((n for n in nodes if n.type == "BSDF_PRINCIPLED"), None)
     if bsdf is None:
@@ -6318,13 +6524,7 @@ def build_x_material(name, xmat, folder, settings):
     if color_socket is not None:
         links.new(color_socket, base)
     if translucent:
-        try:
-            mat.surface_render_method = "BLENDED"
-        except (AttributeError, TypeError):
-            try:
-                mat.blend_method = "BLEND"
-            except AttributeError:
-                pass
+        mat.surface_render_method = "BLENDED"
     return mat
 
 
@@ -6427,20 +6627,47 @@ def import_x_with_addon(path):
 
 def remove_accessory_children(root):
     for child in list(root.children):
-        data = child.data
-        bpy.data.objects.remove(child, do_unlink=True)
-        if (
-            data is not None
-            and getattr(data, "users", 1) == 0
-            and hasattr(bpy.data, "meshes")
-        ):
-            try:
-                for material in list(data.materials):
-                    if material is not None and material.users <= 1:
-                        bpy.data.materials.remove(material)
-                bpy.data.meshes.remove(data)
-            except (ReferenceError, RuntimeError):
-                pass
+        remove_accessory_children_single(child)
+
+
+def mme_pass_groups(obj):
+    groups = []
+    for modifier in getattr(obj, "modifiers", []):
+        if modifier.type != "NODES" or modifier.node_group is None:
+            continue
+        top = modifier.node_group
+        if top.get(MME_OWNER_PROP) is None:
+            continue
+        groups.append(top)
+        for node in top.nodes:
+            if node.bl_idname == "GeometryNodeGroup" and node.node_tree is not None and node.node_tree.get(MME_OWNER_PROP) is not None:
+                groups.append(node.node_tree)
+    return groups
+
+
+def mme_free_groups(groups):
+    for group in groups:
+        try:
+            if group.users == 0:
+                bpy.data.node_groups.remove(group)
+        except ReferenceError:
+            pass
+
+
+def mme_purge_owned(prefix):
+    removed = 0
+    for material in [m for m in bpy.data.materials if str(m.get(MME_OWNER_PROP, "")).startswith(prefix)]:
+        if material.users:
+            continue
+        group = bpy.data.node_groups.get(material.get(MME_GROUP_PROP, ""))
+        bpy.data.materials.remove(material)
+        if group is not None and group.users == 0:
+            bpy.data.node_groups.remove(group)
+        removed += 1
+    for group in [g for g in bpy.data.node_groups if str(g.get(MME_OWNER_PROP, "")).startswith(prefix)]:
+        if group.users == 0:
+            bpy.data.node_groups.remove(group)
+    return removed
 
 
 def find_accessory_root(collection, key):
@@ -6607,17 +6834,31 @@ MME_SWAP = np.array(
 )
 MME_SWAP3 = MME_SWAP[:3, :3]
 MME_SELF_NAMES = ("(self)", "(offscreenowner)")
+MME_PARAM_PREFIX = "mmeP_"
+MME_PARAMS_PROP = "mme_params"
+MME_PARAM_BUILT_PROP = "mme_param_built"
+MME_GN_MODIFIER = "MME"
+MME_BACKEND_PROP = "mme_backend"
+MME_PRUNED_PROP = "mme_pruned"
+MME_BAKED_PROP = "mme_baked"
+MME_DRIVEN_PROP = "mme_driven"
+MME_OWNER_PROP = "mme_owner"
+MME_GROUP_PROP = "mme_group"
+MME_SIG_PROP = "mme_sig"
+MME_ATTR_POS = "mme_p"
+MME_ATTR_NRM = "mme_n"
+MME_ATTR_UV = "mme_uv"
+MME_REBUILD_DELAY = 0.6
 
 _mme_runtimes = {}
-_mme_state = {"busy": False, "errors": set()}
+_mme_state = {"busy": False, "errors": set(), "only": None, "rebuild": set()}
 
 
 class MmeSock:
-    __slots__ = ("socket", "depth")
+    __slots__ = ("socket",)
 
-    def __init__(self, socket, depth):
+    def __init__(self, socket):
         self.socket = socket
-        self.depth = depth
 
 
 MME_NODE_UNARY = {
@@ -6641,10 +6882,124 @@ MME_NODE_UNARY = {
     "cosh": "COSH",
     "tanh": "TANH",
 }
+MME_MATH_LABELS = {
+    "ADD": "+",
+    "SUBTRACT": "-",
+    "MULTIPLY": "*",
+    "DIVIDE": "/",
+}
 
 
-class MmeNodeBackend:
+FX_PRECEDENCE = {
+    "||": 1,
+    "&&": 2,
+    "|": 3,
+    "^": 4,
+    "&": 5,
+    "==": 6,
+    "!=": 6,
+    "<": 7,
+    ">": 7,
+    "<=": 7,
+    ">=": 7,
+    "<<": 8,
+    ">>": 8,
+    "+": 9,
+    "-": 9,
+    "*": 10,
+    "/": 10,
+    "%": 10,
+}
+
+
+def fx_operand_text(node, parent, right=False):
+    text = fx_expr_text(node)
+    if not isinstance(node, tuple) or not node:
+        return text
+    if node[0] in ("assign", "tern", "comma"):
+        return "(%s)" % text
+    if node[0] == "bin":
+        mine = FX_PRECEDENCE.get(node[1], 11)
+        outer = FX_PRECEDENCE.get(parent, 11)
+        if mine < outer or (right and mine == outer):
+            return "(%s)" % text
+    return text
+
+
+def fx_expr_text(node):
+    if not isinstance(node, tuple) or not node:
+        return "?"
+    kind = node[0]
+    if kind == "num":
+        value = node[1]
+        if isinstance(value, float) and value.is_integer() and abs(value) < 1e9:
+            return str(int(value))
+        return "%.7g" % value
+    if kind == "str":
+        return '"%s"' % node[1]
+    if kind == "id":
+        return node[1]
+    if kind == "bin":
+        return "%s %s %s" % (fx_operand_text(node[2], node[1]), node[1], fx_operand_text(node[3], node[1], True))
+    if kind == "un":
+        return "%s%s" % (node[1], fx_operand_text(node[2], "unary"))
+    if kind == "pre":
+        return "%s%s" % (node[1], fx_expr_text(node[2]))
+    if kind == "post":
+        return "%s%s" % (fx_expr_text(node[2]), node[1])
+    if kind == "assign":
+        return "%s %s %s" % (fx_expr_text(node[2]), node[1], fx_expr_text(node[3]))
+    if kind == "tern":
+        return "%s ? %s : %s" % (fx_expr_text(node[1]), fx_expr_text(node[2]), fx_expr_text(node[3]))
+    if kind == "cast":
+        return "(%s)%s" % (node[1] if isinstance(node[1], str) else "type", fx_expr_text(node[2]))
+    if kind in ("ctor", "call"):
+        name = node[1] if isinstance(node[1], str) else "type"
+        return "%s(%s)" % (name, ", ".join(fx_expr_text(a) for a in node[2]))
+    if kind == "member":
+        return "%s.%s" % (fx_expr_text(node[1]), node[2])
+    if kind == "index":
+        return "%s[%s]" % (fx_expr_text(node[1]), fx_expr_text(node[2]))
+    if kind == "mcall":
+        return "%s.%s(%s)" % (fx_expr_text(node[1]), node[2], ", ".join(fx_expr_text(a) for a in node[3]))
+    if kind == "comma":
+        return ", ".join(fx_expr_text(a) for a in node[1])
+    if kind == "init":
+        return "{%s}" % ", ".join(fx_expr_text(a) for a in node[1])
+    return kind
+
+
+def fx_stmt_text(node):
+    kind = node[0]
+    if kind == "expr":
+        text = fx_expr_text(node[1])
+    elif kind == "decl":
+        parts = []
+        for name, _array, init in node[2]:
+            parts.append(name if init is None else "%s = %s" % (name, fx_expr_text(init)))
+        type_name = node[1] if isinstance(node[1], str) else getattr(node[1], "name", "struct")
+        text = "%s %s" % (type_name, ", ".join(parts))
+    elif kind == "return":
+        text = "return" if node[1] is None else "return %s" % fx_expr_text(node[1])
+    elif kind == "if":
+        text = "if (%s)" % fx_expr_text(node[1])
+    elif kind == "for":
+        text = "for (%s)" % (fx_expr_text(node[2]) if node[2] is not None else "")
+    elif kind == "do":
+        text = "while (%s)" % fx_expr_text(node[2])
+    else:
+        return None
+    return text if len(text) <= MME_LABEL_LIMIT else text[: MME_LABEL_LIMIT - 1] + "…"
+
+
+MME_LABEL_LIMIT = 64
+
+
+class MmeTreeBackend:
     vectorized = False
+    wants_text = True
+    separate_color = "ShaderNodeSeparateColor"
+    combine_color = "ShaderNodeCombineColor"
 
     def __init__(self, tree):
         self.tree = tree
@@ -6652,8 +7007,41 @@ class MmeNodeBackend:
         self.links = tree.links
         self.np = FxNumpyBackend()
         self.cache = {}
-        self.rows = {}
         self.keep = []
+        self.block = None
+        self.blocks = []
+        self.block_of = {}
+        self.scopes = []
+        self.block_stack = []
+        self.inputs = {}
+        self.input_items = {}
+        self.auto_named = set()
+        self.boolish = set()
+        self.input_nodes = []
+        self.input_owner = {}
+
+    def statement(self, text):
+        if text is None:
+            return
+        if len(self.scopes) > 1:
+            text = "%s: %s" % (self.scopes[-1], text)
+        self.block = len(self.blocks)
+        self.blocks.append(text)
+
+    def enter(self, name):
+        self.scopes.append(name)
+        self.block_stack.append(self.block)
+
+    def leave(self):
+        if self.scopes:
+            self.scopes.pop()
+        if self.block_stack:
+            self.block = self.block_stack.pop()
+
+    def new(self, idname):
+        node = self.nodes.new(idname)
+        self.block_of[node.name] = self.block
+        return node
 
     def const(self, x):
         return float(x)
@@ -6664,27 +7052,54 @@ class MmeNodeBackend:
         return float(x)
 
     def any_true(self, x):
-        raise FxUnsupported("data-dependent loop in a pixel shader")
+        raise FxUnsupported("data-dependent loop")
 
     def key(self, x):
         if isinstance(x, MmeSock):
-            return ("s", id(x))
+            return ("s", x.socket.node.name, x.socket.identifier)
         value = float(x)
         return ("c", "nan" if value != value else value)
 
-    def place(self, node, depth):
-        row = self.rows.get(depth, 0)
-        self.rows[depth] = row + 1
-        node.location = (depth * 220.0, -row * 170.0)
+    def tag(self, x, label):
+        if not isinstance(x, MmeSock):
+            return
+        node = x.socket.node
+        if node.bl_idname == "NodeGroupInput":
+            item = self.input_items.get(x.socket.identifier)
+            if item is not None and item.identifier in self.auto_named:
+                self.auto_named.discard(item.identifier)
+                item.name = label[:MME_LABEL_LIMIT]
+            return
+        if not node.label:
+            node.label = label[:MME_LABEL_LIMIT]
 
     def feed(self, socket, value):
         if isinstance(value, MmeSock):
             self.links.new(value.socket, socket)
+            return
+        value = float(value)
+        if socket.type == "BOOLEAN":
+            socket.default_value = value != 0.0
+        elif socket.type == "INT":
+            socket.default_value = int(value)
+        elif socket.type in ("VECTOR", "RGBA"):
+            socket.default_value = [value] * len(socket.default_value)
         else:
-            socket.default_value = float(value)
+            socket.default_value = value
 
-    def depth_of(self, *args):
-        return 1 + max((a.depth for a in args if isinstance(a, MmeSock)), default=0)
+    def socket_of(self, x):
+        if isinstance(x, MmeSock):
+            return x.socket
+        key = ("value", self.key(x))
+        found = self.cache.get(key)
+        if found is not None:
+            return found.socket
+        node = self.new("ShaderNodeValue")
+        node.outputs[0].default_value = float(x)
+        node.label = "%g" % float(x)
+        result = MmeSock(node.outputs[0])
+        self.cache[key] = result
+        return result.socket
 
     def fold(self, fn, *args):
         if any(isinstance(a, MmeSock) for a in args):
@@ -6692,20 +7107,48 @@ class MmeNodeBackend:
         with np.errstate(all="ignore"):
             return float(fn(*[np.float64(a) for a in args]))
 
-    def math(self, op, *args):
+    def remember(self, key, socket, boolish=False):
+        result = MmeSock(socket)
+        self.cache[key] = result
+        self.keep.append(result)
+        if boolish:
+            self.boolish.add(self.key(result))
+        return result
+
+    def math(self, op, *args, boolish=False):
         key = ("math", op) + tuple(self.key(a) for a in args)
         found = self.cache.get(key)
         if found is not None:
             return found
-        node = self.nodes.new("ShaderNodeMath")
+        node = self.new("ShaderNodeMath")
+        node.operation = op
+        if op == "COMPARE":
+            node.inputs[2].default_value = 0.0
+        for index, arg in enumerate(args):
+            self.feed(node.inputs[index], arg)
+        return self.remember(key, node.outputs[0], boolish)
+
+    def int_math(self, op, a, b):
+        key = ("imath", op, self.key(a), self.key(b))
+        found = self.cache.get(key)
+        if found is not None:
+            return found
+        node = self.new("FunctionNodeIntegerMath")
+        node.operation = op
+        self.feed(node.inputs[0], a)
+        self.feed(node.inputs[1], b)
+        return self.remember(key, node.outputs[0])
+
+    def bool_math(self, op, *args):
+        key = ("bmath", op) + tuple(self.key(a) for a in args)
+        found = self.cache.get(key)
+        if found is not None:
+            return found
+        node = self.new("FunctionNodeBooleanMath")
         node.operation = op
         for index, arg in enumerate(args):
             self.feed(node.inputs[index], arg)
-        result = MmeSock(node.outputs[0], self.depth_of(*args))
-        self.place(node, result.depth)
-        self.cache[key] = result
-        self.keep.append(result)
-        return result
+        return self.remember(key, node.outputs[0], True)
 
     def ordered(self, a, b):
         return (a, b) if repr(self.key(a)) <= repr(self.key(b)) else (b, a)
@@ -6728,7 +7171,7 @@ class MmeNodeBackend:
             return a
         if self.key(a) == self.key(b):
             return 0.0
-        return self.math("SUBTRACT", a, b)
+        return self.math("SUBTRACT", a, b, boolish=self.known(a) == 1.0 and self.key(b) in self.boolish)
 
     def mul(self, a, b):
         folded = self.fold(self.np.mul, a, b)
@@ -6740,7 +7183,8 @@ class MmeNodeBackend:
             return a
         if self.known(a) == 0.0 or self.known(b) == 0.0:
             return 0.0
-        return self.math("MULTIPLY", *self.ordered(a, b))
+        both = self.key(a) in self.boolish and self.key(b) in self.boolish
+        return self.math("MULTIPLY", *self.ordered(a, b), boolish=both)
 
     def div(self, a, b):
         folded = self.fold(self.np.div, a, b)
@@ -6763,11 +7207,17 @@ class MmeNodeBackend:
             return folded
         return self.math("MODULO", a, b)
 
+    def imod(self, a, b):
+        folded = self.fold(self.np.imod, a, b)
+        if folded is not None:
+            return folded
+        return self.int_math("MODULO", a, b)
+
     def idiv(self, a, b):
         folded = self.fold(self.np.idiv, a, b)
         if folded is not None:
             return folded
-        return self.unary("trunc", self.div(a, b))
+        return self.int_math("DIVIDE", a, b)
 
     def pow(self, a, b):
         folded = self.fold(self.np.pow, a, b)
@@ -6793,7 +7243,7 @@ class MmeNodeBackend:
             return self.math("LOGARITHM", a, 10.0)
         op = MME_NODE_UNARY.get(name)
         if op is None:
-            raise FxUnsupported("function %s in a pixel shader" % name)
+            raise FxUnsupported("function %s" % name)
         return self.math(op, a)
 
     def atan2(self, a, b):
@@ -6816,24 +7266,25 @@ class MmeNodeBackend:
             return folded
         if self.key(a) == self.key(b):
             return a
-        return self.math("MAXIMUM", *self.ordered(a, b))
+        both = self.key(a) in self.boolish and self.key(b) in self.boolish
+        return self.math("MAXIMUM", *self.ordered(a, b), boolish=both)
 
     def cmp(self, op, a, b):
         folded = self.fold(lambda x, y: self.np.cmp(op, x, y), a, b)
         if folded is not None:
             return folded
         if op == "<":
-            return self.math("LESS_THAN", a, b)
+            return self.math("LESS_THAN", a, b, boolish=True)
         if op == ">":
-            return self.math("GREATER_THAN", a, b)
+            return self.math("GREATER_THAN", a, b, boolish=True)
         if op == "<=":
-            return self.sub(1.0, self.math("GREATER_THAN", a, b))
+            return self.lnot(self.math("GREATER_THAN", a, b, boolish=True))
         if op == ">=":
-            return self.sub(1.0, self.math("LESS_THAN", a, b))
-        equal = self.math("COMPARE", a, b, 0.0)
+            return self.lnot(self.math("LESS_THAN", a, b, boolish=True))
+        equal = self.math("COMPARE", a, b, boolish=True)
         if op == "==":
             return equal
-        return self.sub(1.0, equal)
+        return self.lnot(equal)
 
     def bitop(self, op, a, b):
         folded = self.fold(lambda x, y: self.np.bitop(op, x, y), a, b)
@@ -6851,7 +7302,33 @@ class MmeNodeBackend:
         known = self.known(a)
         if known is not None:
             return 1.0 if known != 0.0 else 0.0
-        return self.sub(1.0, self.cmp("==", a, 0.0))
+        if self.key(a) in self.boolish:
+            return a
+        return self.lnot(self.math("COMPARE", a, 0.0, boolish=True))
+
+    def land(self, a, b):
+        ta, tb = self.truth(a), self.truth(b)
+        ka, kb = self.known(ta), self.known(tb)
+        if ka is not None:
+            return tb if ka else 0.0
+        if kb is not None:
+            return ta if kb else 0.0
+        return self.bool_math("AND", *self.ordered(ta, tb))
+
+    def lor(self, a, b):
+        ta, tb = self.truth(a), self.truth(b)
+        ka, kb = self.known(ta), self.known(tb)
+        if ka is not None:
+            return 1.0 if ka else tb
+        if kb is not None:
+            return 1.0 if kb else ta
+        return self.bool_math("OR", *self.ordered(ta, tb))
+
+    def lnot(self, a):
+        known = self.known(a)
+        if known is not None:
+            return 0.0 if known != 0.0 else 1.0
+        return self.bool_math("NOT", self.truth(a))
 
     def select(self, c, a, b):
         known = self.known(c)
@@ -6863,31 +7340,84 @@ class MmeNodeBackend:
         found = self.cache.get(key)
         if found is not None:
             return found
-        node = self.nodes.new("ShaderNodeMix")
-        node.data_type = "FLOAT"
-        node.clamp_factor = True
-        self.feed(node_socket(node, "Factor_Float"), c)
-        self.feed(node_socket(node, "A_Float"), b)
-        self.feed(node_socket(node, "B_Float"), a)
-        result = MmeSock(node_socket(node, "Result_Float", outputs=True), self.depth_of(c, a, b))
-        self.place(node, result.depth)
-        self.cache[key] = result
-        self.keep.append(result)
+        node = self.new("GeometryNodeSwitch")
+        node.input_type = "FLOAT"
+        self.feed(node.inputs["Switch"], c)
+        self.feed(node.inputs["False"], b)
+        self.feed(node.inputs["True"], a)
+        both = self.key(a) in self.boolish and self.key(b) in self.boolish
+        return self.remember(key, node.outputs[0], both)
+
+    def new_input(self, key, socket_type="NodeSocketFloat", label=None):
+        found = self.inputs.get(key)
+        if found is not None:
+            return found
+        item = self.tree.interface.new_socket(label or key, in_out="INPUT", socket_type=socket_type)
+        if label is None:
+            self.auto_named.add(item.identifier)
+        node = self.new("NodeGroupInput")
+        self.input_nodes.append(node)
+        socket = next(s for s in node.outputs if s.identifier == item.identifier)
+        result = MmeSock(socket)
+        self.inputs[key] = result
+        self.input_items[item.identifier] = item
+        self.input_owner[key] = (node.name, item.identifier)
         return result
 
     def attribute(self, name, kind="GEOMETRY"):
-        key = ("attr", kind, name)
-        found = self.cache.get(key)
-        if found is not None:
-            return found
-        node = self.nodes.new("ShaderNodeAttribute")
-        node.attribute_type = kind
-        node.attribute_name = name
-        result = MmeSock(node.outputs["Fac"], 0)
-        self.place(node, 0)
-        self.cache[key] = result
-        self.keep.append(result)
-        return result
+        return self.new_input(name)
+
+    def input_identifier(self, key):
+        found = self.inputs.get(key)
+        return found.socket.identifier if found is not None else None
+
+    def finish(self, outputs):
+        output = self.new("NodeGroupOutput")
+        self.block_of[output.name] = "out"
+        for name, value, socket_type in outputs:
+            item = self.tree.interface.new_socket(name, in_out="OUTPUT", socket_type=socket_type)
+            target = next(s for s in output.inputs if s.identifier == item.identifier)
+            if isinstance(value, (list, tuple)):
+                combine = self.new(self.combine_color if socket_type == "NodeSocketColor" else "ShaderNodeCombineXYZ")
+                self.block_of[combine.name] = "out"
+                for k, comp in enumerate(value):
+                    self.feed(combine.inputs[k], comp)
+                self.links.new(combine.outputs[0], target)
+            elif isinstance(value, MmeSock):
+                self.links.new(value.socket, target)
+            else:
+                target.default_value = float(value)
+                item.default_value = float(value)
+        mme_prune_tree(self.tree, output)
+        alive = {n.name for n in self.tree.nodes}
+        for key in list(self.inputs):
+            node_name, identifier = self.input_owner[key]
+            if node_name not in alive:
+                item = self.input_items.pop(identifier, None)
+                if item is not None:
+                    self.tree.interface.remove(item)
+                del self.inputs[key]
+        for node in self.tree.nodes:
+            if node.bl_idname == "NodeGroupInput":
+                for socket in node.outputs:
+                    socket.hide = not socket.is_linked
+        mme_layout(self.tree, self.block_of, self.blocks)
+        return output
+
+
+class MmePsBackend(MmeTreeBackend):
+    separate_color = "ShaderNodeSeparateColor"
+
+    def attribute(self, name, kind="GEOMETRY"):
+        found = self.inputs.get(name)
+        if found is None:
+            found = self.new_input(name)
+            self.kinds[name] = kind
+        return found
+
+    def __init__(self, tree):
+        super().__init__(tree)
+        self.kinds = {}
 
     def image_sample(self, image, interpolation, extension, u, v):
         key = ("img", image.name, interpolation, extension, self.key(u), self.key(v))
@@ -6895,26 +7425,262 @@ class MmeNodeBackend:
         if found is not None:
             return found
         flipped = self.sub(1.0, v)
-        combine = self.nodes.new("ShaderNodeCombineXYZ")
+        combine = self.new("ShaderNodeCombineXYZ")
         self.feed(combine.inputs[0], u)
         self.feed(combine.inputs[1], flipped)
         combine.inputs[2].default_value = 0.0
-        depth = self.depth_of(u, flipped)
-        self.place(combine, depth)
-        texture = self.nodes.new("ShaderNodeTexImage")
+        texture = self.new("ShaderNodeTexImage")
         texture.image = image
         texture.interpolation = interpolation
         texture.extension = extension
+        texture.label = os.path.basename(image.filepath or image.name)
         self.links.new(combine.outputs[0], texture.inputs["Vector"])
-        self.place(texture, depth + 1)
-        separate = self.nodes.new("ShaderNodeSeparateColor")
+        separate = self.new(self.separate_color)
         self.links.new(texture.outputs["Color"], separate.inputs[0])
-        self.place(separate, depth + 2)
-        result = [MmeSock(separate.outputs[k], depth + 3) for k in range(3)]
-        result.append(MmeSock(texture.outputs["Alpha"], depth + 2))
+        result = [MmeSock(separate.outputs[k]) for k in range(3)]
+        result.append(MmeSock(texture.outputs["Alpha"]))
         self.cache[key] = result
         self.keep.extend(result)
         return result
+
+
+class MmeGeoBackend(MmeTreeBackend):
+    separate_color = "FunctionNodeSeparateColor"
+    combine_color = "FunctionNodeCombineColor"
+
+    def image_sample(self, image, interpolation, extension, u, v):
+        key = ("img", image.name, interpolation, extension, self.key(u), self.key(v))
+        found = self.cache.get(key)
+        if found is not None:
+            return found
+        flipped = self.sub(1.0, v)
+        combine = self.new("ShaderNodeCombineXYZ")
+        self.feed(combine.inputs[0], u)
+        self.feed(combine.inputs[1], flipped)
+        combine.inputs[2].default_value = 0.0
+        texture = self.new("GeometryNodeImageTexture")
+        texture.inputs["Image"].default_value = image
+        texture.interpolation = interpolation
+        texture.extension = extension
+        texture.label = os.path.basename(image.filepath or image.name)
+        self.links.new(combine.outputs[0], texture.inputs["Vector"])
+        separate = self.new(self.separate_color)
+        self.links.new(texture.outputs["Color"], separate.inputs[0])
+        result = [MmeSock(separate.outputs[k]) for k in range(3)]
+        result.append(MmeSock(texture.outputs["Alpha"]))
+        self.cache[key] = result
+        self.keep.extend(result)
+        return result
+
+    def bit_math(self, op, a, b=None):
+        key = ("bit", op, self.key(a), self.key(b) if b is not None else None)
+        found = self.cache.get(key)
+        if found is not None:
+            return found
+        node = self.new("FunctionNodeBitMath")
+        node.operation = op
+        self.feed(node.inputs["A"], a)
+        if b is not None:
+            self.feed(node.inputs["Shift" if op in ("SHIFT", "ROTATE") else "B"], b)
+        return self.remember(key, node.outputs[0])
+
+    def bitop(self, op, a, b):
+        folded = self.fold(lambda x, y: self.np.bitop(op, x, y), a, b)
+        if folded is not None:
+            return folded
+        if op == "&":
+            return self.bit_math("AND", a, b)
+        if op == "|":
+            return self.bit_math("OR", a, b)
+        if op == "^":
+            return self.bit_math("XOR", a, b)
+        if op == "<<":
+            return self.bit_math("SHIFT", a, b)
+        return self.bit_math("SHIFT", a, self.neg(b))
+
+    def bitnot(self, a):
+        folded = self.fold(self.np.bitnot, a)
+        if folded is not None:
+            return folded
+        return self.bit_math("NOT", a)
+
+    def matrix_input(self, key, label):
+        found = self.cache.get(("matrix", key))
+        if found is not None:
+            return found
+        source = self.new_input(key, "NodeSocketMatrix", label)
+        separate = self.new("FunctionNodeSeparateMatrix")
+        separate.label = label
+        self.links.new(source.socket, separate.inputs[0])
+        comps = [MmeSock(separate.outputs[k]) for k in range(16)]
+        self.cache[("matrix", key)] = comps
+        return comps
+
+
+def mme_prune_tree(tree, output=None):
+    if output is None:
+        output = next((n for n in tree.nodes if n.bl_idname in ("ShaderNodeOutputMaterial", "NodeGroupOutput")), None)
+    if output is None:
+        return
+    upstream = {}
+    for link in tree.links:
+        upstream.setdefault(link.to_node.name, set()).add(link.from_node.name)
+    keep = set()
+    stack = [output.name]
+    while stack:
+        name = stack.pop()
+        if name in keep:
+            continue
+        keep.add(name)
+        stack.extend(upstream.get(name, ()))
+    for node in [n for n in tree.nodes if n.name not in keep and n.bl_idname != "NodeFrame"]:
+        tree.nodes.remove(node)
+
+
+MME_NODE_HEIGHTS = {
+    "ShaderNodeMath": 150.0,
+    "FunctionNodeIntegerMath": 150.0,
+    "FunctionNodeBooleanMath": 130.0,
+    "FunctionNodeBitMath": 150.0,
+    "GeometryNodeSwitch": 150.0,
+    "ShaderNodeValue": 90.0,
+    "ShaderNodeCombineXYZ": 130.0,
+    "ShaderNodeSeparateXYZ": 130.0,
+    "ShaderNodeSeparateColor": 150.0,
+    "FunctionNodeSeparateColor": 150.0,
+    "ShaderNodeTexImage": 280.0,
+    "GeometryNodeImageTexture": 260.0,
+    "NodeGroupInput": 70.0,
+}
+
+
+def mme_node_size(node):
+    height = MME_NODE_HEIGHTS.get(node.bl_idname)
+    if height is None:
+        rows = sum(1 for s in node.inputs if s.enabled and not s.hide)
+        rows += sum(1 for s in node.outputs if s.enabled and not s.hide)
+        height = 36.0 + 22.0 * rows
+    return max(node.width, 140.0), height
+
+
+def mme_layout(tree, block_of, labels):
+    nodes = [n for n in tree.nodes if n.bl_idname != "NodeFrame"]
+    if not nodes:
+        return
+    names = {n.name: n for n in nodes}
+    feeds = {n.name: set() for n in nodes}
+    for link in tree.links:
+        if link.from_node.name in names and link.to_node.name in names:
+            feeds[link.to_node.name].add(link.from_node.name)
+    group_of = {}
+    for node in nodes:
+        block = block_of.get(node.name)
+        group_of[node.name] = "pre" if block is None else block
+    block_feeds = {}
+    for name, sources in feeds.items():
+        mine = group_of[name]
+        block_feeds.setdefault(mine, set())
+        for source in sources:
+            if group_of[source] != mine:
+                block_feeds[mine].add(group_of[source])
+    level = {}
+
+    def block_level(block, trail=()):
+        if block in level:
+            return level[block]
+        if block in trail:
+            return 0
+        found = 0
+        for source in block_feeds.get(block, ()):
+            found = max(found, block_level(source, trail + (block,)) + 1)
+        level[block] = found
+        return found
+
+    for block in block_feeds:
+        block_level(block)
+    if "out" in level:
+        level["out"] = max(level.values()) + (0 if len(level) == 1 else 1)
+    local = {}
+
+    def local_depth(name, trail=()):
+        if name in local:
+            return local[name]
+        found = 0
+        for source in feeds[name]:
+            if group_of[source] == group_of[name] and source not in trail:
+                found = max(found, local_depth(source, trail + (name,)) + 1)
+        local[name] = found
+        return found
+
+    members = {}
+    for node in nodes:
+        local_depth(node.name)
+        members.setdefault(group_of[node.name], []).append(node)
+    sizes = {n.name: mme_node_size(n) for n in nodes}
+    shapes = {}
+    for block, block_nodes in members.items():
+        columns = {}
+        for node in block_nodes:
+            columns.setdefault(local[node.name], []).append(node)
+        widths = []
+        heights = []
+        for depth in sorted(columns):
+            widths.append(max(sizes[n.name][0] for n in columns[depth]))
+            heights.append(sum(sizes[n.name][1] + MME_NODE_GAP_Y for n in columns[depth]))
+        shapes[block] = (columns, widths, sum(widths) + MME_NODE_GAP_X * (len(widths) - 1), max(heights))
+    by_level = {}
+    for block in members:
+        by_level.setdefault(level.get(block, 0), []).append(block)
+
+    def order(block):
+        if block == "pre":
+            return -1
+        if block == "out":
+            return 1 << 30
+        return block
+
+    x = 0.0
+    frames = []
+    where = {}
+    for lvl in sorted(by_level):
+        blocks = sorted(by_level[lvl], key=order)
+        column_width = max(shapes[b][2] for b in blocks)
+        y = 0.0
+        for block in blocks:
+            columns, widths, width, height = shapes[block]
+            label = labels[block] if isinstance(block, int) and block < len(labels) else None
+            framed = label is not None and len(members[block]) > 1
+            top = y - (40.0 if framed else 0.0)
+            cx = x
+            for depth, column_w in zip(sorted(columns), widths):
+                cy = top
+                for node in columns[depth]:
+                    where[node.name] = (cx, cy)
+                    cy -= sizes[node.name][1] + MME_NODE_GAP_Y
+                cx += column_w + MME_NODE_GAP_X
+            if framed:
+                frames.append((label, members[block]))
+            elif label is not None and members[block] and not members[block][0].label and members[block][0].bl_idname != "NodeGroupInput":
+                members[block][0].label = label
+            y = top - height - MME_BLOCK_GAP_Y
+        x += column_width + MME_BLOCK_GAP_X
+    for label, block_nodes in frames:
+        frame = tree.nodes.new("NodeFrame")
+        frame.label = label
+        frame.label_size = 14
+        frame.shrink = True
+        for node in block_nodes:
+            node.parent = frame
+    flat = []
+    for node in tree.nodes:
+        flat.extend(where.get(node.name, (0.0, 0.0)))
+    tree.nodes.foreach_set("location", flat)
+
+
+MME_NODE_GAP_X = 40.0
+MME_NODE_GAP_Y = 16.0
+MME_BLOCK_GAP_X = 120.0
+MME_BLOCK_GAP_Y = 70.0
 
 
 def mme_prop_name(prefix, name, index=None):
@@ -6937,14 +7703,8 @@ def mme_effect_image(path):
     image = bpy.data.images.load(path, check_existing=False)
     image.name = MME_IMAGE_PREFIX + os.path.basename(path)
     image["mme_path"] = norm
-    try:
-        image.colorspace_settings.name = "Non-Color"
-    except (TypeError, ValueError):
-        pass
-    try:
-        image.alpha_mode = "CHANNEL_PACKED"
-    except (TypeError, ValueError):
-        pass
+    image.colorspace_settings.name = "Non-Color"
+    image.alpha_mode = "CHANNEL_PACKED"
     return image
 
 
@@ -6957,6 +7717,37 @@ def mme_load_pixels(path):
     image.pixels.foreach_get(buffer)
     data = buffer.reshape(height, width, 4)[::-1].astype(np.float64)
     return FxImage(data, path)
+
+
+def mme_texture_path(env, info):
+    g = fx_sampler_texture_global(env.program, info)
+    if fx_is_render_target(g):
+        return None, True
+    material_texture = env.state.material.get("texture", "")
+    if g is None and info is not None and info.texture is None:
+        path = material_texture if (info.register or "").lower().replace(" ", "") in ("s0", "") else None
+    else:
+        path = env.textures.resource_path(g, material_texture)
+    return path, False
+
+
+def mme_node_sample(env, ex, info, u, v):
+    path, target = mme_texture_path(env, info)
+    if target:
+        if env.rt_lookup is not None:
+            g = fx_sampler_texture_global(env.program, info)
+            return env.rt_lookup(ex, g.name)
+        return [0.0, 0.0, 0.0, 0.0]
+    if not path:
+        return [0.0, 0.0, 0.0, 0.0]
+    try:
+        image = mme_effect_image(path)
+    except RuntimeError:
+        return [0.0, 0.0, 0.0, 0.0]
+    point = info.point() if info else False
+    address = info.address() if info else "WRAP"
+    extension = {"CLAMP": "EXTEND", "MIRROR": "MIRROR"}.get(address, "REPEAT")
+    return ex.B.image_sample(image, "Closest" if point else "Linear", extension, u, v)
 
 
 class MmeNodeEnv:
@@ -6990,26 +7781,7 @@ class MmeNodeEnv:
         return ex.convert(FxValue(("f", dims), comps), t)
 
     def sample(self, ex, info, u, v, lod):
-        g = fx_sampler_texture_global(self.program, info)
-        if fx_is_render_target(g):
-            if self.rt_lookup is not None:
-                return self.rt_lookup(ex, g.name)
-            return [0.0, 0.0, 0.0, 0.0]
-        material_texture = self.state.material.get("texture", "")
-        if g is None and info is not None and info.texture is None:
-            path = material_texture if (info.register or "").lower().replace(" ", "") in ("s0", "") else None
-        else:
-            path = self.textures.resource_path(g, material_texture)
-        if not path:
-            return [0.0, 0.0, 0.0, 0.0]
-        try:
-            image = mme_effect_image(path)
-        except RuntimeError:
-            return [0.0, 0.0, 0.0, 0.0]
-        point = info.point() if info else False
-        address = info.address() if info else "WRAP"
-        extension = {"CLAMP": "EXTEND", "MIRROR": "MIRROR"}.get(address, "REPEAT")
-        return ex.B.image_sample(image, "Closest" if point else "Linear", extension, u, v)
+        return mme_node_sample(self, ex, info, u, v)
 
 
 def mme_ps_inputs(vs_outputs):
@@ -7055,127 +7827,222 @@ def mme_blend_mode(states):
     return "ALPHA"
 
 
-def mme_shader_output(B, tree, color, discard, mode):
-    nodes, links = tree.nodes, tree.links
-    r, g, b, a = (list(color) + [0.0, 0.0, 0.0, 1.0])[:4]
-    alpha = B.min(B.max(a, 0.0), 1.0)
-    alpha = B.mul(alpha, B.sub(1.0, B.attribute(MME_ATTR_CULL)))
-    if B.known(discard) is None or B.known(discard) != 0.0:
-        alpha = B.mul(alpha, B.sub(1.0, discard))
-    if mode in ("ADD_ALPHA",):
-        rgb = [B.mul(x, alpha) for x in (r, g, b)]
-    elif mode == "ADD":
-        rgb = [B.mul(x, B.sub(1.0, B.attribute(MME_ATTR_CULL))) for x in (r, g, b)]
-    else:
-        rgb = [r, g, b]
-    linear = [B.pow(B.max(x, 0.0), MME_GAMMA) for x in rgb]
-    depth = B.depth_of(*linear, alpha)
-    combine = nodes.new("ShaderNodeCombineColor")
-    for index, value in enumerate(linear):
-        B.feed(combine.inputs[index], value)
-    B.place(combine, depth)
-    output = nodes.new("ShaderNodeOutputMaterial")
-    B.place(output, depth + 3)
-    if mode == "MULTIPLY":
-        transparent = nodes.new("ShaderNodeBsdfTransparent")
-        links.new(combine.outputs[0], transparent.inputs["Color"])
-        B.place(transparent, depth + 1)
-        links.new(transparent.outputs[0], output.inputs["Surface"])
-        return
-    emission = nodes.new("ShaderNodeEmission")
-    links.new(combine.outputs[0], emission.inputs["Color"])
-    emission.inputs["Strength"].default_value = 1.0
-    B.place(emission, depth + 1)
-    if mode == "OPAQUE":
-        links.new(emission.outputs[0], output.inputs["Surface"])
-        return
-    transparent = nodes.new("ShaderNodeBsdfTransparent")
-    B.place(transparent, depth + 1)
-    if mode in ("ADD", "ADD_ALPHA"):
-        shader = nodes.new("ShaderNodeAddShader")
-        links.new(transparent.outputs[0], shader.inputs[0])
-        links.new(emission.outputs[0], shader.inputs[1])
-    elif mode == "PREMULTIPLIED":
-        mix = nodes.new("ShaderNodeMixShader")
-        B.feed(mix.inputs[0], alpha)
-        black = nodes.new("ShaderNodeEmission")
-        black.inputs["Color"].default_value = (0.0, 0.0, 0.0, 1.0)
-        links.new(transparent.outputs[0], mix.inputs[1])
-        links.new(black.outputs[0], mix.inputs[2])
-        B.place(black, depth + 1)
-        B.place(mix, depth + 2)
-        shader = nodes.new("ShaderNodeAddShader")
-        links.new(mix.outputs[0], shader.inputs[0])
-        links.new(emission.outputs[0], shader.inputs[1])
-    else:
-        shader = nodes.new("ShaderNodeMixShader")
-        B.feed(shader.inputs[0], alpha)
-        links.new(transparent.outputs[0], shader.inputs[1])
-        links.new(emission.outputs[0], shader.inputs[2])
-    B.place(shader, depth + 2)
-    links.new(shader.outputs[0], output.inputs["Surface"])
+MME_MODE_LABELS = {
+    "OPAQUE": "Opaque",
+    "ALPHA": "Alpha blend (SRCALPHA, INVSRCALPHA)",
+    "ADD": "Additive (ONE, ONE)",
+    "ADD_ALPHA": "Additive (SRCALPHA, ONE)",
+    "PREMULTIPLIED": "Premultiplied (ONE, INVSRCALPHA)",
+    "MULTIPLY": "Multiply",
+}
 
 
-def mme_prune_tree(tree):
-    output = next((n for n in tree.nodes if n.bl_idname == "ShaderNodeOutputMaterial"), None)
-    if output is None:
-        return
-    upstream = {}
-    for link in tree.links:
-        upstream.setdefault(link.to_node.name, set()).add(link.from_node.name)
-    keep = set()
-    stack = [output.name]
-    while stack:
-        name = stack.pop()
-        if name in keep:
+def mme_math_node(nodes, op, label, a=None, b=None, clamp=False):
+    node = nodes.new("ShaderNodeMath")
+    node.operation = op
+    node.label = label
+    node.use_clamp = clamp
+    for index, value in enumerate((a, b)):
+        if value is None:
             continue
-        keep.add(name)
-        stack.extend(upstream.get(name, ()))
-    for node in [n for n in tree.nodes if n.name not in keep]:
-        tree.nodes.remove(node)
+        if isinstance(value, (int, float)):
+            node.inputs[index].default_value = float(value)
+        else:
+            node.id_data.links.new(value, node.inputs[index])
+    return node
+
+
+def mme_shader_post(tree, group_node, mode, x0):
+    nodes, links = tree.nodes, tree.links
+    color = group_node.outputs["Color"]
+    alpha = group_node.outputs["Alpha"]
+    frame = nodes.new("NodeFrame")
+    frame.label = "MMD blending: %s" % MME_MODE_LABELS.get(mode, mode)
+    frame.label_size = 14
+    placed = []
+
+    def put(node, x, y):
+        node.location = (x0 + x, y)
+        placed.append(node)
+        return node
+
+    cull = put(nodes.new("ShaderNodeAttribute"), 0, -260)
+    cull.attribute_name = MME_ATTR_CULL
+    cull.label = "Culled vertex (mme_cull)"
+    visible = put(mme_math_node(nodes, "SUBTRACT", "Visible = 1 - culled", 1.0, cull.outputs["Fac"]), 220, -260)
+    final_alpha = put(mme_math_node(nodes, "MULTIPLY", "Alpha", alpha, visible.outputs[0], clamp=True), 420, -120)
+    if mode == "ADD_ALPHA":
+        scaled = put(nodes.new("ShaderNodeMix"), 420, 80)
+        scaled.data_type = "RGBA"
+        scaled.blend_type = "MULTIPLY"
+        scaled.label = "Color * Alpha"
+        scaled.inputs["Factor"].default_value = 1.0
+        links.new(color, scaled.inputs["A"])
+        links.new(final_alpha.outputs[0], scaled.inputs["B"])
+        color = scaled.outputs["Result"]
+    elif mode == "ADD":
+        scaled = put(nodes.new("ShaderNodeMix"), 420, 80)
+        scaled.data_type = "RGBA"
+        scaled.blend_type = "MULTIPLY"
+        scaled.label = "Color * Visible"
+        scaled.inputs["Factor"].default_value = 1.0
+        links.new(color, scaled.inputs["A"])
+        links.new(visible.outputs[0], scaled.inputs["B"])
+        color = scaled.outputs["Result"]
+    gamma = put(nodes.new("ShaderNodeGamma"), 640, 80)
+    gamma.label = "MMD gamma"
+    gamma.inputs["Gamma"].default_value = MME_GAMMA
+    links.new(color, gamma.inputs["Color"])
+    output = nodes.new("ShaderNodeOutputMaterial")
+    output.location = (x0 + 1300, 0)
+    if mode == "MULTIPLY":
+        transparent = put(nodes.new("ShaderNodeBsdfTransparent"), 860, 0)
+        links.new(gamma.outputs[0], transparent.inputs["Color"])
+        links.new(transparent.outputs[0], output.inputs["Surface"])
+    else:
+        emission = put(nodes.new("ShaderNodeEmission"), 860, 80)
+        emission.inputs["Strength"].default_value = 1.0
+        links.new(gamma.outputs[0], emission.inputs["Color"])
+        if mode == "OPAQUE":
+            links.new(emission.outputs[0], output.inputs["Surface"])
+        else:
+            transparent = put(nodes.new("ShaderNodeBsdfTransparent"), 860, -80)
+            if mode in ("ADD", "ADD_ALPHA"):
+                shader = put(nodes.new("ShaderNodeAddShader"), 1080, 0)
+                links.new(transparent.outputs[0], shader.inputs[0])
+                links.new(emission.outputs[0], shader.inputs[1])
+            elif mode == "PREMULTIPLIED":
+                mix = put(nodes.new("ShaderNodeMixShader"), 1080, -60)
+                links.new(final_alpha.outputs[0], mix.inputs[0])
+                black = put(nodes.new("ShaderNodeEmission"), 860, -200)
+                black.inputs["Color"].default_value = (0.0, 0.0, 0.0, 1.0)
+                links.new(transparent.outputs[0], mix.inputs[1])
+                links.new(black.outputs[0], mix.inputs[2])
+                shader = put(nodes.new("ShaderNodeAddShader"), 1200, 0)
+                links.new(mix.outputs[0], shader.inputs[0])
+                links.new(emission.outputs[0], shader.inputs[1])
+                output.location = (x0 + 1420, 0)
+            else:
+                shader = put(nodes.new("ShaderNodeMixShader"), 1080, 0)
+                links.new(final_alpha.outputs[0], shader.inputs[0])
+                links.new(transparent.outputs[0], shader.inputs[1])
+                links.new(emission.outputs[0], shader.inputs[2])
+            links.new(shader.outputs[0], output.inputs["Surface"])
+    for node in placed:
+        where = tuple(node.location)
+        node.parent = frame
+        node.location_absolute = where
 
 
 def mme_material_setup(mat, mode, states):
     blended = mode not in ("OPAQUE",)
-    try:
-        mat.surface_render_method = "BLENDED" if blended else "DITHERED"
-    except (AttributeError, TypeError):
-        try:
-            mat.blend_method = "BLEND" if blended else "OPAQUE"
-        except (AttributeError, TypeError):
-            pass
+    mat.surface_render_method = "BLENDED" if blended else "DITHERED"
     cull = str(states.get("cullmode", "")).replace(" ", "").upper()
-    try:
-        mat.use_backface_culling = cull in ("CCW", "3")
-    except AttributeError:
-        pass
-    for name, value in (("use_transparency_overlap", True), ("show_transparent_back", True)):
-        if hasattr(mat, name):
-            try:
-                setattr(mat, name, value)
-            except (AttributeError, TypeError):
-                pass
-    try:
-        mat.diffuse_color = (1.0, 0.55, 0.2, 0.3)
-    except (AttributeError, TypeError):
-        pass
+    mat.use_backface_culling = cull in ("CCW", "3")
+    mat.use_transparency_overlap = True
+    mat.show_transparent_back = True
+    mat.diffuse_color = (1.0, 0.55, 0.2, 0.3)
 
 
 def mme_vs_signature(fx_pass):
     return repr(fx_pass.vs)
 
 
-def mme_compile_material(name, runtime, draw, state, vs_outputs):
+def mme_tree_signature(tree):
+    parts = []
+    for node in sorted(tree.nodes, key=lambda n: n.name):
+        parts.append((node.bl_idname, node.name, node.label))
+        for socket in node.inputs:
+            if socket.is_linked or not hasattr(socket, "default_value"):
+                continue
+            value = socket.default_value
+            try:
+                value = tuple(round(float(v), 5) for v in value)
+            except TypeError:
+                try:
+                    value = round(float(value), 5)
+                except (TypeError, ValueError):
+                    value = str(value)
+            parts.append((socket.identifier, value))
+    for link in tree.links:
+        parts.append((link.from_node.name, link.from_socket.identifier, link.to_node.name, link.to_socket.identifier))
+    return hashlib.md5(repr(sorted(parts, key=repr)).encode("utf-8")).hexdigest()
+
+
+def mme_owned(collection, owner):
+    for item in collection:
+        if item.get(MME_OWNER_PROP) == owner:
+            return item
+    return None
+
+
+def mme_reset_group(group, keep_outputs=True):
+    for node in list(group.nodes):
+        group.nodes.remove(node)
+    for item in list(group.interface.items_tree):
+        if item.item_type != "SOCKET":
+            continue
+        if keep_outputs and item.in_out == "OUTPUT":
+            continue
+        group.interface.remove(item)
+
+
+def mme_group_outputs(group, wanted):
+    for item in list(group.interface.items_tree):
+        if item.item_type == "SOCKET" and item.in_out == "OUTPUT":
+            if (item.name, item.socket_type) not in wanted:
+                group.interface.remove(item)
+
+
+MME_INPUT_NODE_PREFIX = "mmeIn_"
+
+
+def mme_friendly_input(key, item_name):
+    if key.startswith(MME_VARYING_PREFIX):
+        return "Vertex output %s" % item_name
+    if key.startswith(MME_LOOP_PREFIX):
+        return "Loop index %s" % key[len(MME_LOOP_PREFIX):]
+    return item_name
+
+
+def mme_wire_inputs(tree, group_node, B):
+    nodes, links = tree.nodes, tree.links
+    for node in [n for n in nodes if n.name.startswith(MME_INPUT_NODE_PREFIX)]:
+        nodes.remove(node)
+    x, y = group_node.location_absolute
+    row = 0
+    for key, sock in B.inputs.items():
+        identifier = sock.socket.identifier
+        target = next((s for s in group_node.inputs if s.identifier == identifier), None)
+        if target is None:
+            continue
+        attr = nodes.new("ShaderNodeAttribute")
+        attr.name = MME_INPUT_NODE_PREFIX + key
+        attr.attribute_type = B.kinds.get(key, "GEOMETRY")
+        attr.attribute_name = key
+        attr.label = mme_friendly_input(key, target.name)
+        attr.hide = True
+        attr.location = (x - 320, y - row * 40)
+        links.new(attr.outputs["Fac"], target)
+        row += 1
+
+
+def mme_compile_material(name, runtime, draw, state, vs_outputs, owner=None):
     program = runtime.program
-    mat = bpy.data.materials.new(name)
-    try:
-        mat.use_nodes = True
-    except Exception:
-        pass
-    tree = mat.node_tree
-    for node in list(tree.nodes):
-        tree.nodes.remove(node)
-    B = MmeNodeBackend(tree)
+    mat = mme_owned(bpy.data.materials, owner) if owner else None
+    edited = mat is not None and mat.get(MME_SIG_PROP) != mme_tree_signature(mat.node_tree)
+    if mat is None:
+        mat = bpy.data.materials.new(name)
+        if owner:
+            mat[MME_OWNER_PROP] = owner
+    group = bpy.data.node_groups.get(mat.get(MME_GROUP_PROP, ""))
+    if group is None or group.bl_idname != "ShaderNodeTree":
+        group = bpy.data.node_groups.new("MME PS " + name, "ShaderNodeTree")
+        mat[MME_GROUP_PROP] = group.name
+    group[MME_OWNER_PROP] = owner or name
+    mme_reset_group(group)
+    mme_group_outputs(group, {("Color", "NodeSocketColor"), ("Alpha", "NodeSocketFloat")})
+    B = MmePsBackend(group)
     env = MmeNodeEnv(program, state, runtime.textures, runtime.controls_runtime)
     provider = mme_ps_inputs(vs_outputs)
     loops = runtime.loop_overrides_nodes(draw, B)
@@ -7215,38 +8082,59 @@ def mme_compile_material(name, runtime, draw, state, vs_outputs):
         return list(comps)
 
     env.rt_lookup = rt_lookup
-    color, discard = run_ps(draw.fx_pass)
-    mode = mme_blend_mode(draw.fx_pass.states)
-    mme_shader_output(B, tree, color, discard, mode)
-    mme_prune_tree(tree)
-    mme_material_setup(mat, mode, draw.fx_pass.states)
-    varyings = []
-    uniforms = []
-    for node in tree.nodes:
-        if node.bl_idname != "ShaderNodeAttribute":
-            continue
-        if node.attribute_type == "GEOMETRY" and node.attribute_name.startswith(MME_VARYING_PREFIX):
-            varyings.append(node.attribute_name)
-        elif node.attribute_type == "OBJECT" and node.attribute_name in env.uniforms:
-            gname, index = env.uniforms[node.attribute_name]
-            uniforms.append([node.attribute_name, gname, index])
-    loop_attrs = sorted(
-        {n.attribute_name for n in tree.nodes if n.bl_idname == "ShaderNodeAttribute" and n.attribute_name.startswith(MME_LOOP_PREFIX)}
-    )
-    return mat, sorted(set(varyings)), uniforms, mode, loop_attrs, len(tree.nodes)
-
-
-def mme_fallback_material(name, runtime, subset, mode="ALPHA"):
-    xmat = runtime.materials[subset] if subset < len(runtime.materials) else None
-    mat = bpy.data.materials.new(name)
     try:
-        mat.use_nodes = True
+        color, discard = run_ps(draw.fx_pass)
+        r, g, b, a = (list(color) + [0.0, 0.0, 0.0, 1.0])[:4]
+        alpha = B.min(B.max(a, 0.0), 1.0)
+        if B.known(discard) is None or B.known(discard) != 0.0:
+            alpha = B.mul(alpha, B.sub(1.0, discard))
+        B.statement("output color and alpha")
+        B.finish([("Color", [r, g, b], "NodeSocketColor"), ("Alpha", alpha, "NodeSocketFloat")])
     except Exception:
-        pass
+        if not edited and mat.users == 0:
+            bpy.data.materials.remove(mat)
+            bpy.data.node_groups.remove(group)
+        raise
+    mode = mme_blend_mode(draw.fx_pass.states)
     tree = mat.node_tree
-    for node in list(tree.nodes):
-        tree.nodes.remove(node)
-    B = MmeNodeBackend(tree)
+    group_node = next((n for n in tree.nodes if n.bl_idname == "ShaderNodeGroup" and n.node_tree == group), None)
+    if not edited or group_node is None:
+        for node in list(tree.nodes):
+            tree.nodes.remove(node)
+        group_node = tree.nodes.new("ShaderNodeGroup")
+        group_node.node_tree = group
+        group_node.name = "MME Pixel Shader"
+        group_node.label = "%s (%s)" % (draw.fx_pass.name or "pass", fx_entry(program, draw.fx_pass.ps)[0].name)
+        group_node.width = 240
+        group_node.location = (0, 0)
+        mme_shader_post(tree, group_node, mode, 340)
+        mme_material_setup(mat, mode, draw.fx_pass.states)
+    else:
+        log.info("material %s was edited; only its pixel shader group was regenerated", mat.name)
+    mme_wire_inputs(tree, group_node, B)
+    mat[MME_SIG_PROP] = mme_tree_signature(tree)
+    varyings = sorted(k for k in B.inputs if k.startswith(MME_VARYING_PREFIX) and B.kinds.get(k) == "GEOMETRY")
+    uniforms = [[k, env.uniforms[k][0], env.uniforms[k][1]] for k in B.inputs if k in env.uniforms]
+    loop_attrs = sorted(k for k in B.inputs if k.startswith(MME_LOOP_PREFIX))
+    return mat, varyings, uniforms, mode, loop_attrs, len(group.nodes)
+
+
+def mme_fallback_material(name, runtime, subset, mode="ALPHA", reason="", owner=None):
+    xmat = runtime.materials[subset] if subset < len(runtime.materials) else None
+    mat = mme_owned(bpy.data.materials, owner) if owner else None
+    if mat is None:
+        mat = bpy.data.materials.new(name)
+        if owner:
+            mat[MME_OWNER_PROP] = owner
+    group = bpy.data.node_groups.get(mat.get(MME_GROUP_PROP, ""))
+    if group is None or group.bl_idname != "ShaderNodeTree":
+        group = bpy.data.node_groups.new("MME PS " + name, "ShaderNodeTree")
+        mat[MME_GROUP_PROP] = group.name
+    group[MME_OWNER_PROP] = owner or name
+    mme_reset_group(group)
+    mme_group_outputs(group, {("Color", "NodeSocketColor"), ("Alpha", "NodeSocketFloat")})
+    B = MmePsBackend(group)
+    B.statement("fallback: material diffuse x texture")
     color = [1.0, 1.0, 1.0, 1.0]
     if xmat is not None:
         color = list(xmat.diffuse)
@@ -7255,10 +8143,816 @@ def mme_fallback_material(name, runtime, subset, mode="ALPHA"):
         if found:
             sampled = B.image_sample(mme_effect_image(found), "Linear", "REPEAT", B.attribute(mme_varying_name("TEXCOORD0", 0)), B.attribute(mme_varying_name("TEXCOORD0", 1)))
             color = [B.mul(c, s) for c, s in zip(color, sampled)]
-    mme_shader_output(B, tree, color, 0.0, mode)
-    mme_prune_tree(tree)
+    B.finish([("Color", color[:3], "NodeSocketColor"), ("Alpha", color[3], "NodeSocketFloat")])
+    if reason:
+        warning = group.nodes.new("GeometryNodeWarning")
+        warning.warning_type = "WARNING"
+        warning.inputs["Message"].default_value = ("Pixel shader not converted: %s" % reason)[:200]
+        warning.location = (0, 200)
+    tree = mat.node_tree
+    for node in list(tree.nodes):
+        tree.nodes.remove(node)
+    group_node = tree.nodes.new("ShaderNodeGroup")
+    group_node.node_tree = group
+    group_node.name = "MME Pixel Shader"
+    group_node.label = "Fallback (pixel shader not converted)"
+    group_node.width = 240
+    mme_shader_post(tree, group_node, mode, 340)
+    mme_wire_inputs(tree, group_node, B)
     mme_material_setup(mat, mode, {})
+    mat[MME_SIG_PROP] = mme_tree_signature(tree)
     return mat
+
+
+class MmeGeoEnv:
+    def __init__(self, program, state, textures, controls, needs):
+        self.program = program
+        self.state = state
+        self.textures = textures
+        self.controls = controls
+        self.needs = needs
+        self.rt_lookup = None
+
+    def global_value(self, ex, g):
+        source = fx_classify_global(g, self.program)
+        if source is None:
+            return None
+        t = fx_resolve_type(g.type, self.program)
+        if not fx_is_numeric(t):
+            return None
+        values = self.state.values(source, g)
+        runtime = fx_source_is_runtime(source)
+        if source[0] == "control" and self.controls.get(g.name, {}).get("kind", "const") == "const":
+            runtime = False
+        if not runtime:
+            return fx_value_from_list(ex, values, t)
+        B = ex.B
+        if source[0] == "matrix" or len(values) == 16:
+            key = "m:" + g.name
+            self.needs[key] = ("matrix", source, g.name)
+            comps = B.matrix_input(key, g.name)
+            return ex.convert(FxValue(("f", (4, 4)), comps), t)
+        comps = []
+        for k in range(len(values)):
+            key = "u:%s:%d" % (g.name, k)
+            self.needs[key] = ("scalar", source, g.name, k, len(values))
+            comps.append(B.new_input(key))
+        dims = () if len(comps) == 1 else (len(comps),)
+        return ex.convert(FxValue(("f", dims), comps), t)
+
+    def sample(self, ex, info, u, v, lod):
+        return mme_node_sample(self, ex, info, u, v)
+
+
+def mme_geo_vertex_inputs(needs):
+    def provide(ex):
+        B = ex.B
+
+        def attr(name, k):
+            key = "v:%s:%d" % (name, k)
+            needs[key] = ("vertex", name, k)
+            return B.new_input(key)
+
+        def get(semantic, t):
+            if semantic == "POSITION0":
+                comps = [attr(MME_ATTR_POS, k) for k in range(3)] + [1.0]
+            elif semantic == "NORMAL0":
+                comps = [attr(MME_ATTR_NRM, k) for k in range(3)] + [0.0]
+            elif semantic == "TEXCOORD0":
+                comps = [attr(MME_ATTR_UV, 0), attr(MME_ATTR_UV, 1), 0.0, 1.0]
+            elif semantic in ("_INDEX", "INDEX"):
+                comps = [attr(MME_ATTR_SRC, 0)]
+            elif semantic in ("COLOR0", "COLOR1"):
+                comps = [1.0, 1.0, 1.0, 1.0]
+            else:
+                comps = [0.0, 0.0, 0.0, 1.0]
+            if not fx_is_numeric(t):
+                return ex.zero(t)
+            count = fx_count(t[1])
+            comps = (comps + [0.0] * 16)[:count]
+            return FxValue(("f", t[1]), comps)
+
+        return get
+
+    return provide
+
+
+def mme_np_comps(matrix):
+    return [float(x) for x in np.asarray(matrix, dtype=np.float64).reshape(-1)]
+
+
+class MmeGeoScene:
+    def __init__(self, tree, root, unit, scene, state, controls, program):
+        self.tree = tree
+        self.B = MmeGeoBackend(tree)
+        self.root = root
+        self.unit = unit
+        self.scene = scene
+        self.state = state
+        self.controls = controls
+        self.program = program
+        self.cache = {}
+        self.drivers = []
+        self.defaults = {}
+
+    def node(self, idname, label=None, **props):
+        node = self.B.new(idname)
+        for key, value in props.items():
+            setattr(node, key, value)
+        if label:
+            node.label = label
+        return node
+
+    def link(self, a, b):
+        self.tree.links.new(a.socket if isinstance(a, MmeSock) else a, b)
+
+    def sock(self, socket):
+        return MmeSock(socket)
+
+    def driven(self, key, label, spec, default=0.0):
+        found = self.B.inputs.get(key)
+        if found is not None:
+            return found
+        sock = self.B.new_input(key, "NodeSocketFloat", label)
+        item = self.B.input_items[sock.socket.identifier]
+        item.default_value = float(default)
+        self.defaults[sock.socket.identifier] = float(default)
+        self.drivers.append((sock.socket.identifier, spec))
+        return sock
+
+    def vec_node(self, op, a, b=None, label=None):
+        node = self.node("ShaderNodeVectorMath", label, operation=op)
+        for index, value in enumerate((a, b)):
+            if value is None:
+                continue
+            if isinstance(value, (tuple, list)):
+                node.inputs[index].default_value = value
+            else:
+                self.link(value, node.inputs[index])
+        out = node.outputs["Value"] if op in ("DOT_PRODUCT", "LENGTH", "DISTANCE") else node.outputs["Vector"]
+        return out
+
+    def scale(self, vec, factor):
+        node = self.node("ShaderNodeVectorMath", operation="SCALE")
+        self.link(vec, node.inputs[0])
+        self.B.feed(node.inputs["Scale"], factor)
+        return node.outputs["Vector"]
+
+    def split(self, vec):
+        node = self.node("ShaderNodeSeparateXYZ")
+        self.link(vec, node.inputs[0])
+        return [MmeSock(node.outputs[k]) for k in range(3)]
+
+    def combine(self, comps, label=None):
+        node = self.node("ShaderNodeCombineXYZ", label)
+        for k, comp in enumerate(comps):
+            self.B.feed(node.inputs[k], comp)
+        return node.outputs[0]
+
+    def swap(self, vec):
+        x, y, z = self.split(vec)
+        return self.combine([x, z, y], "Blender to MMD axes")
+
+    def const_matrix(self, matrix, label):
+        key = ("cmat", tuple(round(v, 9) for v in np.asarray(matrix).reshape(-1)))
+        if key in self.cache:
+            return self.cache[key]
+        node = self.node("FunctionNodeCombineMatrix", label)
+        m = np.asarray(matrix, dtype=np.float64)
+        for c in range(4):
+            for r in range(4):
+                node.inputs[c * 4 + r].default_value = float(m[r][c])
+        self.cache[key] = node.outputs[0]
+        return node.outputs[0]
+
+    def combine_matrix(self, row_comps, label):
+        node = self.node("FunctionNodeCombineMatrix", label)
+        for k, comp in enumerate(row_comps):
+            self.B.feed(node.inputs[k], comp)
+        return node.outputs[0]
+
+    def mat_mul(self, *matrices):
+        result = matrices[0]
+        for other in matrices[1:]:
+            node = self.node("FunctionNodeMatrixMultiply")
+            self.link(result, node.inputs[0])
+            self.link(other, node.inputs[1])
+            result = node.outputs[0]
+        return result
+
+    def invert(self, matrix):
+        node = self.node("FunctionNodeInvertMatrix")
+        self.link(matrix, node.inputs[0])
+        return node.outputs[0]
+
+    def transpose(self, matrix):
+        node = self.node("FunctionNodeTransposeMatrix")
+        self.link(matrix, node.inputs[0])
+        return node.outputs[0]
+
+    def object_info(self, obj):
+        key = ("info", obj.name if obj is not None else "")
+        if key in self.cache:
+            return self.cache[key]
+        node = self.node("GeometryNodeObjectInfo", "Object: %s" % (obj.name if obj else "-"), transform_space="ORIGINAL")
+        node.inputs["Object"].default_value = obj
+        self.cache[key] = node
+        return node
+
+    def self_info(self):
+        if "self" in self.cache:
+            return self.cache["self"]
+        self_node = self.node("GeometryNodeSelfObject")
+        info = self.node("GeometryNodeObjectInfo", "This pass object", transform_space="ORIGINAL")
+        self.link(self_node.outputs[0], info.inputs["Object"])
+        self.cache["self"] = info
+        return info
+
+    def mmd_world(self, transform, extra=None):
+        pre = np.diag([1.0 / self.unit] * 3 + [1.0]) @ MME_SWAP
+        parts = [self.const_matrix(pre, "MMD units and axes"), transform]
+        if extra is not None:
+            parts.append(self.const_matrix(extra, "accessory scale"))
+        parts.append(self.const_matrix(MME_SWAP, "swap Y/Z"))
+        return self.mat_mul(*parts)
+
+    def world(self):
+        if "world" not in self.cache:
+            self.B.statement("WorldMatrix: this pass object in MMD space")
+            self.cache["world"] = self.mmd_world(self.self_info().outputs["Transform"])
+        return self.cache["world"]
+
+    def look(self, eye, f, up, label):
+        r = self.vec_node("NORMALIZE", self.vec_node("CROSS_PRODUCT", up, f))
+        u = self.vec_node("CROSS_PRODUCT", f, r)
+        rs, us, fs = self.split(r), self.split(u), self.split(f)
+        dots = [self.B.neg(MmeSock(self.vec_node("DOT_PRODUCT", v, eye))) for v in (r, u, f)]
+        comps = []
+        for k in range(3):
+            comps.extend([rs[k], us[k], fs[k], 0.0])
+        comps.extend(dots + [1.0])
+        return {"r": rs, "u": us, "f": fs, "matrix": self.combine_matrix(comps, label)}
+
+    def camera(self):
+        if "camera" in self.cache:
+            return self.cache["camera"]
+        B = self.B
+        B.statement("Camera: view matrix in MMD space")
+        active = self.node("GeometryNodeInputActiveCamera")
+        info = self.node("GeometryNodeObjectInfo", "Scene camera", transform_space="ORIGINAL")
+        self.link(active.outputs[0], info.inputs["Object"])
+        transform = info.outputs["Transform"]
+        eye = self.scale(self.swap(info.outputs["Location"]), 1.0 / self.unit)
+        forward = self.node("FunctionNodeTransformDirection")
+        forward.inputs["Direction"].default_value = (0.0, 0.0, -1.0)
+        self.link(transform, forward.inputs["Transform"])
+        up = self.node("FunctionNodeTransformDirection")
+        up.inputs["Direction"].default_value = (0.0, 1.0, 0.0)
+        self.link(transform, up.inputs["Transform"])
+        f = self.vec_node("NORMALIZE", self.swap(forward.outputs[0]))
+        view = self.look(eye, f, self.swap(up.outputs[0]), "ViewMatrix")
+        B.statement("Camera: projection matrix (MMD, near %g, far %g)" % (FX_NEAR, FX_FAR))
+        cam_info = self.node("GeometryNodeCameraInfo")
+        self.link(active.outputs[0], cam_info.inputs["Camera"])
+        proj = self.node("FunctionNodeSeparateMatrix", "Blender projection")
+        self.link(cam_info.outputs["Projection Matrix"], proj.inputs[0])
+        ortho = MmeSock(cam_info.outputs["Is Orthographic"])
+        B.boolish.add(B.key(ortho))
+        p00, p11 = MmeSock(proj.outputs[0]), MmeSock(proj.outputs[5])
+        xs = B.select(ortho, B.mul(p00, self.unit), p00)
+        ys = B.select(ortho, B.mul(p11, self.unit), p11)
+        q = FX_FAR / (FX_FAR - FX_NEAR)
+        c22 = B.select(ortho, 1.0 / (FX_FAR - FX_NEAR), q)
+        c23 = B.select(ortho, 0.0, 1.0)
+        c32 = B.select(ortho, -FX_NEAR / (FX_FAR - FX_NEAR), -FX_NEAR * q)
+        c33 = B.select(ortho, 1.0, 0.0)
+        comps = [xs, 0.0, 0.0, 0.0, 0.0, ys, 0.0, 0.0, 0.0, 0.0, c22, c23, 0.0, 0.0, c32, c33]
+        found = {
+            "eye": self.split(eye),
+            "f": view["f"],
+            "r": view["r"],
+            "u": view["u"],
+            "view": view["matrix"],
+            "proj": self.combine_matrix(comps, "ProjectionMatrix"),
+            "ortho": ortho,
+            "xs": xs,
+            "ys": ys,
+            "c22": c22,
+            "c32": c32,
+            "q": q,
+        }
+        self.cache["camera"] = found
+        return found
+
+    def light_object(self):
+        collection = bpy.data.collections.get(LIGHT_COLLECTION)
+        rig = find_rig_root(collection, "LIGHT") if collection else None
+        return child_of_type(rig, "LIGHT") if rig else None
+
+    def light(self):
+        if "light" in self.cache:
+            return self.cache["light"]
+        B = self.B
+        B.statement("Light: MMD direction and color")
+        light = self.light_object()
+        if light is not None:
+            loc = [
+                self.driven("light:%d" % k, "Light location %s" % "xyz"[k], {"expr": "var", "vars": [{"name": "var", "type": "SINGLE_PROP", "id_type": "OBJECT", "id": light.name, "path": "location", "index": k}]}, light.location[k])
+                for k in range(3)
+            ]
+            direction = self.combine([B.neg(loc[0]), B.neg(loc[2]), B.neg(loc[1])], "MMD light direction")
+            color = [
+                self.driven("lightcolor:%d" % k, "Light color %s" % "rgb"[k], {"expr": "var", "vars": [{"name": "var", "type": "SINGLE_PROP", "id_type": "LIGHT", "id": light.data.name, "path": "color", "index": k}]}, light.data.color[k])
+                for k in range(3)
+            ]
+        else:
+            direction = self.combine([float(v) for v in self.state.light_dir], "MMD light direction")
+            color = [float(v) for v in self.state.light_color]
+        d = self.vec_node("NORMALIZE", direction)
+        eye = self.scale(d, -1000.0)
+        view = self.look(eye, d, (0.0, 1.0, 0.0), "Light ViewMatrix")
+        _view, proj = FxSceneState().light_matrices()
+        found = {
+            "d": self.split(d),
+            "eye": self.split(eye),
+            "color": color,
+            "view": view["matrix"],
+            "proj": self.const_matrix(np.asarray(proj).T, "Light ProjectionMatrix"),
+        }
+        self.cache["light"] = found
+        return found
+
+    def transform_matrix(self, source):
+        base, suffix, target = source[1], source[2], source[3]
+        if target == "light":
+            parts = self.light()
+        else:
+            parts = self.camera()
+        view, proj = parts["view"], parts["proj"]
+        if base == "WORLD":
+            m = self.world()
+        elif base == "VIEW":
+            m = view
+        elif base == "PROJECTION":
+            m = proj
+        elif base == "WORLDVIEW":
+            m = self.mat_mul(view, self.world())
+        elif base == "VIEWPROJECTION":
+            m = self.mat_mul(proj, view)
+        else:
+            m = self.mat_mul(proj, view, self.world())
+        if "INVERSE" in suffix:
+            m = self.invert(m)
+        if "TRANSPOSE" in suffix:
+            m = self.transpose(m)
+        return m
+
+    def prop_spec(self, obj, path, index=None, expr="var"):
+        var = {"name": "var", "type": "SINGLE_PROP", "id_type": "OBJECT", "id": obj.name, "path": path}
+        if index is not None:
+            var["index"] = index
+        return {"expr": expr, "vars": [var]}
+
+    def object_items(self, obj, item, gname, n, is_bool):
+        lower = (item or "").lower()
+        if obj is None:
+            return [0.0] * n
+        suffix = "" if obj == self.root else " (%s)" % obj.name
+        if lower == "tr":
+            return [self.driven("tr:" + obj.name, "Tr" + suffix, self.prop_spec(obj, '["mme_tr"]'), obj.get("mme_tr", 1.0))]
+        if lower == "si":
+            return [self.driven("si:" + obj.name, "Si" + suffix, self.prop_spec(obj, '["mme_si"]', expr="var * %r" % ACCESSORY_UNIT), float(obj.get("mme_si", 1.0)) * ACCESSORY_UNIT)]
+        if lower in ("x", "y", "z", "xyz", ""):
+            if lower == "" and is_bool:
+                return [1.0]
+            pos = self.split(self.scale(self.swap(self.object_info(obj).outputs["Location"]), 1.0 / self.unit))
+            if lower == "xyz":
+                return pos
+            if lower == "":
+                return pos + [1.0]
+            return [pos["xyz".index(lower)]]
+        if lower in ("rx", "ry", "rz", "rxyz"):
+            axes = {"rx": [0], "ry": [2], "rz": [1], "rxyz": [0, 2, 1]}[lower]
+            return [
+                self.driven("rot:%s:%d" % (obj.name, k), "Rotation %s (%s)" % ("xyz"[k], obj.name), self.prop_spec(obj, "rotation_euler", k, "-var"), -obj.rotation_euler[k])
+                for k in axes
+            ]
+        return [0.0]
+
+    def bone_spec(self, armature, bone, kind):
+        return {
+            "expr": "var",
+            "vars": [
+                {
+                    "name": "var",
+                    "type": "TRANSFORMS",
+                    "id": armature.name,
+                    "bone": bone,
+                    "transform_type": kind,
+                    "space": "WORLD_SPACE",
+                    "rotation_mode": "QUATERNION",
+                }
+            ],
+        }
+
+    def bone_location(self, armature, bone):
+        key = ("bone", armature.name, bone)
+        if key in self.cache:
+            return self.cache[key]
+        loc = [self.driven("bone:%s:%s:%s" % (armature.name, bone, t), "%s %s" % (bone, t), self.bone_spec(armature, bone, t)) for t in ("LOC_X", "LOC_Y", "LOC_Z")]
+        self.cache[key] = loc
+        return loc
+
+    def bone_matrix(self, armature, bone):
+        loc = self.combine(self.bone_location(armature, bone), "bone location")
+        quat = self.node("FunctionNodeQuaternionToRotation")
+        for name, kind in zip(("W", "X", "Y", "Z"), ("ROT_W", "ROT_X", "ROT_Y", "ROT_Z")):
+            self.B.feed(quat.inputs[name], self.driven("bone:%s:%s:%s" % (armature.name, bone, kind), "%s %s" % (bone, kind), self.bone_spec(armature, bone, kind), 1.0 if kind == "ROT_W" else 0.0))
+        scale = self.combine([self.driven("bone:%s:%s:%s" % (armature.name, bone, kind), "%s %s" % (bone, kind), self.bone_spec(armature, bone, kind), 1.0) for kind in ("SCALE_X", "SCALE_Y", "SCALE_Z")], "bone scale")
+        combine = self.node("FunctionNodeCombineTransform")
+        self.link(loc, combine.inputs["Translation"])
+        self.link(quat.outputs[0], combine.inputs["Rotation"])
+        self.link(scale, combine.inputs["Scale"])
+        return combine.outputs[0]
+
+    def control_matrix(self, gname):
+        desc = self.controls.get(gname, {})
+        kind = desc.get("kind")
+        scale = np.diag([ACCESSORY_UNIT * self.unit] * 3 + [1.0])
+        if kind == "self":
+            return self.mmd_world(self.object_info(self.root).outputs["Transform"], scale)
+        if kind in ("object", "model"):
+            obj = bpy.data.objects.get(desc.get("object", ""))
+            return self.mmd_world(self.object_info(obj).outputs["Transform"], scale)
+        if kind == "bone":
+            armature = bpy.data.objects.get(desc.get("object", ""))
+            if armature is not None:
+                return self.mmd_world(self.bone_matrix(armature, desc.get("bone", "")))
+        return self.const_matrix(np.identity(4), "identity")
+
+    def control_values(self, gname, n):
+        desc = self.controls.get(gname, {})
+        kind = desc.get("kind")
+        g = self.program.globals.get(gname)
+        t = fx_resolve_type(g.type, self.program) if g is not None else ("f", ())
+        is_bool = fx_is_numeric(t) and t[0] == "b"
+        if kind == "self":
+            return self.object_items(self.root, desc.get("item", ""), gname, n, is_bool)
+        if kind == "object":
+            return self.object_items(bpy.data.objects.get(desc.get("object", "")), desc.get("item", ""), gname, n, is_bool)
+        if kind == "prop":
+            prop = desc.get("prop", "")
+            return [self.driven("prop:" + prop, prop, self.prop_spec(self.root, '["%s"]' % prop), self.root.get(prop, 0.0))]
+        if kind == "bone":
+            armature = bpy.data.objects.get(desc.get("object", ""))
+            if armature is None:
+                return [0.0]
+            x, y, z = self.bone_location(armature, desc.get("bone", ""))
+            B = self.B
+            return [B.div(x, self.unit), B.div(z, self.unit), B.div(y, self.unit), 1.0]
+        if kind == "model":
+            if is_bool:
+                return [1.0]
+            return self.object_items(bpy.data.objects.get(desc.get("object", "")), "", gname, n, is_bool)
+        return [0.0]
+
+    def param_values(self, gname, n):
+        meta = mme_param_meta(self.root).get(gname, {})
+        prop = meta.get("prop") or mme_prop_name(MME_PARAM_PREFIX, gname)
+        size = int(meta.get("size", 1))
+        default = list(self.root.get(prop, meta.get("default", [0.0]))) if size > 1 else [self.root.get(prop, (meta.get("default") or [0.0])[0])]
+        out = []
+        for k in range(size):
+            path = '["%s"]' % prop
+            label = meta.get("label") or gname
+            if size > 1:
+                label = "%s.%s" % (label, "xyzw"[k] if k < 4 else str(k))
+            out.append(self.driven("param:%s:%d" % (gname, k), label, self.prop_spec(self.root, path, k if size > 1 else None), float(default[k]) if k < len(default) else 0.0))
+        return out
+
+    def scene_spec(self, expr, names):
+        paths = {"fps": "render.fps", "base": "render.fps_base", "rx": "render.resolution_x", "ry": "render.resolution_y", "pct": "render.resolution_percentage"}
+        return {"expr": expr, "vars": [{"name": n, "type": "SINGLE_PROP", "id_type": "SCENE", "id": self.scene.name, "path": paths[n]} for n in names]}
+
+    def scalar_values(self, source, gname, n):
+        kind = source[0]
+        key = ("scalar", gname)
+        if key in self.cache:
+            return self.cache[key]
+        if kind == "position":
+            if source[1] == "light":
+                values = self.light()["eye"] + [1.0]
+            else:
+                values = self.camera()["eye"] + [1.0]
+        elif kind == "direction":
+            values = (self.light()["d"] if source[1] == "light" else self.camera()["f"]) + [0.0]
+        elif kind == "light_color":
+            values = [0.0, 0.0, 0.0, 1.0] if source[1] == "DIFFUSE" else list(self.light()["color"]) + [1.0]
+        elif kind == "time":
+            time_node = self.node("GeometryNodeInputSceneTime")
+            values = [MmeSock(time_node.outputs["Seconds"])]
+        elif kind == "elapsed":
+            fps = scene_fps(self.scene) or PMM_FPS
+            values = [self.driven("elapsed", "ElapsedTime", self.scene_spec("base / fps", ("fps", "base")), 1.0 / fps)]
+        elif kind == "viewport":
+            r = self.scene.render
+            values = [
+                self.driven("viewport:0", "Viewport width", self.scene_spec("rx * pct / 100", ("rx", "pct")), r.resolution_x * r.resolution_percentage / 100.0),
+                self.driven("viewport:1", "Viewport height", self.scene_spec("ry * pct / 100", ("ry", "pct")), r.resolution_y * r.resolution_percentage / 100.0),
+            ]
+        elif kind == "control":
+            values = self.control_values(gname, n)
+        elif kind == "param":
+            values = self.param_values(gname, n)
+        else:
+            values = [0.0] * n
+        values = (list(values) + [0.0] * n)[:n]
+        self.cache[key] = values
+        return values
+
+    def provide(self, need):
+        kind = need[0]
+        if kind == "matrix":
+            source, gname = need[1], need[2]
+            self.B.statement("%s" % gname)
+            if source[0] == "matrix":
+                return self.transform_matrix(source)
+            return self.control_matrix(gname)
+        if kind == "scalar":
+            source, gname, k, n = need[1], need[2], need[3], need[4]
+            self.B.statement("%s" % gname)
+            return self.scalar_values(source, gname, n)[k]
+        if kind == "vertex":
+            name, k = need[1], need[2]
+            key = ("vattr", name)
+            if key not in self.cache:
+                self.B.statement("Vertex data from the .x file")
+                if name == MME_ATTR_SRC:
+                    node = self.node("GeometryNodeInputNamedAttribute", "source vertex index", data_type="INT")
+                    node.inputs["Name"].default_value = name
+                    self.cache[key] = [MmeSock(node.outputs["Attribute"])]
+                else:
+                    node = self.node("GeometryNodeInputNamedAttribute", name, data_type="FLOAT_VECTOR")
+                    node.inputs["Name"].default_value = name
+                    self.cache[key] = self.split(node.outputs["Attribute"])
+            return self.cache[key][k]
+        if kind == "loop":
+            return self.cache.get(("loopvar", need[1]), 0.0)
+        return 0.0
+
+
+def mme_set_drivers(obj, mod, drivers, defaults):
+    inputs = mod.properties.inputs
+    for identifier, value in defaults.items():
+        item = getattr(inputs, identifier, None)
+        if item is not None:
+            item.value = value
+    for identifier, spec in drivers:
+        mme_add_driver(obj, 'modifiers["%s"].properties.inputs.%s.value' % (mod.name, identifier), spec)
+
+
+def mme_add_driver(owner, path, spec, index=-1):
+    try:
+        owner.driver_remove(path, index)
+    except TypeError:
+        pass
+    fcurve = owner.driver_add(path, index) if index >= 0 else owner.driver_add(path)
+    driver = fcurve.driver
+    driver.type = "SCRIPTED"
+    for var_spec in spec["vars"]:
+        var = driver.variables.new()
+        var.name = var_spec["name"]
+        var.type = var_spec["type"]
+        target = var.targets[0]
+        if var_spec["type"] == "SINGLE_PROP":
+            target.id_type = var_spec["id_type"]
+            if var_spec["id_type"] == "SCENE":
+                target.id = bpy.data.scenes.get(var_spec["id"])
+            elif var_spec["id_type"] == "LIGHT":
+                target.id = bpy.data.lights.get(var_spec["id"])
+            else:
+                target.id = bpy.data.objects.get(var_spec["id"])
+            path_text = var_spec["path"]
+            if "index" in var_spec:
+                path_text = "%s[%d]" % (path_text, var_spec["index"])
+            target.data_path = path_text
+        else:
+            target.id = bpy.data.objects.get(var_spec["id"])
+            target.bone_target = var_spec.get("bone", "")
+            target.transform_type = var_spec["transform_type"]
+            target.transform_space = var_spec.get("space", "WORLD_SPACE")
+            target.rotation_mode = var_spec.get("rotation_mode", "AUTO")
+    driver.expression = spec["expr"]
+    return fcurve
+
+
+def mme_bake_node(S, geometry):
+    bake = S.node("GeometryNodeBake", "Bake (Effects > Bake)")
+    bake.bake_items.new("GEOMETRY", "Geometry")
+    S.link(geometry, bake.inputs[0])
+    return bake.outputs[0]
+
+
+def mme_build_geo_tree(label, runtime, draw, state, root, unit, varyings, loop_attrs, scene):
+    program = runtime.program
+    function, args = fx_entry(program, draw.fx_pass.vs)
+    if function is None:
+        raise FxUnsupported("pass %s has no vertex shader" % draw.fx_pass.name)
+    owner = "%s|%s" % (root.get("mmd_bridge_accessory"), label)
+    controls = mme_load_controls(root)
+    inner = bpy.data.node_groups.new("MME VS " + label, "GeometryNodeTree")
+    inner[MME_OWNER_PROP] = owner
+    top = None
+    try:
+        needs = {}
+        B = MmeGeoBackend(inner)
+        runtime.material_state(state, draw.subset)
+        env = MmeGeoEnv(program, state, runtime.textures, controls, needs)
+        ex = FxExec(program, B, env)
+        for var, _count, _name in draw.loops:
+            if var:
+                key = "l:" + var
+                needs[key] = ("loop", var)
+                ex.overrides[var] = FxValue(("i", ()), [B.new_input(key, label="LoopGetIndex %s" % var)])
+        outputs = fx_run_entry(ex, function, args, mme_geo_vertex_inputs(needs)(ex))
+        position = outputs.get("POSITION0")
+        if position is not None and fx_is_numeric(position.t):
+            clip = list(ex.convert(position, ("f", (4,))).c)
+        else:
+            clip = [0.0, 0.0, 0.0, 0.0]
+        outs = [("Clip %s" % c, clip[k], "NodeSocketFloat") for k, c in enumerate("xyzw")]
+        for name in varyings:
+            semantic, _sep, index = name[len(MME_VARYING_PREFIX):].rpartition("_")
+            value = outputs.get(semantic)
+            comp = 0.0
+            if value is not None and fx_is_numeric(value.t):
+                k = int(index)
+                comp = value.c[k] if k < len(value.c) else 0.0
+            outs.append((name, comp, "NodeSocketFloat"))
+        B.statement("vertex shader outputs")
+        B.finish(outs)
+        inner_inputs = {key: B.input_identifier(key) for key in list(B.inputs)}
+        top = bpy.data.node_groups.new("MME " + label, "GeometryNodeTree")
+        top[MME_OWNER_PROP] = owner
+        top.interface.new_socket("Geometry", in_out="INPUT", socket_type="NodeSocketGeometry")
+        top.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+        S = MmeGeoScene(top, root, unit, scene, state, controls, program)
+        T = S.B
+        group_in = T.new("NodeGroupInput")
+        T.block_of[group_in.name] = None
+        geometry = group_in.outputs[0]
+        if draw.loops:
+            T.statement("LoopByCount: one copy of the mesh per loop index")
+            density = S.driven(
+                "density",
+                "Effect Density",
+                {"expr": "var", "vars": [{"name": "var", "type": "SINGLE_PROP", "id_type": "SCENE", "id": scene.name, "path": "mmd_bridge.mme_density"}]},
+                scene.mmd_bridge.mme_density,
+            )
+            params = getattr(program, "params", {})
+            effective = []
+            for var, count, name in draw.loops:
+                if name in params:
+                    source = S.param_values(name, 1)[0]
+                else:
+                    source = float(count)
+                T.statement("LoopByCount=%s" % name)
+                effective.append(T.max(1.0, T.unary("round", T.mul(source, density))))
+            total = 1.0
+            for value in effective:
+                total = T.mul(total, value)
+            points = S.node("GeometryNodePoints", "loop instances")
+            T.feed(points.inputs["Count"], total)
+            index = S.node("GeometryNodeInputIndex")
+            store = S.node("GeometryNodeStoreNamedAttribute", "store loop instance", data_type="INT", domain="POINT")
+            store.inputs["Name"].default_value = MME_ATTR_INST
+            S.link(points.outputs[0], store.inputs["Geometry"])
+            S.link(index.outputs[0], store.inputs["Value"])
+            instance = S.node("GeometryNodeInstanceOnPoints")
+            S.link(store.outputs[0], instance.inputs["Points"])
+            S.link(geometry, instance.inputs["Instance"])
+            realize = S.node("GeometryNodeRealizeInstances")
+            S.link(instance.outputs[0], realize.inputs[0])
+            geometry = realize.outputs[0]
+            inst_attr = S.node("GeometryNodeInputNamedAttribute", "loop instance", data_type="INT")
+            inst_attr.inputs["Name"].default_value = MME_ATTR_INST
+            remaining = MmeSock(inst_attr.outputs["Attribute"])
+            T.statement("LoopGetIndex values")
+            for (var, _count, _name), value in reversed(list(zip(draw.loops, effective))):
+                if var:
+                    S.cache[("loopvar", var)] = T.imod(remaining, value)
+                remaining = T.idiv(remaining, value)
+        T.statement("Vertex shader: %s" % function.name)
+        vs = S.node("GeometryNodeGroup", "Vertex shader: %s (%s)" % (function.name, draw.fx_pass.name or "pass"))
+        vs.node_tree = inner
+        vs.width = 260
+        for key, identifier in inner_inputs.items():
+            target = next((s for s in vs.inputs if s.identifier == identifier), None)
+            if target is None:
+                continue
+            value = S.provide(needs.get(key, ("none",)))
+            if isinstance(value, (MmeSock, bpy.types.NodeSocket)):
+                S.link(value, target)
+            else:
+                T.feed(target, value)
+        clip = [MmeSock(vs.outputs["Clip %s" % c]) for c in "xyzw"]
+        x, y, z, w = clip
+        cam = S.camera()
+        T.statement("Clip space to MMD world space")
+        ortho = cam["ortho"]
+        vx = T.div(x, cam["xs"])
+        vy = T.div(y, cam["ys"])
+        vz = T.select(ortho, T.div(T.sub(z, T.mul(w, cam["c32"])), cam["c22"]), w)
+        vw = T.select(ortho, w, 1.0)
+        world = []
+        for k in range(3):
+            total = T.add(T.add(T.mul(cam["r"][k], vx), T.mul(cam["u"][k], vy)), T.add(T.mul(cam["f"][k], vz), T.mul(cam["eye"][k], vw)))
+            world.append(T.div(total, vw))
+        T.statement("Culling (outside the MMD view volume)")
+        abs_w = T.unary("abs", w)
+        tiny = T.cmp("<=", abs_w, 1e-12)
+        natural = T.add(T.mul(cam["q"], w), -FX_NEAR * cam["q"])
+        front = T.cmp(">", w, 1e-12)
+        near_out = T.cmp("<", z, T.mul(-1e-6, T.max(1.0, abs_w)))
+        far_out = T.cmp(">", z, T.add(T.mul(w, 1.0 + 1e-9), 1e-6))
+        outside = T.land(front, T.lor(near_out, far_out))
+        behind = T.land(T.cmp("<", w, -1e-12), T.cmp(">", T.unary("abs", T.sub(z, natural)), T.mul(1e-4, T.add(abs_w, 1.0))))
+        persp = T.lor(tiny, T.lor(outside, behind))
+        ortho_cull = T.lor(T.cmp("<", abs_w, 1e-12), T.lor(T.cmp("<", z, 0.0), T.cmp(">", z, w)))
+        culled = T.select(ortho, ortho_cull, persp)
+        for value in world:
+            culled = T.lor(culled, T.lnot(T.cmp("==", value, value)))
+        T.statement("MMD world to object space")
+        blender = S.combine([T.mul(world[0], unit), T.mul(world[2], unit), T.mul(world[1], unit)], "Blender world position")
+        to_local = S.node("FunctionNodeTransformPoint")
+        S.link(blender, to_local.inputs["Vector"])
+        S.link(S.invert(S.self_info().outputs["Transform"]), to_local.inputs["Transform"])
+        T.statement("Set positions; culled vertices collapse to the origin")
+        choose = S.node("GeometryNodeSwitch", "culled ? origin : position", input_type="VECTOR")
+        T.feed(choose.inputs["Switch"], culled)
+        S.link(to_local.outputs[0], choose.inputs["False"])
+        choose.inputs["True"].default_value = (0.0, 0.0, 0.0)
+        set_pos = S.node("GeometryNodeSetPosition")
+        S.link(geometry, set_pos.inputs["Geometry"])
+        S.link(choose.outputs[0], set_pos.inputs["Position"])
+        geometry = set_pos.outputs[0]
+        T.statement("Store vertex shader outputs for the material")
+
+        def store(name, value, data_type="FLOAT"):
+            nonlocal geometry
+            node = S.node("GeometryNodeStoreNamedAttribute", name, data_type=data_type, domain="POINT")
+            node.inputs["Name"].default_value = name
+            S.link(geometry, node.inputs["Geometry"])
+            T.feed(node.inputs["Value"], value)
+            geometry = node.outputs[0]
+
+        store(MME_ATTR_CULL, culled)
+        for name in varyings:
+            value = MmeSock(vs.outputs[name])
+            store(name, T.select(T.cmp("==", value, value), value, 0.0))
+        for name in loop_attrs:
+            var = name[len(MME_LOOP_PREFIX):]
+            store(name, S.cache.get(("loopvar", var), 0.0))
+        T.statement("Output")
+        geometry = mme_bake_node(S, geometry)
+        group_out = T.new("NodeGroupOutput")
+        T.block_of[group_out.name] = "out"
+        S.link(geometry, group_out.inputs[0])
+        mme_prune_tree(top, group_out)
+        for node in top.nodes:
+            if node.bl_idname == "NodeGroupInput":
+                for socket in node.outputs:
+                    socket.hide = not socket.is_linked
+        mme_layout(top, T.block_of, T.blocks)
+        return top, S.drivers, S.defaults, len(inner.nodes) + len(top.nodes)
+    except Exception:
+        if top is not None:
+            bpy.data.node_groups.remove(top)
+        bpy.data.node_groups.remove(inner)
+        raise
+
+
+def mme_bake_only_tree(label, root):
+    top = bpy.data.node_groups.new("MME " + label, "GeometryNodeTree")
+    top[MME_OWNER_PROP] = "%s|%s" % (root.get("mmd_bridge_accessory"), label)
+    top.interface.new_socket("Geometry", in_out="INPUT", socket_type="NodeSocketGeometry")
+    top.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+    S = MmeGeoScene(top, root, 1.0, bpy.context.scene, None, {}, None)
+    group_in = S.node("NodeGroupInput")
+    group_in.location = (0, 0)
+    time_node = S.node("GeometryNodeInputSceneTime", "re-evaluate every frame")
+    time_node.location = (0, -160)
+    stamp = S.node("GeometryNodeStoreNamedAttribute", "frame stamp", data_type="FLOAT", domain="POINT")
+    stamp.inputs["Name"].default_value = "mme_frame"
+    stamp.location = (220, 0)
+    S.link(group_in.outputs[0], stamp.inputs["Geometry"])
+    S.link(time_node.outputs["Frame"], stamp.inputs["Value"])
+    geometry = mme_bake_node(S, stamp.outputs[0])
+    S.tree.nodes[-1].location = (440, 0)
+    group_out = S.node("NodeGroupOutput")
+    group_out.location = (680, 0)
+    S.link(geometry, group_out.inputs[0])
+    return top
 
 
 def x_effect_geometry(xscene):
@@ -7306,7 +9000,7 @@ class MmePassData:
 
 
 class MmeRuntime:
-    def __init__(self, fx_path, x_path):
+    def __init__(self, fx_path, x_path, values=None):
         self.fx_path = fx_path
         self.x_path = x_path
         self.x_folder = os.path.dirname(x_path)
@@ -7324,10 +9018,15 @@ class MmeRuntime:
             self.materials,
         ) = x_effect_geometry(xscene)
         self.textures = FxTextureStore(self.program, mme_load_pixels)
-        self.draws = fx_plan_draws(self.program, max(1, len(self.materials)))
+        self.values = dict(values or {})
+        self.draws = fx_plan_draws(self.program, max(1, len(self.materials)), self.values)
         self.passes = {}
         self.controls_runtime = set()
         self.stamp = mme_effect_stamp(fx_path, x_path, self.program)
+
+    def loop_key(self):
+        names = set(fx_script_values(self.program, "loopbycount"))
+        return json.dumps({k: v for k, v in sorted(self.values.items()) if k in names})
 
     def draw_by_order(self, order):
         for draw in self.draws:
@@ -7339,7 +9038,9 @@ class MmeRuntime:
         out = {}
         for var, _count, _name in draw.loops:
             if var:
-                out[var] = FxValue(("i", ()), [B.attribute(MME_LOOP_PREFIX + var)])
+                sock = B.attribute(MME_LOOP_PREFIX + var)
+                B.tag(sock, "LoopGetIndex %s" % var)
+                out[var] = FxValue(("i", ()), [sock])
         return out
 
     def material_state(self, state, subset):
@@ -7384,7 +9085,7 @@ def mme_runtime_for(root):
         return runtime
     if not (os.path.isfile(fx_path) and os.path.isfile(x_path)):
         return None
-    runtime = MmeRuntime(fx_path, x_path)
+    runtime = MmeRuntime(fx_path, x_path, mme_built_values(root))
     controls = mme_load_controls(root)
     runtime.controls_runtime = {name for name, desc in controls.items() if desc.get("kind") != "const"}
     _mme_runtimes[key] = runtime
@@ -7563,7 +9264,116 @@ def mme_frame_state(scene, depsgraph, root, runtime, unit):
         except Exception as error:
             log.debug("control %s failed: %s", name, error)
             state.controls[name] = [0.0]
+    state.params = mme_param_values(root, program, depsgraph)
     return state
+
+
+def mme_param_meta(root):
+    try:
+        return json.loads(root.get(MME_PARAMS_PROP, "{}"))
+    except (TypeError, ValueError):
+        return {}
+
+
+def mme_param_values(root, program, depsgraph=None):
+    params = getattr(program, "params", {})
+    source = root.evaluated_get(depsgraph) if (root is not None and depsgraph is not None) else root
+    out = {}
+    for name, info in params.items():
+        prop = mme_prop_name(MME_PARAM_PREFIX, name)
+        value = None
+        if source is not None:
+            value = source.get(prop, root.get(prop) if root is not None else None)
+        if value is None:
+            out[name] = list(info["default"])
+        elif hasattr(value, "__len__"):
+            out[name] = [float(v) for v in value]
+        else:
+            out[name] = [float(value)]
+    return out
+
+
+def mme_built_values(root):
+    try:
+        return json.loads(root.get(MME_PARAM_BUILT_PROP, "{}"))
+    except (TypeError, ValueError):
+        return {}
+
+
+def mme_param_signature(root):
+    try:
+        names = json.loads(root.get("mme_structural", "[]"))
+    except (TypeError, ValueError):
+        names = []
+    meta = mme_param_meta(root)
+    out = {}
+    for name in names:
+        info = meta.get(name)
+        if info is None:
+            continue
+        value = root.get(info["prop"])
+        if value is None:
+            out[name] = list(info["default"])
+        elif hasattr(value, "__len__"):
+            out[name] = [float(v) for v in value]
+        else:
+            out[name] = [float(value)]
+    return out
+
+
+def mme_sync_params(root, program):
+    params = getattr(program, "params", {})
+    meta = {}
+    for name, info in params.items():
+        prop = mme_prop_name(MME_PARAM_PREFIX, name)
+        info = dict(info)
+        info["prop"] = prop
+        meta[name] = info
+        size = info["size"]
+        kind = info["type"]
+        default = info["default"]
+        if kind == "i":
+            cast = int
+        elif kind == "b":
+            cast = bool
+        else:
+            cast = float
+        typed = [cast(v) for v in default]
+        current = root.get(prop)
+        fits = current is not None and (
+            (size == 1 and not hasattr(current, "__len__") and type(current) is type(typed[0]))
+            or (size > 1 and hasattr(current, "__len__") and len(current) == size)
+        )
+        if not fits:
+            root[prop] = typed[0] if size == 1 else typed
+        ui = root.id_properties_ui(prop)
+        options = {"description": info["help"] or "MME effect parameter %s" % name}
+        if kind != "b":
+            options["default"] = typed[0] if size == 1 else typed
+            if "min" in info:
+                options["soft_min"] = cast(info["min"])
+            if "max" in info:
+                options["soft_max"] = cast(info["max"])
+            if kind == "f" and size in (3, 4) and info["widget"] == "color":
+                options["subtype"] = "COLOR"
+        ui.update(**options)
+    wanted = {m["prop"] for m in meta.values()}
+    for key in [k for k in root.keys() if k.startswith(MME_PARAM_PREFIX) and k not in wanted]:
+        del root[key]
+    root[MME_PARAMS_PROP] = json.dumps(meta)
+    return meta
+
+
+def mme_reset_params(root):
+    for name, info in mme_param_meta(root).items():
+        prop = info.get("prop") or mme_prop_name(MME_PARAM_PREFIX, name)
+        cast = {"i": int, "b": bool}.get(info["type"], float)
+        typed = [cast(v) for v in info["default"]]
+        if prop in root and info["size"] > 1:
+            for k, value in enumerate(typed):
+                root[prop][k] = value
+        else:
+            root[prop] = typed[0] if info["size"] == 1 else typed
 
 
 def mme_self_tr_globals(runtime, root):
@@ -7680,6 +9490,8 @@ def mme_set_attribute(mesh, name, values, kind="FLOAT"):
         attribute = mesh.attributes.new(name=name, type=kind, domain="POINT")
     if kind == "INT":
         attribute.data.foreach_set("value", np.asarray(values, dtype=np.int32))
+    elif kind == "FLOAT_VECTOR":
+        attribute.data.foreach_set("vector", np.asarray(values, dtype=np.float32).reshape(-1))
     else:
         attribute.data.foreach_set("value", np.asarray(values, dtype=np.float32))
 
@@ -7697,7 +9509,7 @@ def mme_child_matrix(root, unit):
     return mme_np_matrix(root.matrix_world) @ np.diag([ACCESSORY_UNIT * unit] * 3 + [1.0])
 
 
-def mme_build_pass(runtime, draw, state, root, collection, unit, density, label):
+def mme_pass_geometry(runtime, draw, density):
     subset_faces = [f for f, s in zip(runtime.faces, runtime.face_subsets) if s == draw.subset]
     if not subset_faces:
         return None
@@ -7706,64 +9518,107 @@ def mme_build_pass(runtime, draw, state, root, collection, unit, density, label)
     local_faces = [tuple(remap[int(v)] for v in reversed(f)) for f in subset_faces]
     counts = [mme_loop_count(count, density) for _var, count, _name in draw.loops]
     instances = int(np.prod(counts)) if counts else 1
-    per = len(used)
-    src = np.tile(used, instances)
-    inst = np.repeat(np.arange(instances, dtype=np.int64), per)
-    data = MmePassData(draw, src, inst, mme_loop_values(draw, inst, density), runtime)
-    data.loop_values = mme_loop_values(draw, inst, density)
-    state.world = mme_world_row(mme_child_matrix(root, unit), unit)
-    tr_names = mme_self_tr_globals(runtime, root)
-    keep = mme_prune_mask(runtime, data, state, tr_names)
-    faces = []
-    for k in range(instances):
-        offset = k * per
-        for face in local_faces:
-            faces.append(tuple(v + offset for v in face))
-    face_keep = [any(keep[v] for v in face) for face in faces]
-    faces = [f for f, ok in zip(faces, face_keep) if ok]
-    if not faces:
-        log.info("effect pass %s draws nothing visible; skipped", label)
-        return None
+    return used, local_faces, counts, instances
+
+
+def mme_keep_faces(local_faces, keep, offset=0):
+    return [f for f in local_faces if any(keep[v + offset] for v in f)]
+
+
+def mme_compact(src, faces):
     alive = np.zeros(len(src), dtype=bool)
     for face in faces:
         alive[list(face)] = True
     new_index = -np.ones(len(src), dtype=np.int64)
     new_index[alive] = np.arange(int(alive.sum()))
-    faces = [tuple(int(new_index[v]) for v in face) for face in faces]
-    src = src[alive]
-    inst = inst[alive]
-    data = MmePassData(draw, src, inst, mme_loop_values(draw, inst, density), runtime)
-    outputs, _ex = mme_run_vs(runtime, data, state)
-    vs_outputs = {}
-    for semantic, value in outputs.items():
-        if semantic == "POSITION0" or not fx_is_numeric(value.t):
-            continue
-        vs_outputs[semantic] = len(value.c)
-    world, culled = mme_clip_world(outputs, state, data.count)
-    local = mme_world_to_local(world, culled, mme_child_matrix(root, unit), unit)
-    mesh = mme_build_mesh(label, local, faces)
-    mme_set_attribute(mesh, MME_ATTR_SRC, src, "INT")
-    mme_set_attribute(mesh, MME_ATTR_INST, inst, "INT")
-    mme_set_attribute(mesh, MME_ATTR_CULL, culled.astype(np.float32))
-    for var, values in data.loop_values.items():
-        mme_set_attribute(mesh, MME_LOOP_PREFIX + var, values)
-    runtime.material_state(state, draw.subset)
-    note = ""
-    try:
-        mat, varyings, uniforms, mode, _loop_attrs, node_count = mme_compile_material(
-            label, runtime, draw, state, vs_outputs
-        )
-        note = "%s, %d nodes" % (mode.lower(), node_count)
-    except FxError as error:
-        log.warning("effect pass %s: pixel shader not converted (%s); using a plain material", label, error)
-        mat = mme_fallback_material(label, runtime, draw.subset)
-        varyings = [mme_varying_name("TEXCOORD0", 0), mme_varying_name("TEXCOORD0", 1)]
-        uniforms = []
-        note = "fallback material"
-    mesh.materials.append(mat)
+    return alive, [tuple(int(new_index[v]) for v in face) for face in faces]
+
+
+def mme_pass_object(label, mesh, collection, root):
     obj = bpy.data.objects.new(label, mesh)
     collection.objects.link(obj)
     obj.parent = root
+    obj.visible_shadow = False
+    for name in ("visible_diffuse", "visible_glossy", "visible_transmission", "visible_volume_scatter"):
+        setattr(obj, name, False)
+    return obj
+
+
+def mme_uniform_driver(program, gname, index, root, controls, scene):
+    g = program.globals.get(gname)
+    if g is None:
+        return None
+    source = fx_classify_global(g, program)
+    if source is None:
+        return None
+    kind = source[0]
+
+    def scene_var(name, path):
+        return {"name": name, "type": "SINGLE_PROP", "id_type": "SCENE", "id": scene.name, "path": path}
+
+    def prop_var(obj, path):
+        return {"name": "var", "type": "SINGLE_PROP", "id_type": "OBJECT", "id": obj.name, "path": path}
+
+    if kind == "time":
+        return {"expr": "frame * base / fps", "vars": [scene_var("fps", "render.fps"), scene_var("base", "render.fps_base")]}
+    if kind == "elapsed":
+        return {"expr": "base / fps", "vars": [scene_var("fps", "render.fps"), scene_var("base", "render.fps_base")]}
+    if kind == "viewport":
+        axis = "render.resolution_x" if index == 0 else "render.resolution_y"
+        return {"expr": "res * pct / 100", "vars": [scene_var("res", axis), scene_var("pct", "render.resolution_percentage")]}
+    if kind == "param":
+        meta = mme_param_meta(root).get(gname)
+        if meta is None:
+            return None
+        path = '["%s"]' % meta["prop"]
+        if meta["size"] > 1:
+            path = '%s[%d]' % (path, index)
+        return {"expr": "var", "vars": [prop_var(root, path)]}
+    if kind == "control":
+        desc = controls.get(gname, {})
+        if desc.get("kind") == "prop":
+            return {"expr": "var", "vars": [prop_var(root, '["%s"]' % desc.get("prop", ""))]}
+        if desc.get("kind") in ("self", "object"):
+            obj = root if desc.get("kind") == "self" else bpy.data.objects.get(desc.get("object", ""))
+            item = desc.get("item", "").lower()
+            if obj is None:
+                return None
+            if item == "tr":
+                return {"expr": "var", "vars": [prop_var(obj, '["mme_tr"]')]}
+            if item == "si":
+                return {"expr": "var * %r" % ACCESSORY_UNIT, "vars": [prop_var(obj, '["mme_si"]')]}
+    return None
+
+
+def mme_drive_uniforms(obj, program, uniforms, root, scene):
+    controls = mme_load_controls(root)
+    driven = []
+    for prop, gname, index in uniforms:
+        spec = mme_uniform_driver(program, gname, index, root, controls, scene)
+        if spec is None:
+            continue
+        mme_add_driver(obj, '["%s"]' % prop, spec)
+        driven.append(prop)
+    obj[MME_DRIVEN_PROP] = json.dumps(driven)
+
+
+def mme_pass_material(runtime, draw, state, label, owner, vs_outputs):
+    runtime.material_state(state, draw.subset)
+    try:
+        mat, varyings, uniforms, mode, loop_attrs, node_count = mme_compile_material(
+            label, runtime, draw, state, vs_outputs, owner
+        )
+        return mat, varyings, uniforms, loop_attrs, "%s, %d shader nodes" % (mode.lower(), node_count)
+    except FxError as error:
+        log.warning("effect pass %s: pixel shader not converted (%s); using a plain material", label, error)
+        mat = mme_fallback_material(label, runtime, draw.subset, reason=str(error), owner=owner)
+        varyings = [mme_varying_name("TEXCOORD0", 0), mme_varying_name("TEXCOORD0", 1)]
+        return mat, varyings, [], [], "fallback material"
+
+
+def mme_finish_pass(obj, runtime, draw, root, scene, counts, density, mat, varyings, uniforms, backend, pruned):
+    obj.data.materials.clear()
+    obj.data.materials.append(mat)
     obj[MME_DRAW_PROP] = json.dumps(
         {
             "order": draw.order,
@@ -7776,21 +9631,118 @@ def mme_build_pass(runtime, draw, state, root, collection, unit, density, label)
     )
     obj[MME_VARYINGS_PROP] = json.dumps(varyings)
     obj[MME_UNIFORMS_PROP] = json.dumps(uniforms)
+    obj[MME_BACKEND_PROP] = backend
+    obj[MME_PRUNED_PROP] = bool(pruned)
     for prop, gname, index in uniforms:
         obj[prop] = 0.0
+    mme_drive_uniforms(obj, runtime.program, uniforms, root, scene)
+    obj["mme_handler"] = mme_needs_handler(obj)
+
+
+def mme_handler_uniforms(obj):
     try:
-        obj.visible_shadow = False
-    except AttributeError:
-        pass
-    for name in ("visible_diffuse", "visible_glossy", "visible_transmission", "visible_volume_scatter"):
-        if hasattr(obj, name):
-            try:
-                setattr(obj, name, False)
-            except (AttributeError, TypeError):
-                pass
+        uniforms = json.loads(obj.get(MME_UNIFORMS_PROP, "[]"))
+        driven = set(json.loads(obj.get(MME_DRIVEN_PROP, "[]")))
+    except (TypeError, ValueError):
+        return []
+    return [u for u in uniforms if u[0] not in driven]
+
+
+def mme_needs_handler(obj):
+    if obj.get(MME_BACKEND_PROP, "PYTHON") == "PYTHON" and not obj.get(MME_BAKED_PROP):
+        return True
+    return bool(mme_handler_uniforms(obj))
+
+
+def mme_build_pass(runtime, draw, state, root, collection, unit, density, label, backend="GEONODES", scene=None):
+    scene = scene or bpy.context.scene
+    geometry = mme_pass_geometry(runtime, draw, density)
+    if geometry is None:
+        return None
+    used, local_faces, counts, instances = geometry
+    per = len(used)
+    src = np.tile(used, instances)
+    inst = np.repeat(np.arange(instances, dtype=np.int64), per)
+    data = MmePassData(draw, src, inst, mme_loop_values(draw, inst, density), runtime)
+    state.world = mme_world_row(mme_child_matrix(root, unit), unit)
+    tr_names = mme_self_tr_globals(runtime, root)
+    keep = mme_prune_mask(runtime, data, state, tr_names)
+    owner = "%s|%s" % (root.get("mmd_bridge_accessory"), label)
+    if backend == "GEONODES":
+        keep_src = keep.reshape(instances, per).any(axis=0)
+        faces = mme_keep_faces(local_faces, keep_src)
+        if not faces:
+            log.info("effect pass %s draws nothing visible; skipped", label)
+            return None
+        alive, faces = mme_compact(used, faces)
+        src_one = used[alive]
+        pruned = len(src_one) < per
+        one = MmePassData(draw, src_one, np.zeros(len(src_one), dtype=np.int64), mme_loop_values(draw, np.zeros(len(src_one), dtype=np.int64), density), runtime)
+        outputs, _ex = mme_run_vs(runtime, one, state)
+        vs_outputs = {k: len(v.c) for k, v in outputs.items() if k != "POSITION0" and fx_is_numeric(v.t)}
+        mat, varyings, uniforms, loop_attrs, note = mme_pass_material(runtime, draw, state, label, owner, vs_outputs)
+        try:
+            started = time.time()
+            tree, drivers, defaults, node_count = mme_build_geo_tree(label, runtime, draw, state, root, unit, varyings, loop_attrs, scene)
+        except FxError as error:
+            log.warning("effect pass %s: vertex shader cannot run in Geometry Nodes (%s); using the Python backend", label, error)
+            return mme_build_pass(runtime, draw, state, root, collection, unit, density, label, "PYTHON", scene)
+        positions = runtime.positions[src_one]
+        mesh = mme_build_mesh(label, positions @ MME_SWAP3.T, faces)
+        mme_set_attribute(mesh, MME_ATTR_SRC, src_one, "INT")
+        mme_set_attribute(mesh, MME_ATTR_POS, positions, "FLOAT_VECTOR")
+        mme_set_attribute(mesh, MME_ATTR_NRM, runtime.normals[src_one], "FLOAT_VECTOR")
+        uv3 = np.zeros((len(src_one), 3))
+        uv3[:, :2] = runtime.uvs[src_one]
+        mme_set_attribute(mesh, MME_ATTR_UV, uv3, "FLOAT_VECTOR")
+        obj = mme_pass_object(label, mesh, collection, root)
+        modifier = obj.modifiers.new(MME_GN_MODIFIER, "NODES")
+        modifier.node_group = tree
+        mme_set_drivers(obj, modifier, drivers, defaults)
+        mme_finish_pass(obj, runtime, draw, root, scene, counts, density, mat, varyings, uniforms, "GEO", pruned)
+        log.info(
+            "effect pass %s: Geometry Nodes, %d source vertices x %d loop instance(s), %d faces each, %d nodes (%.2fs), %s",
+            label,
+            len(src_one),
+            instances,
+            len(faces),
+            node_count,
+            time.time() - started,
+            note,
+        )
+        return obj
+    faces = []
+    for k in range(instances):
+        offset = k * per
+        for face in local_faces:
+            faces.append(tuple(v + offset for v in face))
+    faces = [f for f in faces if any(keep[v] for v in f)]
+    if not faces:
+        log.info("effect pass %s draws nothing visible; skipped", label)
+        return None
+    alive, faces = mme_compact(src, faces)
+    pruned = not alive.all()
+    src = src[alive]
+    inst = inst[alive]
+    data = MmePassData(draw, src, inst, mme_loop_values(draw, inst, density), runtime)
+    outputs, _ex = mme_run_vs(runtime, data, state)
+    vs_outputs = {k: len(v.c) for k, v in outputs.items() if k != "POSITION0" and fx_is_numeric(v.t)}
+    world, culled = mme_clip_world(outputs, state, data.count)
+    local = mme_world_to_local(world, culled, mme_child_matrix(root, unit), unit)
+    mesh = mme_build_mesh(label, local, faces)
+    mme_set_attribute(mesh, MME_ATTR_SRC, src, "INT")
+    mme_set_attribute(mesh, MME_ATTR_INST, inst, "INT")
+    mme_set_attribute(mesh, MME_ATTR_CULL, culled.astype(np.float32))
+    for var, values in data.loop_values.items():
+        mme_set_attribute(mesh, MME_LOOP_PREFIX + var, values)
+    mat, varyings, uniforms, _loop_attrs, note = mme_pass_material(runtime, draw, state, label, owner, vs_outputs)
+    obj = mme_pass_object(label, mesh, collection, root)
+    modifier = obj.modifiers.new(MME_GN_MODIFIER, "NODES")
+    modifier.node_group = mme_bake_only_tree(label, root)
+    mme_finish_pass(obj, runtime, draw, root, scene, counts, density, mat, varyings, uniforms, "PYTHON", pruned)
     mme_write_outputs(obj, mesh, outputs, data.count, varyings)
     log.info(
-        "effect pass %s: %d vertices, %d faces, %d instance(s), %s",
+        "effect pass %s: Python, %d vertices, %d faces, %d instance(s), %s",
         label,
         len(src),
         len(faces),
@@ -7850,27 +9802,25 @@ def mme_pass_data(runtime, obj):
 
 
 def mme_update_pass(runtime, obj, root, state, unit, depsgraph=None):
-    data = mme_pass_data(runtime, obj)
-    if data is None:
-        return False
     evaluated = obj.evaluated_get(depsgraph) if depsgraph is not None else obj
     child = mme_np_matrix(evaluated.matrix_world)
     state.world = mme_world_row(child, unit)
-    outputs, _ex = mme_run_vs(runtime, data, state)
-    world, culled = mme_clip_world(outputs, state, data.count)
-    local = mme_world_to_local(world, culled, child, unit)
     mesh = obj.data
-    mesh.vertices.foreach_set("co", local.astype(np.float32).reshape(-1))
-    mme_set_attribute(mesh, MME_ATTR_CULL, culled.astype(np.float32))
-    try:
-        varyings = json.loads(obj.get(MME_VARYINGS_PROP, "[]"))
-    except (TypeError, ValueError):
-        varyings = []
-    mme_write_outputs(obj, mesh, outputs, data.count, varyings)
-    try:
-        uniforms = json.loads(obj.get(MME_UNIFORMS_PROP, "[]"))
-    except (TypeError, ValueError):
-        uniforms = []
+    if obj.get(MME_BACKEND_PROP, "PYTHON") == "PYTHON" and not obj.get(MME_BAKED_PROP):
+        data = mme_pass_data(runtime, obj)
+        if data is None:
+            return False
+        outputs, _ex = mme_run_vs(runtime, data, state)
+        world, culled = mme_clip_world(outputs, state, data.count)
+        local = mme_world_to_local(world, culled, child, unit)
+        mesh.vertices.foreach_set("co", local.astype(np.float32).reshape(-1))
+        mme_set_attribute(mesh, MME_ATTR_CULL, culled.astype(np.float32))
+        try:
+            varyings = json.loads(obj.get(MME_VARYINGS_PROP, "[]"))
+        except (TypeError, ValueError):
+            varyings = []
+        mme_write_outputs(obj, mesh, outputs, data.count, varyings)
+    uniforms = mme_handler_uniforms(obj)
     program = runtime.program
     for prop, gname, index in uniforms:
         g = program.globals.get(gname)
@@ -7906,11 +9856,14 @@ def mme_update_scene(scene, depsgraph=None, force=False):
         rendering = bpy.app.is_job_running("RENDER")
     except (AttributeError, TypeError):
         pass
-    if not (force or rendering or settings.mme_live):
+    if not (force or rendering or settings.mme_live or _mme_state.get("only") is not None):
         return 0
     updated = 0
+    only = _mme_state.get("only")
     for root in mme_effect_roots(scene):
-        children = [c for c in root.children if c.get(MME_DRAW_PROP)]
+        children = [c for c in root.children if c.get(MME_DRAW_PROP) and c.get("mme_handler", True)]
+        if only is not None:
+            children = [c for c in children if c.name in only]
         if not children:
             continue
         if rendering:
@@ -7949,7 +9902,9 @@ def mme_frame_handler(scene, depsgraph=None):
         return
     _mme_state["busy"] = True
     try:
-        mme_update_scene(scene, depsgraph)
+        updated = mme_update_scene(scene, depsgraph)
+        if updated and depsgraph is not None and _mme_state.get("only") is not None:
+            depsgraph.update()
     finally:
         _mme_state["busy"] = False
 
@@ -8100,22 +10055,32 @@ def mme_key_morph_props(root, morph_tracks):
 
 def mme_build_effect(scene, collection, settings, acc, root, x_path, fx_path, unit, controls):
     _mme_runtimes.pop(root.name, None)
-    runtime = MmeRuntime(fx_path, x_path)
+    program = fx_parse_file(fx_path)
+    mme_sync_params(root, program)
+    values = mme_param_values(root, program)
+    runtime = MmeRuntime(fx_path, x_path, values)
     root["mme_fx"] = fx_path
     root["mme_x"] = x_path
     root["mme_unit"] = unit
     root["mme_controls"] = json.dumps(controls)
     runtime.controls_runtime = {name for name, desc in controls.items() if desc.get("kind") != "const"}
-    root["mme_tr"] = float(acc.keys[0].opacity) if acc.keys else 1.0
-    root["mme_si"] = float(acc.keys[0].scale) if acc.keys else 1.0
+    if acc is not None:
+        root["mme_acc_name"] = acc.name
+        root["mme_tr"] = float(acc.keys[0].opacity) if acc.keys else 1.0
+        root["mme_si"] = float(acc.keys[0].scale) if acc.keys else 1.0
+    else:
+        for name in ("mme_tr", "mme_si"):
+            if name not in root:
+                root[name] = 1.0
     for name, desc in controls.items():
-        if desc.get("kind") == "prop":
+        if desc.get("kind") == "prop" and desc["prop"] not in root:
             root[desc["prop"]] = 0.0
     depsgraph = bpy.context.evaluated_depsgraph_get()
     state = mme_frame_state(scene, depsgraph, root, runtime, unit)
     density = settings.mme_density
+    backend = settings.mme_backend
     children = []
-    base = short_name(acc.name, 24)
+    base = short_name(root.get("mme_acc_name", acc.name if acc is not None else root.name), 24)
     emitted = [d for d in runtime.draws if d.target == "" and d.kind == "geometry"]
     for draw in emitted:
         label = "%s_%s_%s" % (base, draw.technique.name or "tech", draw.fx_pass.name or str(draw.order))
@@ -8123,12 +10088,14 @@ def mme_build_effect(scene, collection, settings, acc, root, x_path, fx_path, un
             log.info("effect pass %s uses fixed-function drawing; skipped", label)
             continue
         try:
-            obj = mme_build_pass(runtime, draw, state, root, collection, unit, density, label)
+            obj = mme_build_pass(runtime, draw, state, root, collection, unit, density, label, backend, scene)
         except FxError as error:
             log.warning("effect pass %s skipped: %s", label, error)
             continue
         if obj is not None:
             children.append(obj)
+    root["mme_structural"] = json.dumps(fx_structural_params(runtime.program))
+    root[MME_PARAM_BUILT_PROP] = json.dumps(mme_param_signature(root))
     covered = {d.subset for d in runtime.draws}
     uncovered = [s for s in range(len(runtime.materials)) if s not in covered]
     offscreen = sorted({d.target for d in runtime.draws if d.target})
@@ -8143,6 +10110,92 @@ def mme_build_effect(scene, collection, settings, acc, root, x_path, fx_path, un
         log.info("effect '%s': screen-space passes not emulated: %s", os.path.basename(fx_path), skipped)
     _mme_runtimes[root.name] = runtime
     return children, uncovered, None, len(emitted)
+
+
+def mme_rebuild_effect(scene, root):
+    settings = scene.mmd_bridge
+    collection = bpy.data.collections.get(ACCESSORY_COLLECTION)
+    fx_path, x_path = root.get("mme_fx", ""), root.get("mme_x", "")
+    if collection is None or not (os.path.isfile(fx_path) and os.path.isfile(x_path)):
+        return 0
+    unit = float(root.get("mme_unit", 1.0)) or 1.0
+    passes = [c for c in root.children if c.get(MME_DRAW_PROP)]
+    visibility = None
+    for child in passes:
+        if child.animation_data is not None and child.animation_data.action is not None:
+            visibility = child.animation_data.action
+            break
+    hidden = (passes[0].hide_viewport, passes[0].hide_render) if passes else (False, False)
+    for child in passes:
+        remove_accessory_children_single(child)
+    started = time.time()
+    children, _uncovered, _tracks, total = mme_build_effect(
+        scene, collection, settings, None, root, x_path, fx_path, unit, mme_load_controls(root)
+    )
+    for child in children:
+        child.scale = (ACCESSORY_UNIT * unit,) * 3
+        child.hide_viewport, child.hide_render = hidden
+        if visibility is not None:
+            anim = child.animation_data_create()
+            anim.action = visibility
+            if anim.action_suitable_slots:
+                anim.action_slot = anim.action_suitable_slots[0]
+    log.info("effect '%s' rebuilt in %.1fs: %d of %d pass(es)", root.name, time.time() - started, len(children), total)
+    return len(children)
+
+
+def mme_rebuild_needed(root):
+    current = mme_param_signature(root)
+    built = mme_built_values(root)
+    if current == built:
+        return False
+    passes = [c for c in root.children if c.get(MME_DRAW_PROP)]
+    if any(c.get(MME_PRUNED_PROP) or c.get(MME_BACKEND_PROP, "PYTHON") == "PYTHON" for c in passes):
+        return True
+    root[MME_PARAM_BUILT_PROP] = json.dumps(current)
+    return False
+
+
+def mme_run_rebuilds():
+    names = list(_mme_state["rebuild"])
+    _mme_state["rebuild"].clear()
+    try:
+        scene = bpy.context.scene
+    except AttributeError:
+        return None
+    for name in names:
+        root = bpy.data.objects.get(name)
+        if root is None or not root.get("mme_fx"):
+            continue
+        try:
+            if mme_rebuild_needed(root):
+                mme_rebuild_effect(scene, root)
+        except Exception as error:
+            log.error("effect '%s' rebuild failed: %s\n%s", name, error, traceback.format_exc())
+    redraw_all()
+    return None
+
+
+@bpy.app.handlers.persistent
+def mme_param_watch(scene, depsgraph=None):
+    if _mme_state["busy"] or _mme_state.get("only") is not None or depsgraph is None:
+        return
+    screen = getattr(bpy.context, "screen", None)
+    if screen is not None and screen.is_animation_playing:
+        return
+    if bpy.app.is_job_running("RENDER"):
+        return
+    for update in depsgraph.updates:
+        obj = update.id.original if isinstance(update.id, bpy.types.Object) else None
+        if obj is None or not obj.get(MME_PARAMS_PROP):
+            continue
+        if obj.name in _mme_state["rebuild"]:
+            continue
+        if mme_rebuild_needed(obj):
+            _mme_state["rebuild"].add(obj.name)
+            if bpy.app.timers.is_registered(mme_run_rebuilds):
+                bpy.app.timers.unregister(mme_run_rebuilds)
+            bpy.app.timers.register(mme_run_rebuilds, first_interval=MME_REBUILD_DELAY)
 
 
 def mme_clear_root_props(root):
@@ -8209,8 +10262,9 @@ def import_accessory(scene, collection, project, settings, acc, entry, unit):
     fx_path, program, controls, tracks = effect_setup(project, settings, acc, entry, path, root)
     stamp = "%s|%s" % (path, os.path.getmtime(path))
     if fx_path:
-        stamp += "|%s|density=%.4f|unit=%.6f|%s" % (
+        stamp += "|%s|%s|density=%.4f|unit=%.6f|%s" % (
             mme_effect_stamp(fx_path, path, program),
+            settings.mme_backend,
             settings.mme_density,
             unit,
             json.dumps(sorted((k, v.get("kind")) for k, v in controls.items())),
@@ -8315,11 +10369,13 @@ def import_accessory(scene, collection, project, settings, acc, entry, unit):
 
 def remove_accessory_children_single(child):
     data = child.data
+    groups = mme_pass_groups(child)
     bpy.data.objects.remove(child, do_unlink=True)
-    if data is not None and getattr(data, "users", 1) == 0:
+    mme_free_groups(groups)
+    if data is not None and getattr(data, "users", 1) == 0 and isinstance(data, bpy.types.Mesh):
         try:
             for material in list(data.materials):
-                if material is not None and material.users <= 1:
+                if material is not None and material.users <= 1 and material.get(MME_OWNER_PROP) is None:
                     bpy.data.materials.remove(material)
             bpy.data.meshes.remove(data)
         except (ReferenceError, RuntimeError):
@@ -8643,6 +10699,28 @@ def build_report(context):
         )
     )
     lines.append("audio: %s" % (settings.audio_note or "not read"))
+    lines.append(
+        "effects: on=%s backend=%s density=%.2f live=%s bake_to=%s"
+        % (settings.mme_effects, settings.mme_backend, settings.mme_density, settings.mme_live, settings.mme_bake_target)
+    )
+    for root in mme_effect_roots(scene):
+        passes = mme_effect_passes(root)
+        lines.append(
+            "  effect %s: %s"
+            % (
+                os.path.basename(root.get("mme_fx", "")),
+                ", ".join(
+                    "%s[%s%s%s]"
+                    % (
+                        json.loads(p.get(MME_DRAW_PROP, "{}")).get("pass", "?"),
+                        p.get(MME_BACKEND_PROP, "PYTHON"),
+                        ",baked" if p.get(MME_BAKED_PROP) else "",
+                        ",handler" if p.get("mme_handler", True) else "",
+                    )
+                    for p in passes
+                ),
+            )
+        )
     for item in settings.targets:
         lines.append(
             "model '%s' -> %s | %s | motion=%s | shapekey=%s | %s"
@@ -8802,8 +10880,10 @@ def clean_accessory_objects(counts):
         for obj in [
             o for o in collection.objects if o.get("mmd_bridge_accessory") is not None
         ]:
+            key = obj.get("mmd_bridge_accessory")
             remove_accessory_children(obj)
             bpy.data.objects.remove(obj, do_unlink=True)
+            mme_purge_owned("%s|" % key)
             counts["accessories"] += 1
         if not collection.objects and not collection.children:
             bpy.data.collections.remove(collection)
@@ -9086,6 +11166,7 @@ class MMDBridgeAccessory(PropertyGroup):
         subtype="FILE_PATH",
     )
     effect_note: StringProperty()
+    show_controls: BoolProperty(name="Effect Controls", default=False)
     parent_bone: StringProperty(
         name="Parent Bone",
         description="Overrides the parent bone stored in the PMM. Leave empty to use the PMM value",
@@ -9130,16 +11211,40 @@ class MMDBridgeSettings(PropertyGroup):
     )
     mme_density: FloatProperty(
         name="Effect Density",
-        description="Share of each LoopByCount loop to build. 1 matches MMD. Lower values make heavy effects such as Nuke2 faster to scrub. Applied on the next sync",
+        description="Share of each LoopByCount loop to draw. 1 matches MMD. Lower values make heavy effects such as Nuke2 faster to scrub. Geometry Nodes passes update live; Python passes on the next sync or Refresh Effects",
         default=1.0,
         min=0.02,
         max=1.0,
         subtype="FACTOR",
+        update=lambda self, context: context.scene.update_tag(),
     )
     mme_live: BoolProperty(
         name="Live Effect Preview",
-        description="Recompute effect geometry whenever the frame changes in the viewport. Renders always recompute",
+        description="Recompute Python-backend effect passes whenever the frame changes in the viewport. Geometry Nodes passes always update. Renders always recompute",
         default=True,
+    )
+    mme_backend: EnumProperty(
+        name="Effect Backend",
+        description="How effect vertex shaders run. Applied on the next sync or Refresh Effects",
+        items=[
+            ("GEONODES", "Geometry Nodes", "Compile vertex shaders to Geometry Nodes: no Python per frame, renders and bakes natively. Passes that cannot compile fall back to Python"),
+            ("PYTHON", "Python", "Run vertex shaders in Python (numpy) from a frame-change handler"),
+        ],
+        default="GEONODES",
+    )
+    mme_bake_target: EnumProperty(
+        name="Bake To",
+        items=[
+            ("PACKED", "Packed in .blend", "Store baked effect geometry inside the .blend file"),
+            ("DISK", "Disk", "Store baked effect geometry in the folder below"),
+        ],
+        default="PACKED",
+    )
+    mme_bake_dir: StringProperty(
+        name="Bake Folder",
+        description="Folder for effect bakes stored on disk",
+        default="//mme_bake/",
+        subtype="DIR_PATH",
     )
     mme_standard_view: BoolProperty(
         name="MMD Colors (Standard View)",
@@ -9218,7 +11323,7 @@ _relink = {"pending": False}
 
 def settings_outdated(scene):
     settings = getattr(scene, "mmd_bridge", None)
-    return settings is None or not hasattr(settings, "mme_effects")
+    return settings is None or not hasattr(settings, "mme_backend")
 
 
 def relink_settings():
@@ -9413,20 +11518,146 @@ class MMDBRIDGE_OT_copy_report(Operator):
         return {"FINISHED"}
 
 
+def mme_target_roots(scene, root_name):
+    roots = mme_effect_roots(scene)
+    if root_name:
+        roots = [r for r in roots if r.name == root_name]
+    return roots
+
+
+def mme_effect_passes(root):
+    return [c for c in root.children if c.get(MME_DRAW_PROP)]
+
+
+def mme_bake_pass(context, obj, start, end, settings):
+    modifier = obj.modifiers.get(MME_GN_MODIFIER)
+    if modifier is None or not len(modifier.bakes):
+        return False
+    bake = modifier.bakes[0]
+    bake.bake_mode = "ANIMATION"
+    bake.use_custom_simulation_frame_range = True
+    bake.frame_start = start
+    bake.frame_end = end
+    if settings.mme_bake_target == "DISK":
+        modifier.bake_target = "DISK"
+        modifier.bake_directory = settings.mme_bake_dir
+        bake.bake_target = "DISK"
+    else:
+        modifier.bake_target = "PACKED"
+        bake.bake_target = "PACKED"
+    _mme_state["only"] = {obj.name}
+    try:
+        with context.temp_override(object=obj, active_object=obj, selected_objects=[obj]):
+            result = bpy.ops.object.geometry_node_bake_single(
+                session_uid=obj.session_uid, modifier_name=modifier.name, bake_id=bake.bake_id
+            )
+    finally:
+        _mme_state["only"] = None
+    if "FINISHED" not in result:
+        return False
+    obj[MME_BAKED_PROP] = True
+    obj["mme_handler"] = mme_needs_handler(obj)
+    return True
+
+
+def mme_clear_bake(context, obj):
+    modifier = obj.modifiers.get(MME_GN_MODIFIER)
+    if modifier is None or not len(modifier.bakes):
+        return False
+    bake = modifier.bakes[0]
+    with context.temp_override(object=obj, active_object=obj, selected_objects=[obj]):
+        bpy.ops.object.geometry_node_bake_delete_single(
+            session_uid=obj.session_uid, modifier_name=modifier.name, bake_id=bake.bake_id
+        )
+    if MME_BAKED_PROP in obj:
+        del obj[MME_BAKED_PROP]
+    obj["mme_handler"] = mme_needs_handler(obj)
+    return True
+
+
 class MMDBRIDGE_OT_refresh_effects(Operator):
     bl_idname = "mmd_bridge.refresh_effects"
     bl_label = "Refresh Effects"
-    bl_description = "Reload effect files and recompute effect geometry for the current frame"
+    bl_description = "Reload effect files and rebuild every effect pass with the current backend, density and parameters. Bakes are cleared"
+
+    root_name: StringProperty(options={"HIDDEN", "SKIP_SAVE"})
 
     def execute(self, context):
         if refuse_if_outdated(self, context):
             return {"CANCELLED"}
         _mme_runtimes.clear()
         _mme_state["errors"].clear()
-        count = mme_update_scene(
-            context.scene, context.evaluated_depsgraph_get(), force=True
-        )
-        self.report({"INFO"}, "Updated %d effect pass(es)" % count)
+        built = 0
+        for root in mme_target_roots(context.scene, self.root_name):
+            try:
+                built += mme_rebuild_effect(context.scene, root)
+            except Exception as error:
+                log.error("effect '%s' rebuild failed: %s\n%s", root.name, error, traceback.format_exc())
+                self.report({"WARNING"}, "%s: %s" % (root.name, short_text(error, 80)))
+        mme_update_scene(context.scene, context.evaluated_depsgraph_get(), force=True)
+        self.report({"INFO"}, "Rebuilt %d effect pass(es)" % built)
+        redraw_all()
+        return {"FINISHED"}
+
+
+class MMDBRIDGE_OT_bake_effects(Operator):
+    bl_idname = "mmd_bridge.bake_effects"
+    bl_label = "Bake Effects"
+    bl_description = "Bake effect geometry over the scene frame range so playback and rendering read stored geometry instead of running shaders"
+
+    root_name: StringProperty(options={"HIDDEN", "SKIP_SAVE"})
+    clear: BoolProperty(options={"HIDDEN", "SKIP_SAVE"})
+
+    def execute(self, context):
+        if refuse_if_outdated(self, context):
+            return {"CANCELLED"}
+        scene = context.scene
+        settings = scene.mmd_bridge
+        roots = mme_target_roots(scene, self.root_name)
+        passes = [p for root in roots for p in mme_effect_passes(root)]
+        if not passes:
+            self.report({"WARNING"}, "No effect passes to %s" % ("clear" if self.clear else "bake"))
+            return {"CANCELLED"}
+        if settings.mme_bake_target == "DISK" and not bpy.data.filepath and settings.mme_bake_dir.startswith("//"):
+            self.report({"ERROR"}, "Save the .blend first, or pick an absolute Bake Folder")
+            return {"CANCELLED"}
+        frame = scene.frame_current
+        done = 0
+        started = time.time()
+        for obj in passes:
+            try:
+                if self.clear:
+                    done += mme_clear_bake(context, obj)
+                else:
+                    done += mme_bake_pass(context, obj, scene.frame_start, scene.frame_end, settings)
+            except Exception as error:
+                log.error("bake of '%s' failed: %s\n%s", obj.name, error, traceback.format_exc())
+        scene.frame_set(frame)
+        if self.clear:
+            self.report({"INFO"}, "Cleared %d effect bake(s)" % done)
+        else:
+            self.report(
+                {"INFO"},
+                "Baked %d of %d effect pass(es), frames %d-%d, in %.1fs"
+                % (done, len(passes), scene.frame_start, scene.frame_end, time.time() - started),
+            )
+        redraw_all()
+        return {"FINISHED"}
+
+
+class MMDBRIDGE_OT_reset_params(Operator):
+    bl_idname = "mmd_bridge.reset_effect_params"
+    bl_label = "Reset Parameters"
+    bl_description = "Set this effect's parameters back to the values written in the .fx file"
+
+    root_name: StringProperty(options={"HIDDEN", "SKIP_SAVE"})
+
+    def execute(self, context):
+        root = bpy.data.objects.get(self.root_name)
+        if root is None:
+            return {"CANCELLED"}
+        mme_reset_params(root)
+        root.update_tag()
         redraw_all()
         return {"FINISHED"}
 
@@ -9659,6 +11890,51 @@ class MMDBRIDGE_PT_options(Panel):
             )
 
 
+def draw_effect_controls(layout, entry):
+    collection = bpy.data.collections.get(ACCESSORY_COLLECTION)
+    root = find_accessory_root(collection, entry.key) if collection else None
+    if root is None or not root.get("mme_fx"):
+        return
+    passes = mme_effect_passes(root)
+    box = layout.box()
+    head = box.row(align=True)
+    head.prop(
+        entry,
+        "show_controls",
+        text="Effect Controls",
+        icon="TRIA_DOWN" if entry.show_controls else "TRIA_RIGHT",
+        emboss=False,
+    )
+    geo = sum(1 for p in passes if p.get(MME_BACKEND_PROP) == "GEO")
+    baked = sum(1 for p in passes if p.get(MME_BAKED_PROP))
+    summary = "%d GN, %d Py" % (geo, len(passes) - geo)
+    if baked:
+        summary += ", %d baked" % baked
+    head.label(text=summary)
+    if not entry.show_controls:
+        return
+    col = box.column(align=True)
+    col.prop(root, '["mme_tr"]', text="Tr (keyed from PMM)")
+    col.prop(root, '["mme_si"]', text="Si (keyed from PMM)")
+    meta = mme_param_meta(root)
+    if meta:
+        col.separator()
+        for name, info in sorted(meta.items(), key=lambda item: item[1].get("order", 0)):
+            if info.get("prop") in root:
+                col.prop(root, '["%s"]' % info["prop"], text=info.get("label") or name)
+    row = box.row(align=True)
+    reset = row.operator("mmd_bridge.reset_effect_params", text="Reset", icon="LOOP_BACK")
+    reset.root_name = root.name
+    rebuild = row.operator("mmd_bridge.refresh_effects", text="Rebuild", icon="FILE_REFRESH")
+    rebuild.root_name = root.name
+    row = box.row(align=True)
+    bake = row.operator("mmd_bridge.bake_effects", text="Bake", icon="RENDER_ANIMATION")
+    bake.root_name = root.name
+    clear = row.operator("mmd_bridge.bake_effects", text="Clear Bake", icon="TRASH")
+    clear.root_name = root.name
+    clear.clear = True
+
+
 class MMDBRIDGE_PT_accessories(Panel):
     bl_label = "Accessories (.x)"
     bl_idname = "MMDBRIDGE_PT_accessories"
@@ -9677,10 +11953,21 @@ class MMDBRIDGE_PT_accessories(Panel):
         box = layout.box()
         box.prop(settings, "mme_effects")
         if settings.mme_effects:
+            box.prop(settings, "mme_backend")
             box.prop(settings, "mme_density", slider=True)
-            box.prop(settings, "mme_live")
+            if settings.mme_backend == "PYTHON":
+                box.prop(settings, "mme_live")
             box.prop(settings, "mme_standard_view")
             box.operator("mmd_bridge.refresh_effects", icon="SHADERFX")
+            bake_box = box.box()
+            bake_box.label(text="Bake (scene frame range)", icon="RENDER_ANIMATION")
+            bake_box.prop(settings, "mme_bake_target", text="")
+            if settings.mme_bake_target == "DISK":
+                bake_box.prop(settings, "mme_bake_dir", text="")
+            row = bake_box.row(align=True)
+            row.operator("mmd_bridge.bake_effects", text="Bake All", icon="RENDER_ANIMATION")
+            clear = row.operator("mmd_bridge.bake_effects", text="Clear All", icon="TRASH")
+            clear.clear = True
             draw_wrapped(
                 box,
                 "Effects show in Material Preview and Rendered mode. Offscreen blur and post passes are approximated.",
@@ -9704,6 +11991,8 @@ class MMDBRIDGE_PT_accessories(Panel):
                 note_row.scale_y = 0.85
                 note_row.alert = entry.effect_note.startswith(("Effect failed", "Effect error"))
                 note_row.label(text=short_text(entry.effect_note, 60), icon="INFO")
+            if settings.mme_effects and entry.use_effect:
+                draw_effect_controls(layout, entry)
 
 
 CLASSES = (
@@ -9715,6 +12004,8 @@ CLASSES = (
     MMDBRIDGE_OT_clean,
     MMDBRIDGE_OT_copy_report,
     MMDBRIDGE_OT_refresh_effects,
+    MMDBRIDGE_OT_bake_effects,
+    MMDBRIDGE_OT_reset_params,
     MMDBRIDGE_OT_dismiss_scale_warning,
     MMDBRIDGE_PT_main,
     MMDBRIDGE_PT_audio,
@@ -9729,12 +12020,18 @@ def remove_handlers():
     for handlers, name in (
         (bpy.app.handlers.frame_change_post, "mme_frame_handler"),
         (bpy.app.handlers.load_post, "mme_load_handler"),
+        (bpy.app.handlers.depsgraph_update_post, "mme_param_watch"),
     ):
         for handler in [h for h in handlers if getattr(h, "__name__", "") == name]:
             handlers.remove(handler)
 
 
 def register():
+    if bpy.app.version < MIN_BLENDER:
+        raise RuntimeError(
+            "MMD PMM Bridge needs Blender %d.%d or newer (this is %s)"
+            % (MIN_BLENDER[0], MIN_BLENDER[1], bpy.app.version_string)
+        )
     setup_logging()
     for cls in CLASSES:
         bpy.utils.register_class(cls)
@@ -9742,6 +12039,7 @@ def register():
     remove_handlers()
     bpy.app.handlers.frame_change_post.append(mme_frame_handler)
     bpy.app.handlers.load_post.append(mme_load_handler)
+    bpy.app.handlers.depsgraph_update_post.append(mme_param_watch)
     _mme_runtimes.clear()
     sweep_stale_temp()
     if not bpy.app.timers.is_registered(startup_check):
