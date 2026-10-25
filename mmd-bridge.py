@@ -954,7 +954,6 @@ ACTION_PREFIX = "MMDBridge_"
 CAMERA_COLLECTION = "MMD_Camera"
 LIGHT_COLLECTION = "MMD_Sun"
 FOLLOW_PREFIX = "MMDBridgeFollow"
-MANUAL_FOLLOW = (-2, -2)
 UNIT_SCALE = 1.0
 TEMP_PREFIX = "mmd_bridge_"
 TEMP_DIR_NAME = "mmd_bridge"
@@ -980,7 +979,6 @@ X_IMPORTER_MODULES = ("io_directx_x", "io_scene_x")
 X_IMPORTER_URL = "https://extensions.blender.org/add-ons/io-directx-x/"
 MMD_TOOLS_URL = "https://extensions.blender.org/add-ons/mmd-tools/"
 
-_follow_items = [("NONE", "None", "")]
 _last_sync = {"digest": None, "failed": 0}
 _status_icons = {}
 
@@ -1078,16 +1076,6 @@ def on_target_changed(self, context):
         self.shape_clip = None
     self.state = "NEW"
     self.status_text = ""
-
-
-def follow_model_items(self, context):
-    global _follow_items
-    items = [("NONE", "None", "")]
-    for target in context.scene.mmd_bridge.targets:
-        if target.target is not None:
-            items.append((target.key, target.pmm_name, ""))
-    _follow_items = items
-    return _follow_items
 
 
 def find_root_for(model):
@@ -1863,7 +1851,6 @@ def prepare_uv_channels(root, meshes, model, resolved, enabled):
         return []
     leaves = uv_leaf_names(model, resolved, group_morph_table(root), uv_morphs)
     channels = []
-    per_mesh = {}
     for leaf in leaves:
         morph = uv_morphs[leaf]
         if morph.uv_index != 0:
@@ -1894,10 +1881,13 @@ def prepare_uv_channels(root, meshes, model, resolved, enabled):
                     "UV morph '%s' has no X/Y offsets on '%s'", leaf, mesh_obj.name
                 )
                 continue
-            number = per_mesh.get(mesh_obj.as_pointer(), 0)
-            per_mesh[mesh_obj.as_pointer()] = number + 1
             channels.append(
-                {"leaf": leaf, "mesh": mesh_obj, "offsets": usable, "number": number}
+                {
+                    "leaf": leaf,
+                    "mesh": mesh_obj,
+                    "offsets": usable,
+                    "number": leaves.index(leaf),
+                }
             )
     by_mesh = {}
     for channel in channels:
@@ -1928,7 +1918,7 @@ def prepare_uv_channels(root, meshes, model, resolved, enabled):
         channel["key"] = mesh.shape_keys
         by_mesh.setdefault(mesh_obj.as_pointer(), []).append(channel)
         mesh.update()
-    applied = 0
+    pending = {}
     for group in by_mesh.values():
         mesh = group[0]["mesh"].data
         indices = set()
@@ -1941,20 +1931,26 @@ def prepare_uv_channels(root, meshes, model, resolved, enabled):
             if index >= len(mesh.materials) or mesh.materials[index] is None:
                 continue
             material = mesh.materials[index]
-            specs = [c for c in group if index in c["materials"]]
-            if build_uv_nodes(material, specs):
-                applied += 1
-                log.info(
-                    "UV morph shader nodes added to material '%s': %s",
-                    material.name,
-                    [c["leaf"] for c in specs],
-                )
-            else:
-                log.warning(
-                    "material '%s' has no base texture node; UV morph skipped for %s",
-                    material.name,
-                    [c["leaf"] for c in specs],
-                )
+            specs = pending.setdefault(material.as_pointer(), (material, {}))[1]
+            for channel in group:
+                if index in channel["materials"]:
+                    specs.setdefault(channel["leaf"], channel)
+    applied = 0
+    for material, specs in pending.values():
+        ordered = [specs[leaf] for leaf in leaves if leaf in specs]
+        if build_uv_nodes(material, ordered):
+            applied += 1
+            log.info(
+                "UV morph shader nodes added to material '%s': %s",
+                material.name,
+                [c["leaf"] for c in ordered],
+            )
+        else:
+            log.warning(
+                "material '%s' has no base texture node; UV morph skipped for %s",
+                material.name,
+                [c["leaf"] for c in ordered],
+            )
     log.info(
         "UV morph channels: %d on %d mesh(es), %d material(s) patched",
         len(channels),
@@ -2550,24 +2546,9 @@ def pose_bone_name(armature, mmd_name):
 
 def resolve_follow(project, settings):
     plan = {}
-    if settings.follow_mode == "OFF":
+    if not settings.follow_camera:
         return plan
     items = {t.key: t for t in settings.targets}
-    if settings.follow_mode == "MANUAL":
-        item = items.get(settings.follow_model)
-        if item is None or item.target is None:
-            log.warning("manual follow: no model selected")
-            return plan
-        armature = find_armature(item.target)
-        if armature is None or settings.follow_bone_name not in armature.pose.bones:
-            log.warning(
-                "manual follow: bone '%s' not found on the selected model",
-                settings.follow_bone_name,
-            )
-            return plan
-        plan[MANUAL_FOLLOW] = (armature, settings.follow_bone_name)
-        log.info("manual follow: %s / %s", armature.name, settings.follow_bone_name)
-        return plan
     by_index = {m.index: m for m in project.models}
     for key in project.camera_keys:
         if key.parent_model < 0 or key.parent_bone < 0:
@@ -2639,9 +2620,8 @@ def apply_follow(root, project, plan, settings):
         if resolved is None:
             continue
         armature, bone = resolved
-        manual = pair == MANUAL_FOLLOW
         constraint = root.constraints.new(type="CHILD_OF")
-        constraint.name = FOLLOW_PREFIX + ("_manual" if manual else "_%d_%d" % pair)
+        constraint.name = FOLLOW_PREFIX + "_%d_%d" % pair
         constraint.target = armature
         constraint.subtarget = bone
         constraint.use_rotation_x = settings.follow_rotation
@@ -2653,13 +2633,12 @@ def apply_follow(root, project, plan, settings):
         constraint.set_inverse_pending = False
         constraint.inverse_matrix = Matrix.Identity(4)
         constraint.influence = 1.0
-        if not manual:
-            path = 'constraints["%s"].influence' % constraint.name
-            for key in keys:
-                active = (key.parent_model, key.parent_bone) == pair
-                constraint.influence = 1.0 if active else 0.0
-                constraint.keyframe_insert("influence", frame=key.frame)
-            make_constant(root, path)
+        path = 'constraints["%s"].influence' % constraint.name
+        for key in keys:
+            active = (key.parent_model, key.parent_bone) == pair
+            constraint.influence = 1.0 if active else 0.0
+            constraint.keyframe_insert("influence", frame=key.frame)
+        make_constant(root, path)
         log.info(
             "follow constraint '%s' -> %s / %s (rotation=%s)",
             constraint.name,
@@ -3159,6 +3138,14 @@ def resolve_accessory_parent(project, settings, acc, entry):
     return armature, bone
 
 
+def bone_rest_inverse(armature, bone_name):
+    data_bone = armature.data.bones.get(bone_name)
+    if data_bone is None:
+        return Matrix.Identity(4)
+    rotation = data_bone.matrix_local.to_3x3().normalized()
+    return rotation.inverted().to_4x4()
+
+
 def apply_accessory_parent(root, project, settings, acc, entry):
     for constraint in [
         c for c in root.constraints if c.name.startswith(ACCESSORY_FOLLOW_PREFIX)
@@ -3183,7 +3170,7 @@ def apply_accessory_parent(root, project, settings, acc, entry):
     constraint.use_scale_y = False
     constraint.use_scale_z = False
     constraint.set_inverse_pending = False
-    constraint.inverse_matrix = Matrix.Identity(4)
+    constraint.inverse_matrix = bone_rest_inverse(armature, bone)
     constraint.influence = 1.0
     log.info("accessory '%s' follows %s / %s", acc.name, armature.name, bone)
 
@@ -4111,21 +4098,11 @@ class MMDBridgeSettings(PropertyGroup):
     sync_camera: BoolProperty(name="Sync Camera", default=True)
     sync_light: BoolProperty(name="Sync Light", default=True)
     set_active_camera: BoolProperty(name="Make Scene Camera", default=True)
-    follow_mode: EnumProperty(
-        name="Follow",
-        items=[
-            ("OFF", "Off", "Camera does not follow any bone"),
-            (
-                "PMM",
-                "From PMM",
-                "Use the follow model and bone stored in each PMM camera keyframe",
-            ),
-            ("MANUAL", "Manual", "Always follow the model and bone chosen below"),
-        ],
-        default="PMM",
+    follow_camera: BoolProperty(
+        name="Follow Bone",
+        description="Make the camera follow the model and bone stored in each PMM camera keyframe",
+        default=True,
     )
-    follow_model: EnumProperty(name="Model", items=follow_model_items)
-    follow_bone_name: StringProperty(name="Bone")
     follow_rotation: BoolProperty(
         name="Follow Bone Rotation",
         description="Also inherit the bone rotation, not only its position",
@@ -4422,18 +4399,8 @@ class MMDBRIDGE_PT_camera(Panel):
         layout.prop(settings, "sync_light")
         layout.prop(settings, "set_active_camera")
         layout.separator()
-        layout.prop(settings, "follow_mode")
-        if settings.follow_mode == "MANUAL":
-            layout.prop(settings, "follow_model")
-            armature = None
-            for item in settings.targets:
-                if item.key == settings.follow_model and item.target is not None:
-                    armature = find_armature(item.target)
-            if armature is not None:
-                layout.prop_search(
-                    settings, "follow_bone_name", armature.pose, "bones", text="Bone"
-                )
-        if settings.follow_mode != "OFF":
+        layout.prop(settings, "follow_camera")
+        if settings.follow_camera:
             layout.prop(settings, "follow_rotation")
 
 
