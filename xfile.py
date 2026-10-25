@@ -458,4 +458,11 @@ def x_effect_geometry(xscene):
         lengths = np.linalg.norm(accum, axis=1, keepdims=True)
         accum = np.where(lengths > 1e-12, accum / np.maximum(lengths, 1e-12), 0.0)
         normal_array[missing] = accum[missing]
-    return positions, normal_array, uv_array, faces, np.array(face_materials, dtype=np.int64), materials
+    return (
+        positions,
+        normal_array,
+        uv_array,
+        faces,
+        np.array(face_materials, dtype=np.int64),
+        materials,
+    )

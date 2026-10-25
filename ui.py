@@ -6,7 +6,14 @@ import os
 import textwrap
 import time
 import traceback
-from bpy.props import BoolProperty, CollectionProperty, EnumProperty, FloatProperty, PointerProperty, StringProperty
+from bpy.props import (
+    BoolProperty,
+    CollectionProperty,
+    EnumProperty,
+    FloatProperty,
+    PointerProperty,
+    StringProperty,
+)
 from bpy.types import Operator, Panel, PropertyGroup
 
 from .common import (
@@ -206,17 +213,37 @@ class MMDBridgeSettings(PropertyGroup):
         name="Effect Backend",
         description="How effect vertex shaders run. Applied on the next sync or Refresh Effects",
         items=[
-            ("GEONODES", "Geometry Nodes", "Compile vertex shaders to Geometry Nodes: no Python per frame, renders and bakes natively. Passes that cannot compile fall back to Python"),
-            ("PYTHON", "Python", "Run vertex shaders in Python (numpy) from a frame-change handler"),
+            (
+                "GEONODES",
+                "Geometry Nodes",
+                "Compile vertex shaders to Geometry Nodes: no Python per frame, renders and bakes natively. Passes that cannot compile fall back to Python",
+            ),
+            (
+                "PYTHON",
+                "Python",
+                "Run vertex shaders in Python (numpy) from a frame-change handler",
+            ),
         ],
         default="GEONODES",
     )
     fx_info_tab: EnumProperty(
         name="Effect Info",
         items=[
-            ("LINKS", "Linked Objects", "Objects and morphs the effect reads (CONTROLOBJECT)", "LINKED", 0),
+            (
+                "LINKS",
+                "Linked Objects",
+                "Objects and morphs the effect reads (CONTROLOBJECT)",
+                "LINKED",
+                0,
+            ),
             ("PASSES", "Passes", "The effect's draw passes", "NODETREE", 1),
-            ("PASS", "Selected Pass", "Details of the selected pass object", "OBJECT_DATA", 2),
+            (
+                "PASS",
+                "Selected Pass",
+                "Details of the selected pass object",
+                "OBJECT_DATA",
+                2,
+            ),
         ],
         default="PASSES",
     )
@@ -228,7 +255,11 @@ class MMDBridgeSettings(PropertyGroup):
     mme_bake_target: EnumProperty(
         name="Bake To",
         items=[
-            ("PACKED", "Packed in .blend", "Store baked effect geometry inside the .blend file"),
+            (
+                "PACKED",
+                "Packed in .blend",
+                "Store baked effect geometry inside the .blend file",
+            ),
             ("DISK", "Disk", "Store baked effect geometry in the folder below"),
         ],
         default="PACKED",
@@ -530,7 +561,12 @@ class MMDBRIDGE_OT_refresh_effects(Operator):
             try:
                 built += mme_rebuild_effect(context.scene, root)
             except Exception as error:
-                log.error("effect '%s' rebuild failed: %s\n%s", root.name, error, traceback.format_exc())
+                log.error(
+                    "effect '%s' rebuild failed: %s\n%s",
+                    root.name,
+                    error,
+                    traceback.format_exc(),
+                )
                 self.report({"WARNING"}, "%s: %s" % (root.name, short_text(error, 80)))
         mme_update_scene(context.scene, context.evaluated_depsgraph_get(), force=True)
         self.report({"INFO"}, "Rebuilt %d effect pass(es)" % built)
@@ -554,10 +590,19 @@ class MMDBRIDGE_OT_bake_effects(Operator):
         roots = mme_target_roots(scene, self.root_name)
         passes = [p for root in roots for p in mme_effect_passes(root)]
         if not passes:
-            self.report({"WARNING"}, "No effect passes to %s" % ("clear" if self.clear else "bake"))
+            self.report(
+                {"WARNING"},
+                "No effect passes to %s" % ("clear" if self.clear else "bake"),
+            )
             return {"CANCELLED"}
-        if settings.mme_bake_target == "DISK" and not bpy.data.filepath and settings.mme_bake_dir.startswith("//"):
-            self.report({"ERROR"}, "Save the .blend first, or pick an absolute Bake Folder")
+        if (
+            settings.mme_bake_target == "DISK"
+            and not bpy.data.filepath
+            and settings.mme_bake_dir.startswith("//")
+        ):
+            self.report(
+                {"ERROR"}, "Save the .blend first, or pick an absolute Bake Folder"
+            )
             return {"CANCELLED"}
         frame = scene.frame_current
         done = 0
@@ -567,9 +612,16 @@ class MMDBRIDGE_OT_bake_effects(Operator):
                 if self.clear:
                     done += mme_clear_bake(context, obj)
                 else:
-                    done += mme_bake_pass(context, obj, scene.frame_start, scene.frame_end, settings)
+                    done += mme_bake_pass(
+                        context, obj, scene.frame_start, scene.frame_end, settings
+                    )
             except Exception as error:
-                log.error("bake of '%s' failed: %s\n%s", obj.name, error, traceback.format_exc())
+                log.error(
+                    "bake of '%s' failed: %s\n%s",
+                    obj.name,
+                    error,
+                    traceback.format_exc(),
+                )
         scene.frame_set(frame)
         if self.clear:
             self.report({"INFO"}, "Cleared %d effect bake(s)" % done)
@@ -577,7 +629,13 @@ class MMDBRIDGE_OT_bake_effects(Operator):
             self.report(
                 {"INFO"},
                 "Baked %d of %d effect pass(es), frames %d-%d, in %.1fs"
-                % (done, len(passes), scene.frame_start, scene.frame_end, time.time() - started),
+                % (
+                    done,
+                    len(passes),
+                    scene.frame_start,
+                    scene.frame_end,
+                    time.time() - started,
+                ),
             )
         redraw_all()
         return {"FINISHED"}
@@ -586,7 +644,9 @@ class MMDBRIDGE_OT_bake_effects(Operator):
 class MMDBRIDGE_OT_reset_params(Operator):
     bl_idname = "ninesync.reset_effect_params"
     bl_label = "Reset Parameters"
-    bl_description = "Set this effect's parameters back to the values written in the .fx file"
+    bl_description = (
+        "Set this effect's parameters back to the values written in the .fx file"
+    )
 
     root_name: StringProperty(options={"HIDDEN", "SKIP_SAVE"})
 
@@ -858,13 +918,17 @@ def draw_effect_controls(layout, entry):
     meta = mme_param_meta(root)
     if meta:
         col.separator()
-        for name, info in sorted(meta.items(), key=lambda item: item[1].get("order", 0)):
+        for name, info in sorted(
+            meta.items(), key=lambda item: item[1].get("order", 0)
+        ):
             if info.get("prop") in root:
                 col.prop(root, '["%s"]' % info["prop"], text=info.get("label") or name)
     row = box.row(align=True)
     reset = row.operator("ninesync.reset_effect_params", text="Reset", icon="LOOP_BACK")
     reset.root_name = root.name
-    rebuild = row.operator("ninesync.refresh_effects", text="Rebuild", icon="FILE_REFRESH")
+    rebuild = row.operator(
+        "ninesync.refresh_effects", text="Rebuild", icon="FILE_REFRESH"
+    )
     rebuild.root_name = root.name
     row = box.row(align=True)
     bake = row.operator("ninesync.bake_effects", text="Bake", icon="RENDER_ANIMATION")
@@ -898,7 +962,11 @@ class MMDBRIDGE_PT_accessories(Panel):
             row.label(text=entry.display)
             if armature is not None:
                 row.prop_search(entry, "parent_bone", armature.pose, "bones", text="")
-        draw_wrapped(layout, "MME effects (.fx) for these accessories are set up in the %s panel." % NINESYNC_FX_LABEL)
+        draw_wrapped(
+            layout,
+            "MME effects (.fx) for these accessories are set up in the %s panel."
+            % NINESYNC_FX_LABEL,
+        )
 
 
 def fx_effect_root(obj):
@@ -925,7 +993,9 @@ def fx_pass_summary(obj):
     except (TypeError, ValueError):
         info = {}
     backend = "Geometry Nodes" if obj.get(MME_BACKEND_PROP) == "GEO" else "Python"
-    loops = ", ".join("%s x%d" % (var or "loop", count) for var, count in info.get("loops", []))
+    loops = ", ".join(
+        "%s x%d" % (var or "loop", count) for var, count in info.get("loops", [])
+    )
     flags = []
     if obj.get(MME_BAKED_PROP):
         flags.append("baked")
@@ -940,7 +1010,10 @@ def fx_control_text(desc):
     kind = desc.get("kind")
     source = desc.get("from") or ""
     if kind == "const":
-        return "missing: %s (uses %s)" % (source or "target", ", ".join("%g" % v for v in desc.get("values", [0.0])))
+        return "missing: %s (uses %s)" % (
+            source or "target",
+            ", ".join("%g" % v for v in desc.get("values", [0.0])),
+        )
     if kind == "self":
         return "this accessory: %s" % (desc.get("item") or "transform")
     if kind == "object":
@@ -958,7 +1031,9 @@ def draw_fx_selected(layout, context, root, active):
     settings = context.scene.mmd_bridge
     row = layout.row(align=True)
     row.scale_y = 1.2
-    rebuild = row.operator("ninesync.refresh_effects", text="Rebuild", icon="FILE_REFRESH")
+    rebuild = row.operator(
+        "ninesync.refresh_effects", text="Rebuild", icon="FILE_REFRESH"
+    )
     rebuild.root_name = root.name
     bake = row.operator("ninesync.bake_effects", text="Bake", icon="RENDER_ANIMATION")
     bake.root_name = root.name
@@ -966,9 +1041,15 @@ def draw_fx_selected(layout, context, root, active):
     clear.root_name = root.name
     clear.clear = True
     col = layout.column(align=True)
-    col.label(text="Accessory: %s" % root.get("mme_acc_name", root.name), icon="EMPTY_AXIS")
-    col.label(text="Effect: %s" % os.path.basename(root.get("mme_fx", "")), icon="SHADERFX")
-    col.label(text="Mesh: %s" % os.path.basename(root.get("mme_x", "")), icon="MESH_DATA")
+    col.label(
+        text="Accessory: %s" % root.get("mme_acc_name", root.name), icon="EMPTY_AXIS"
+    )
+    col.label(
+        text="Effect: %s" % os.path.basename(root.get("mme_fx", "")), icon="SHADERFX"
+    )
+    col.label(
+        text="Mesh: %s" % os.path.basename(root.get("mme_x", "")), icon="MESH_DATA"
+    )
     header, body = layout.panel("ninesync_fx_keyed", default_closed=False)
     header.label(text="Keyed from the PMM", icon="KEYINGSET")
     if body is not None:
@@ -978,7 +1059,9 @@ def draw_fx_selected(layout, context, root, active):
     meta = mme_param_meta(root)
     header, body = layout.panel("ninesync_fx_params", default_closed=False)
     header.label(text="Effect Parameters", icon="PROPERTIES")
-    reset = header.operator("ninesync.reset_effect_params", text="", icon="LOOP_BACK", emboss=False)
+    reset = header.operator(
+        "ninesync.reset_effect_params", text="", icon="LOOP_BACK", emboss=False
+    )
     reset.root_name = root.name
     if body is not None:
         try:
@@ -987,14 +1070,19 @@ def draw_fx_selected(layout, context, root, active):
             structural = set()
         if not meta:
             body.label(text="This effect exposes no parameters")
-        for name, info in sorted(meta.items(), key=lambda item: item[1].get("order", 0)):
+        for name, info in sorted(
+            meta.items(), key=lambda item: item[1].get("order", 0)
+        ):
             if info.get("prop") not in root:
                 continue
             row = body.row(align=True)
             row.prop(root, '["%s"]' % info["prop"], text=info.get("label") or name)
             row.label(text="", icon="MODIFIER" if name in structural else "BLANK1")
         if structural & set(meta):
-            draw_wrapped(body, "Parameters with the wrench change the geometry; the effect rebuilds after you edit them.")
+            draw_wrapped(
+                body,
+                "Parameters with the wrench change the geometry; the effect rebuilds after you edit them.",
+            )
     layout.row().prop(settings, "fx_info_tab", expand=True)
     box = layout.box()
     tab = settings.fx_info_tab
@@ -1020,7 +1108,10 @@ def draw_fx_selected(layout, context, root, active):
                 emboss=False,
             )
             select.name = obj.name
-            row.label(text=backend, icon="GEOMETRY_NODES" if backend == "Geometry Nodes" else "SCRIPT")
+            row.label(
+                text=backend,
+                icon="GEOMETRY_NODES" if backend == "Geometry Nodes" else "SCRIPT",
+            )
             detail = ([loops] if loops else []) + flags
             if detail:
                 sub = box.row()
@@ -1039,15 +1130,26 @@ def draw_fx_selected(layout, context, root, active):
             except (TypeError, ValueError):
                 varyings, uniforms, driven = [], [], []
             col = box.column(align=True)
-            col.label(text="%s / %s" % (info.get("technique", "?"), info.get("pass", active.name)), icon="OBJECT_DATA")
+            col.label(
+                text="%s / %s"
+                % (info.get("technique", "?"), info.get("pass", active.name)),
+                icon="OBJECT_DATA",
+            )
             col.label(text="Subset %s, %s backend" % (info.get("subset", "?"), backend))
             if loops:
                 col.label(text="Loops: %s" % loops)
             if flags:
                 col.label(text="State: %s" % ", ".join(flags))
             col.label(text="%d vertex outputs to the material" % len(varyings))
-            col.label(text="%d material inputs from the scene (%d by drivers)" % (len(uniforms), len(driven)))
-            if active.data is not None and len(active.data.materials) and active.data.materials[0] is not None:
+            col.label(
+                text="%d material inputs from the scene (%d by drivers)"
+                % (len(uniforms), len(driven))
+            )
+            if (
+                active.data is not None
+                and len(active.data.materials)
+                and active.data.materials[0] is not None
+            ):
                 mat = active.data.materials[0]
                 col.label(text=mat.name, icon="MATERIAL")
                 group = bpy.data.node_groups.get(mat.get(MME_GROUP_PROP, ""))
@@ -1087,8 +1189,13 @@ class NINESYNC_PT_fx(Panel):
         col.prop(settings, "mme_standard_view")
         row = layout.row()
         row.scale_y = 1.3
-        row.operator("ninesync.refresh_effects", text="Rebuild All Effects", icon="SHADERFX")
-        draw_wrapped(layout, "Effects show in Material Preview and Rendered mode. Offscreen blur and post passes are approximated.")
+        row.operator(
+            "ninesync.refresh_effects", text="Rebuild All Effects", icon="SHADERFX"
+        )
+        draw_wrapped(
+            layout,
+            "Effects show in Material Preview and Rendered mode. Offscreen blur and post passes are approximated.",
+        )
 
 
 class NINESYNC_PT_fx_selected(Panel):
@@ -1101,13 +1208,19 @@ class NINESYNC_PT_fx_selected(Panel):
 
     @classmethod
     def poll(cls, context):
-        return not settings_outdated(context.scene) and context.scene.mmd_bridge.mme_effects
+        return (
+            not settings_outdated(context.scene)
+            and context.scene.mmd_bridge.mme_effects
+        )
 
     def draw(self, context):
         active = context.active_object
         root = fx_effect_root(active)
         if root is None:
-            draw_wrapped(self.layout, "Select an effect accessory (MMDAcc_...) or one of its passes to see its settings here.")
+            draw_wrapped(
+                self.layout,
+                "Select an effect accessory (MMDAcc_...) or one of its passes to see its settings here.",
+            )
             return
         draw_fx_selected(self.layout, context, root, active)
 
@@ -1123,7 +1236,10 @@ class NINESYNC_PT_fx_accessories(Panel):
 
     @classmethod
     def poll(cls, context):
-        return not settings_outdated(context.scene) and context.scene.mmd_bridge.mme_effects
+        return (
+            not settings_outdated(context.scene)
+            and context.scene.mmd_bridge.mme_effects
+        )
 
     def draw(self, context):
         layout = self.layout
@@ -1139,7 +1255,9 @@ class NINESYNC_PT_fx_accessories(Panel):
             if entry.effect_note:
                 note_row = layout.row()
                 note_row.scale_y = 0.85
-                note_row.alert = entry.effect_note.startswith(("Effect failed", "Effect error"))
+                note_row.alert = entry.effect_note.startswith(
+                    ("Effect failed", "Effect error")
+                )
                 note_row.label(text=short_text(entry.effect_note, 60), icon="INFO")
             if entry.use_effect:
                 draw_effect_controls(layout, entry)
@@ -1156,12 +1274,18 @@ class NINESYNC_PT_fx_bake(Panel):
 
     @classmethod
     def poll(cls, context):
-        return not settings_outdated(context.scene) and context.scene.mmd_bridge.mme_effects
+        return (
+            not settings_outdated(context.scene)
+            and context.scene.mmd_bridge.mme_effects
+        )
 
     def draw(self, context):
         layout = self.layout
         settings = context.scene.mmd_bridge
-        layout.label(text="Scene frames %d - %d" % (context.scene.frame_start, context.scene.frame_end))
+        layout.label(
+            text="Scene frames %d - %d"
+            % (context.scene.frame_start, context.scene.frame_end)
+        )
         layout.prop(settings, "mme_bake_target", text="Store")
         if settings.mme_bake_target == "DISK":
             layout.prop(settings, "mme_bake_dir", text="")
@@ -1182,7 +1306,10 @@ class NINESYNC_PT_fx_library(Panel):
 
     @classmethod
     def poll(cls, context):
-        return not settings_outdated(context.scene) and context.scene.mmd_bridge.mme_effects
+        return (
+            not settings_outdated(context.scene)
+            and context.scene.mmd_bridge.mme_effects
+        )
 
     def draw(self, context):
         layout = self.layout
@@ -1190,14 +1317,25 @@ class NINESYNC_PT_fx_library(Panel):
         path = mme_core_path()
         names = mme_core_names()
         col = layout.column(align=True)
-        col.label(text=MME_CORE_FILE, icon="FILE_BLEND" if os.path.isfile(path) else "ERROR")
+        col.label(
+            text=MME_CORE_FILE, icon="FILE_BLEND" if os.path.isfile(path) else "ERROR"
+        )
         col.label(text="%d shared groups in the library" % len(names))
         local = [g for g in bpy.data.node_groups if g.get(MME_KEY_PROP)]
-        col.label(text="%d shared groups in this file (%d not in the library)" % (len(local), len([g for g in local if g.name not in names])))
+        col.label(
+            text="%d shared groups in this file (%d not in the library)"
+            % (len(local), len([g for g in local if g.name not in names]))
+        )
         layout.prop(settings, "mme_core_autosave")
         row = layout.row(align=True)
-        row.operator("ninesync.save_core_library", text="Save to Library", icon="FILE_TICK")
-        row.operator("ninesync.rebuild_core_library", text="Rebuild Standard", icon="FILE_REFRESH")
+        row.operator(
+            "ninesync.save_core_library", text="Save to Library", icon="FILE_TICK"
+        )
+        row.operator(
+            "ninesync.rebuild_core_library",
+            text="Rebuild Standard",
+            icon="FILE_REFRESH",
+        )
 
 
 class NINESYNC_OT_select_object(Operator):
@@ -1231,7 +1369,9 @@ class NINESYNC_OT_save_core_library(Operator):
         except (OSError, RuntimeError) as error:
             self.report({"ERROR"}, "Could not write %s: %s" % (MME_CORE_FILE, error))
             return {"CANCELLED"}
-        self.report({"INFO"}, "%s now holds %d shared group(s)" % (MME_CORE_FILE, count))
+        self.report(
+            {"INFO"}, "%s now holds %d shared group(s)" % (MME_CORE_FILE, count)
+        )
         redraw_all()
         return {"FINISHED"}
 
@@ -1248,7 +1388,10 @@ class NINESYNC_OT_rebuild_core_library(Operator):
         except (OSError, RuntimeError, FxError) as error:
             self.report({"ERROR"}, str(error))
             return {"CANCELLED"}
-        self.report({"INFO"}, "Rebuilt %d standard group(s); %s holds %d" % (built, MME_CORE_FILE, count))
+        self.report(
+            {"INFO"},
+            "Rebuilt %d standard group(s); %s holds %d" % (built, MME_CORE_FILE, count),
+        )
         redraw_all()
         return {"FINISHED"}
 

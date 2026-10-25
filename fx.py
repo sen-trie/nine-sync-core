@@ -257,7 +257,8 @@ class FxPreprocessor:
                     try:
                         out.append(
                             self.run_text(
-                                fx_read_text(path), os.path.dirname(os.path.abspath(path))
+                                fx_read_text(path),
+                                os.path.dirname(os.path.abspath(path)),
                             )
                         )
                     finally:
@@ -283,7 +284,11 @@ class FxPreprocessor:
         i = 0
         while i < len(tokens):
             token = tokens[i]
-            if token in self.macros and token not in hidden and (token[0].isalpha() or token[0] == "_"):
+            if (
+                token in self.macros
+                and token not in hidden
+                and (token[0].isalpha() or token[0] == "_")
+            ):
                 params, body = self.macros[token]
                 if params is None:
                     out.append(self.expand(body, hidden | {token}))
@@ -421,9 +426,21 @@ class FxFunction:
 
 
 class FxGlobal:
-    __slots__ = ("name", "type", "quals", "semantic", "register", "ann", "init", "array", "order")
+    __slots__ = (
+        "name",
+        "type",
+        "quals",
+        "semantic",
+        "register",
+        "ann",
+        "init",
+        "array",
+        "order",
+    )
 
-    def __init__(self, name, type_name, quals, semantic, register, ann, init, array, order):
+    def __init__(
+        self, name, type_name, quals, semantic, register, ann, init, array, order
+    ):
         self.name = name
         self.type = type_name
         self.quals = quals
@@ -508,12 +525,16 @@ class FxParser:
 
     def expect(self, text):
         if self.kind == "str" or self.text != text:
-            raise FxError("expected '%s' but found '%s' (token %d)" % (text, self.text, self.pos))
+            raise FxError(
+                "expected '%s' but found '%s' (token %d)" % (text, self.text, self.pos)
+            )
         return self.advance()
 
     def ident(self):
         if self.kind != "id":
-            raise FxError("expected identifier but found '%s' (token %d)" % (self.text, self.pos))
+            raise FxError(
+                "expected identifier but found '%s' (token %d)" % (self.text, self.pos)
+            )
         return self.advance()[1]
 
     def parse(self):
@@ -552,7 +573,11 @@ class FxParser:
     def parse_type(self):
         name = self.ident()
         if name == "unsigned":
-            name = self.ident() if self.kind == "id" and self.text in ("int", "short", "char") else "int"
+            name = (
+                self.ident()
+                if self.kind == "id" and self.text in ("int", "short", "char")
+                else "int"
+            )
             return "uint"
         if name == "struct":
             return self.ident()
@@ -566,8 +591,15 @@ class FxParser:
             self.expect(">")
             if lower == "vector":
                 return "%s%s" % (base, dims[0] if dims else "4")
-            return "%s%sx%s" % (base, dims[0] if dims else "4", dims[1] if len(dims) > 1 else "4")
-        if lower in ("texture1d", "texture2d", "texture3d", "texturecube", "texture") and self.text == "<":
+            return "%s%sx%s" % (
+                base,
+                dims[0] if dims else "4",
+                dims[1] if len(dims) > 1 else "4",
+            )
+        if (
+            lower in ("texture1d", "texture2d", "texture3d", "texturecube", "texture")
+            and self.text == "<"
+        ):
             self.advance()
             depth = 1
             while depth and self.kind != "eof":
@@ -699,7 +731,15 @@ class FxParser:
         elif self.text == "{" and type_name.lower().startswith("sampler"):
             init = ("sampler_state", self.parse_state_block())
         self.program.globals[name] = FxGlobal(
-            name, type_name, quals, semantic.upper() if semantic else None, register, ann, init, array, self.order
+            name,
+            type_name,
+            quals,
+            semantic.upper() if semantic else None,
+            register,
+            ann,
+            init,
+            array,
+            self.order,
         )
         self.order += 1
 
@@ -768,7 +808,14 @@ class FxParser:
                     if self.accept("="):
                         default = self.parse_assign()
                     params.append(
-                        FxParam(pname, type_name, semantic.upper() if semantic else None, quals, default, array)
+                        FxParam(
+                            pname,
+                            type_name,
+                            semantic.upper() if semantic else None,
+                            quals,
+                            default,
+                            array,
+                        )
                     )
                     if not self.accept(","):
                         break
@@ -835,7 +882,9 @@ class FxParser:
                 elif lower == "pixelshader":
                     fx_pass.ps = value if isinstance(value, tuple) else None
                 else:
-                    fx_pass.states[lower] = " ".join(value) if isinstance(value, list) else value
+                    fx_pass.states[lower] = (
+                        " ".join(value) if isinstance(value, list) else value
+                    )
             technique.passes.append(fx_pass)
         self.program.techniques.append(technique)
 
@@ -965,7 +1014,11 @@ class FxParser:
                 self.parse_semantic_after_colon()
             init = None
             if self.accept("="):
-                init = self.parse_initializer() if self.text == "{" else self.parse_assign()
+                init = (
+                    self.parse_initializer()
+                    if self.text == "{"
+                    else self.parse_assign()
+                )
             declarators.append((name, array, init))
             if not self.accept(","):
                 break
@@ -1015,7 +1068,12 @@ class FxParser:
         while self.peek(offset)[0] == "id" and self.peek(offset)[1] in FX_QUALIFIERS:
             offset += 1
         name = self.peek(offset)[1]
-        if not self.program.is_type(name) or name.lower() in ("texture", "sampler", "string", "void"):
+        if not self.program.is_type(name) or name.lower() in (
+            "texture",
+            "sampler",
+            "string",
+            "void",
+        ):
             return None
         if self.peek(offset + 1)[1] == ")":
             return offset + 2
@@ -1064,7 +1122,11 @@ class FxParser:
             if text in ("false", "FALSE"):
                 return ("num", 0.0, "b")
             if self.text == "(" and self.program.is_type(text):
-                return ("ctor", self.program.typedefs.get(text, text), self.parse_args())
+                return (
+                    "ctor",
+                    self.program.typedefs.get(text, text),
+                    self.parse_args(),
+                )
             if self.text == "<" and text.lower() in ("vector", "matrix"):
                 self.pos -= 1
                 type_name = self.parse_type()
@@ -1135,7 +1197,9 @@ def fx_script_values(program, wanted):
     return found
 
 
-FX_COLOR_NAME = re.compile(r"(?i)colou?r|tint|rgb|^col(?![a-z])|(?<=[a-z0-9_])Col(?![a-z])")
+FX_COLOR_NAME = re.compile(
+    r"(?i)colou?r|tint|rgb|^col(?![a-z])|(?<=[a-z0-9_])Col(?![a-z])"
+)
 
 
 def fx_find_params(program):
@@ -1185,8 +1249,13 @@ def fx_find_params(program):
             "help": str(fx_annotation(g, "UIHelp", program, "") or ""),
             "order": g.order,
         }
-        meta["color"] = t[0] == "f" and size in (3, 4) and (
-            meta["widget"] == "color" or any(FX_COLOR_NAME.search(text) for text in (g.name, meta["label"]))
+        meta["color"] = (
+            t[0] == "f"
+            and size in (3, 4)
+            and (
+                meta["widget"] == "color"
+                or any(FX_COLOR_NAME.search(text) for text in (g.name, meta["label"]))
+            )
         )
         for key in ("UIMin", "UIMax"):
             value = fx_annotation(g, key, program, None)
@@ -1203,7 +1272,9 @@ def fx_vs_globals(program, passes=None):
     seen = set()
     stack = []
     if passes is None:
-        passes = [fx_pass for technique in program.techniques for fx_pass in technique.passes]
+        passes = [
+            fx_pass for technique in program.techniques for fx_pass in technique.passes
+        ]
     for technique in [None]:
         for fx_pass in passes:
             if fx_pass.vs is None:
@@ -1521,7 +1592,9 @@ class FxExec:
                 mt = fx_resolve_type(type_name, self.program)
                 if array is not None:
                     size = int(self.const_int(array))
-                    members[name] = FxValue(fx_array_type(mt, size), [self.zero(mt) for _ in range(size)])
+                    members[name] = FxValue(
+                        fx_array_type(mt, size), [self.zero(mt) for _ in range(size)]
+                    )
                 else:
                     members[name] = self.zero(mt)
             return FxValue(t, members)
@@ -1642,14 +1715,23 @@ class FxExec:
             items = node[1] if node[0] == "init" else [node]
             elems = []
             flat = None
-            if fx_is_numeric(t[1]) and items and not (isinstance(items[0], tuple) and items[0][0] == "init"):
+            if (
+                fx_is_numeric(t[1])
+                and items
+                and not (isinstance(items[0], tuple) and items[0][0] == "init")
+            ):
                 flat = []
                 for item in items:
                     flat.extend(self.eval(item).c)
                 per = fx_count(t[1][1])
                 if len(flat) >= per * t[2] and len(items) != t[2]:
                     for k in range(t[2]):
-                        elems.append(self.convert(FxValue(("f", t[1][1]), flat[k * per:(k + 1) * per]), t[1]))
+                        elems.append(
+                            self.convert(
+                                FxValue(("f", t[1][1]), flat[k * per : (k + 1) * per]),
+                                t[1],
+                            )
+                        )
                     return FxValue(t, elems)
             for k in range(t[2]):
                 if k < len(items):
@@ -1679,12 +1761,18 @@ class FxExec:
                 if isinstance(item, tuple):
                     value.c[name] = self.eval_init(item, mt)
                     k += 1
-                elif fx_is_numeric(mt) and fx_is_numeric(item.t) and fx_count(item.t[1]) < fx_count(mt[1]):
+                elif (
+                    fx_is_numeric(mt)
+                    and fx_is_numeric(item.t)
+                    and fx_count(item.t[1]) < fx_count(mt[1])
+                ):
                     comps = []
                     while k < len(flat) and len(comps) < fx_count(mt[1]):
                         comps.extend(flat[k].c)
                         k += 1
-                    value.c[name] = self.convert(FxValue(("f", mt[1]), comps[: fx_count(mt[1])]), mt)
+                    value.c[name] = self.convert(
+                        FxValue(("f", mt[1]), comps[: fx_count(mt[1])]), mt
+                    )
                 else:
                     value.c[name] = self.convert(item, mt)
                     k += 1
@@ -1718,7 +1806,9 @@ class FxExec:
                 out = []
                 for i in range(r):
                     for j in range(c):
-                        out.append(comps[i * sc + j] if i < sr and j < sc else B.const(0.0))
+                        out.append(
+                            comps[i * sc + j] if i < sr and j < sc else B.const(0.0)
+                        )
                 comps = out
             elif len(comps) == 1 and n > 1:
                 comps = comps * n
@@ -1741,7 +1831,10 @@ class FxExec:
                     mt = fx_resolve_type(type_name, self.program)
                     if array is not None:
                         size = int(self.const_int(array))
-                        out[name] = FxValue(fx_array_type(mt, size), [self.convert(value, mt) for _ in range(size)])
+                        out[name] = FxValue(
+                            fx_array_type(mt, size),
+                            [self.convert(value, mt) for _ in range(size)],
+                        )
                     elif fx_is_numeric(mt):
                         out[name] = self.convert(FxValue(value.t, [value.c[0]]), mt)
                     else:
@@ -1762,7 +1855,11 @@ class FxExec:
             if param.array is not None and not fx_is_array(pt):
                 pt = fx_array_type(pt, self.const_int(param.array))
             if arg is None:
-                scope[param.name] = self.zero(pt) if param.default is None else self.convert(self.eval(param.default), pt)
+                scope[param.name] = (
+                    self.zero(pt)
+                    if param.default is None
+                    else self.convert(self.eval(param.default), pt)
+                )
             else:
                 scope[param.name] = self.convert(arg, pt)
         saved_mask = self.mask
@@ -1778,7 +1875,11 @@ class FxExec:
             self.frames.pop()
             self.mask = saved_mask
         rt = fx_resolve_type(function.ret, self.program)
-        result = frame.ret if frame.ret is not None else (self.zero(rt) if rt != "void" else FxValue("void", None))
+        result = (
+            frame.ret
+            if frame.ret is not None
+            else (self.zero(rt) if rt != "void" else FxValue("void", None))
+        )
         outs = {}
         for param in function.params:
             if "out" in param.quals or "inout" in param.quals:
@@ -1980,9 +2081,13 @@ class FxExec:
         if fx_is_numeric(new.t):
             return FxValue(new.t, [B.select(mask, a, b) for a, b in zip(new.c, old.c)])
         if isinstance(new.t, FxStruct):
-            return FxValue(new.t, {k: self.merge(mask, new.c[k], old.c[k]) for k in new.c})
+            return FxValue(
+                new.t, {k: self.merge(mask, new.c[k], old.c[k]) for k in new.c}
+            )
         if fx_is_array(new.t):
-            return FxValue(new.t, [self.merge(mask, a, b) for a, b in zip(new.c, old.c)])
+            return FxValue(
+                new.t, [self.merge(mask, a, b) for a, b in zip(new.c, old.c)]
+            )
         return new
 
     def eval(self, node):
@@ -2099,8 +2204,12 @@ class FxExec:
         if op == "||":
             return FxValue(("b", dims), [B.lor(x, y) for x, y in zip(ca, cb)])
         if op in ("&", "|", "^", "<<", ">>"):
-            result_base = "b" if fa == "b" and fb == "b" and op in ("&", "|", "^") else "i"
-            return FxValue((result_base, dims), [B.bitop(op, x, y) for x, y in zip(ca, cb)])
+            result_base = (
+                "b" if fa == "b" and fb == "b" and op in ("&", "|", "^") else "i"
+            )
+            return FxValue(
+                (result_base, dims), [B.bitop(op, x, y) for x, y in zip(ca, cb)]
+            )
         raise FxError("binary %s" % op)
 
     def eval_assign(self, node):
@@ -2124,7 +2233,9 @@ class FxExec:
         if fx_is_numeric(a.t) and fx_is_numeric(b.t):
             dims, ca, cb = self.broadcast(a, b)
             base = "f" if "f" in (a.t[0], b.t[0]) else a.t[0]
-            return FxValue((base, dims), [self.B.select(c, x, y) for x, y in zip(ca, cb)])
+            return FxValue(
+                (base, dims), [self.B.select(c, x, y) for x, y in zip(ca, cb)]
+            )
         return self.merge(c, a, self.convert(b, a.t))
 
     def eval_cast(self, node):
@@ -2155,9 +2266,14 @@ class FxExec:
         dims = t[1]
         if len(dims) == 2:
             found = re.findall(r"_m(\d)(\d)|_(\d)(\d)", name)
-            if not found or "".join(
-                ("_m%s%s" % (a, b)) if a else ("_%s%s" % (c, d)) for a, b, c, d in found
-            ) != name:
+            if (
+                not found
+                or "".join(
+                    ("_m%s%s" % (a, b)) if a else ("_%s%s" % (c, d))
+                    for a, b, c, d in found
+                )
+                != name
+            ):
                 return None
             out = []
             for a, b, c, d in found:
@@ -2183,7 +2299,11 @@ class FxExec:
         comps = value.c
         out = []
         for i in indices:
-            out.append(comps[i] if i < len(comps) else comps[0] if len(comps) == 1 else self.B.const(0.0))
+            out.append(
+                comps[i]
+                if i < len(comps)
+                else comps[0] if len(comps) == 1 else self.B.const(0.0)
+            )
         dims = () if len(out) == 1 else (len(out),)
         return FxValue((value.t[0], dims), out)
 
@@ -2200,7 +2320,10 @@ class FxExec:
             dims = value.t[1]
             if len(dims) == 2:
                 rows = [
-                    FxValue((value.t[0], (dims[1],)), value.c[r * dims[1]:(r + 1) * dims[1]])
+                    FxValue(
+                        (value.t[0], (dims[1],)),
+                        value.c[r * dims[1] : (r + 1) * dims[1]],
+                    )
                     for r in range(dims[0])
                 ]
                 if known is not None:
@@ -2264,7 +2387,10 @@ class FxExec:
             indices = self.swizzle_indices(current.t, arg)
             if indices is None:
                 raise FxError("bad member %s" % arg)
-            sub = FxValue((current.t[0], () if len(indices) == 1 else (len(indices),)), [current.c[i] for i in indices])
+            sub = FxValue(
+                (current.t[0], () if len(indices) == 1 else (len(indices),)),
+                [current.c[i] for i in indices],
+            )
             sub = self.write(sub, path[1:], value, mask)
             comps = list(current.c)
             for j, i in enumerate(indices):
@@ -2292,7 +2418,11 @@ class FxExec:
         else:
             groups = [[i] for i in range(len(comps))]
             sub_type = (current.t[0], ())
-        targets = range(len(groups)) if known is None else [max(0, min(int(known), len(groups) - 1))]
+        targets = (
+            range(len(groups))
+            if known is None
+            else [max(0, min(int(known), len(groups) - 1))]
+        )
         for k in targets:
             sub_mask = mask
             if known is None:
@@ -2308,9 +2438,12 @@ class FxExec:
         candidates = self.program.functions.get(name)
         if not candidates:
             return None
-        fitting = [f for f in candidates if len(f.params) >= len(args) and all(
-            p.default is not None for p in f.params[len(args):]
-        )]
+        fitting = [
+            f
+            for f in candidates
+            if len(f.params) >= len(args)
+            and all(p.default is not None for p in f.params[len(args) :])
+        ]
         if not fitting:
             return None
         if len(fitting) == 1:
@@ -2351,12 +2484,22 @@ class FxExec:
         intrinsic = FX_INTRINSICS.get(name)
         if intrinsic is None:
             raise FxUnsupported("unknown function %s" % name)
-        if self.B.wants_text and (name in FX_GROUP_INTRINSICS or name in FX_NATIVE_INTRINSICS):
+        if self.B.wants_text and (
+            name in FX_GROUP_INTRINSICS or name in FX_NATIVE_INTRINSICS
+        ):
             args = [self.eval(a) for a in arg_nodes]
-            native = self.B.native_intrinsic(self, name, args) if name in FX_NATIVE_INTRINSICS else None
+            native = (
+                self.B.native_intrinsic(self, name, args)
+                if name in FX_NATIVE_INTRINSICS
+                else None
+            )
             if native is not None:
                 return native
-            grouped = self.B.intrinsic_group(self, name, args) if name in FX_GROUP_INTRINSICS else None
+            grouped = (
+                self.B.intrinsic_group(self, name, args)
+                if name in FX_GROUP_INTRINSICS
+                else None
+            )
             if grouped is not None:
                 return grouped
             return fx_intrinsic_values(self, name, args)
@@ -2375,7 +2518,9 @@ class FxExec:
             lod = None
             if lower == "samplelevel" and len(args) > 2:
                 lod = self.eval(args[2]).c[0]
-            return self.sample(info, uv.c[0], uv.c[1] if len(uv.c) > 1 else self.B.const(0.0), lod)
+            return self.sample(
+                info, uv.c[0], uv.c[1] if len(uv.c) > 1 else self.B.const(0.0), lod
+            )
         raise FxUnsupported("method %s" % name)
 
     def sample(self, info, u, v, lod=None):
@@ -2385,7 +2530,10 @@ class FxExec:
     def elementwise(self, fn, *values):
         if len(values) == 1:
             value = values[0]
-            return FxValue(("f" if value.t[0] != "i" else "i", value.t[1]), [fn(x) for x in value.c])
+            return FxValue(
+                ("f" if value.t[0] != "i" else "i", value.t[1]),
+                [fn(x) for x in value.c],
+            )
         dims = values[0].t[1]
         comps = [values[0].c]
         result_dims = dims
@@ -2393,7 +2541,14 @@ class FxExec:
         for other in values[1:]:
             result_dims, ca, cb = self.broadcast(current, other)
             current = FxValue(("f", result_dims), ca)
-            comps = [c if len(c) == len(ca) else (c * len(ca) if len(c) == 1 else c[: len(ca)]) for c in comps]
+            comps = [
+                (
+                    c
+                    if len(c) == len(ca)
+                    else (c * len(ca) if len(c) == 1 else c[: len(ca)])
+                )
+                for c in comps
+            ]
             comps.append(cb)
         size = max(len(c) for c in comps)
         comps = [c * size if len(c) == 1 else c[:size] for c in comps]
@@ -2444,7 +2599,9 @@ def fx_args(ex, nodes):
 def fx_unary_intrinsic(name):
     def run(ex, nodes):
         (a,) = fx_args(ex, nodes)
-        return ex.elementwise(lambda x: ex.B.unary(name, x), FxValue(("f", a.t[1]), a.c))
+        return ex.elementwise(
+            lambda x: ex.B.unary(name, x), FxValue(("f", a.t[1]), a.c)
+        )
 
     return run
 
@@ -2492,13 +2649,20 @@ def fx_i_atan2(ex, nodes):
 def fx_i_lerp(ex, nodes):
     a, b, t = fx_args(ex, nodes)
     B = ex.B
-    return ex.elementwise(lambda x, y, s: B.add(x, B.mul(B.sub(y, x), s)), FxValue(("f", a.t[1]), a.c), b, t)
+    return ex.elementwise(
+        lambda x, y, s: B.add(x, B.mul(B.sub(y, x), s)),
+        FxValue(("f", a.t[1]), a.c),
+        b,
+        t,
+    )
 
 
 def fx_i_step(ex, nodes):
     a, b = fx_args(ex, nodes)
     B = ex.B
-    return ex.elementwise(lambda edge, x: B.cmp(">=", x, edge), FxValue(("f", a.t[1]), a.c), b)
+    return ex.elementwise(
+        lambda edge, x: B.cmp(">=", x, edge), FxValue(("f", a.t[1]), a.c), b
+    )
 
 
 def fx_i_smoothstep(ex, nodes):
@@ -2615,7 +2779,7 @@ def fx_i_mul(ex, nodes):
         k = min(cols, db[0])
         out = []
         for i in range(rows):
-            out.append(fx_dot_comps(B, a.c[i * cols:i * cols + k], b.c[:k]))
+            out.append(fx_dot_comps(B, a.c[i * cols : i * cols + k], b.c[:k]))
         return FxValue(("f", (rows,)), out)
     r1, c1 = da
     r2, c2 = db
@@ -2623,7 +2787,13 @@ def fx_i_mul(ex, nodes):
     out = []
     for i in range(r1):
         for j in range(c2):
-            out.append(fx_dot_comps(B, [a.c[i * c1 + m] for m in range(k)], [b.c[m * c2 + j] for m in range(k)]))
+            out.append(
+                fx_dot_comps(
+                    B,
+                    [a.c[i * c1 + m] for m in range(k)],
+                    [b.c[m * c2 + j] for m in range(k)],
+                )
+            )
     return FxValue(("f", (r1, c2)), out)
 
 
@@ -2632,7 +2802,9 @@ def fx_i_transpose(ex, nodes):
     if len(a.t[1]) != 2:
         return a
     r, c = a.t[1]
-    return FxValue((a.t[0], (c, r)), [a.c[i * c + j] for j in range(c) for i in range(r)])
+    return FxValue(
+        (a.t[0], (c, r)), [a.c[i * c + j] for j in range(c) for i in range(r)]
+    )
 
 
 def fx_i_determinant(ex, nodes):
@@ -2645,7 +2817,7 @@ def fx_i_determinant(ex, nodes):
             return a.c[rows[0] * n + cols[0]]
         total = None
         for k, col in enumerate(cols):
-            sub = det(rows[1:], cols[:k] + cols[k + 1:])
+            sub = det(rows[1:], cols[:k] + cols[k + 1 :])
             term = B.mul(a.c[rows[0] * n + col], sub)
             if k % 2:
                 term = B.neg(term)
@@ -2696,12 +2868,16 @@ def fx_i_zero_like(ex, nodes):
 
 def fx_i_radians(ex, nodes):
     (a,) = fx_args(ex, nodes)
-    return ex.elementwise(lambda x: ex.B.mul(x, math.pi / 180.0), FxValue(("f", a.t[1]), a.c))
+    return ex.elementwise(
+        lambda x: ex.B.mul(x, math.pi / 180.0), FxValue(("f", a.t[1]), a.c)
+    )
 
 
 def fx_i_degrees(ex, nodes):
     (a,) = fx_args(ex, nodes)
-    return ex.elementwise(lambda x: ex.B.mul(x, 180.0 / math.pi), FxValue(("f", a.t[1]), a.c))
+    return ex.elementwise(
+        lambda x: ex.B.mul(x, 180.0 / math.pi), FxValue(("f", a.t[1]), a.c)
+    )
 
 
 def fx_i_isnan(ex, nodes):
@@ -2721,7 +2897,9 @@ def fx_i_sincos(ex, nodes):
 def fx_i_ldexp(ex, nodes):
     a, b = fx_args(ex, nodes)
     B = ex.B
-    return ex.elementwise(lambda x, e: B.mul(x, B.unary("exp2", e)), FxValue(("f", a.t[1]), a.c), b)
+    return ex.elementwise(
+        lambda x, e: B.mul(x, B.unary("exp2", e)), FxValue(("f", a.t[1]), a.c), b
+    )
 
 
 def fx_i_lit(ex, nodes):
@@ -2729,7 +2907,9 @@ def fx_i_lit(ex, nodes):
     B = ex.B
     d = ndotl.c[0]
     h = ndoth.c[0]
-    spec = B.select(B.mul(B.cmp(">", d, 0.0), B.cmp(">", h, 0.0)), B.pow(B.max(h, 0.0), m.c[0]), 0.0)
+    spec = B.select(
+        B.mul(B.cmp(">", d, 0.0), B.cmp(">", h, 0.0)), B.pow(B.max(h, 0.0), m.c[0]), 0.0
+    )
     return FxValue(("f", (4,)), [B.const(1.0), B.max(d, 0.0), spec, B.const(1.0)])
 
 
@@ -2992,7 +3172,15 @@ def fx_plan_draws(program, subset_count, values=None):
         script = fx_technique_script(technique, program)
         if script is None:
             for fx_pass in technique.passes:
-                kind = "buffer" if (fx_pass_script(fx_pass, program) or "").lower().replace(" ", "").find("draw=buffer") >= 0 else "geometry"
+                kind = (
+                    "buffer"
+                    if (fx_pass_script(fx_pass, program) or "")
+                    .lower()
+                    .replace(" ", "")
+                    .find("draw=buffer")
+                    >= 0
+                    else "geometry"
+                )
                 draws.append(FxDraw(technique, fx_pass, subset, [], "", kind, order))
                 order += 1
             continue
@@ -3018,10 +3206,14 @@ def fx_plan_draws(program, subset_count, values=None):
                 fx_pass = passes.get(value)
                 if fx_pass is None:
                     continue
-                pass_script = (fx_pass_script(fx_pass, program) or "").lower().replace(" ", "")
+                pass_script = (
+                    (fx_pass_script(fx_pass, program) or "").lower().replace(" ", "")
+                )
                 kind = "buffer" if "draw=buffer" in pass_script else "geometry"
                 loops = [(index or "", count, name) for name, count, index in stack]
-                draws.append(FxDraw(technique, fx_pass, subset, loops, target, kind, order))
+                draws.append(
+                    FxDraw(technique, fx_pass, subset, loops, target, kind, order)
+                )
                 order += 1
     return draws
 
@@ -3047,7 +3239,9 @@ def fx_entry(program, compiled):
 def fx_bind_entry(function, compile_args):
     uniform = [i for i, p in enumerate(function.params) if "uniform" in p.quals]
     if not uniform and compile_args:
-        uniform = list(range(len(function.params) - len(compile_args), len(function.params)))
+        uniform = list(
+            range(len(function.params) - len(compile_args), len(function.params))
+        )
     bound = {}
     for slot, arg in zip(uniform, compile_args):
         bound[slot] = arg
@@ -3060,7 +3254,17 @@ def fx_norm_semantic(semantic):
     s = semantic.upper()
     if s.startswith("SV_"):
         s = s[3:]
-    if s in ("COLOR", "TEXCOORD", "POSITION", "NORMAL", "TANGENT", "BINORMAL", "BLENDWEIGHT", "BLENDINDICES", "TARGET"):
+    if s in (
+        "COLOR",
+        "TEXCOORD",
+        "POSITION",
+        "NORMAL",
+        "TANGENT",
+        "BINORMAL",
+        "BLENDWEIGHT",
+        "BLENDINDICES",
+        "TARGET",
+    ):
         s = s + "0"
     if s == "TARGET0":
         s = "COLOR0"
@@ -3201,14 +3405,23 @@ class FxImage:
             xa, xb = wrap(x0, w), wrap(x0 + 1, w)
             ya, yb = wrap(y0, h), wrap(y0 + 1, h)
             p = self.pixels
-            texel = (p[ya, xa] * (1 - tx) + p[ya, xb] * tx) * (1 - ty) + (p[yb, xa] * (1 - tx) + p[yb, xb] * tx) * ty
+            texel = (p[ya, xa] * (1 - tx) + p[ya, xb] * tx) * (1 - ty) + (
+                p[yb, xa] * (1 - tx) + p[yb, xb] * tx
+            ) * ty
         texel = np.asarray(texel, dtype=np.float64)
         if texel.ndim == 1:
             return [np.float64(texel[k]) for k in range(4)]
         return [texel[..., k] for k in range(4)]
 
 
-FX_MATRIX_BASES = ("WORLDVIEWPROJECTION", "VIEWPROJECTION", "WORLDVIEW", "PROJECTION", "WORLD", "VIEW")
+FX_MATRIX_BASES = (
+    "WORLDVIEWPROJECTION",
+    "VIEWPROJECTION",
+    "WORLDVIEW",
+    "PROJECTION",
+    "WORLD",
+    "VIEW",
+)
 
 
 FX_MATERIAL_SEMANTICS = {
@@ -3238,7 +3451,7 @@ FX_FLAG_DEFAULTS = {
 def fx_split_matrix_semantic(semantic):
     for base in FX_MATRIX_BASES:
         if semantic.startswith(base):
-            suffix = semantic[len(base):]
+            suffix = semantic[len(base) :]
             if suffix in ("", "INVERSE", "TRANSPOSE", "INVERSETRANSPOSE"):
                 return base, suffix
     return None
@@ -3250,7 +3463,12 @@ def fx_classify_global(g, program):
     if semantic:
         matrix = fx_split_matrix_semantic(semantic)
         if matrix is not None:
-            return ("matrix", matrix[0], matrix[1], "light" if obj == "light" else "camera")
+            return (
+                "matrix",
+                matrix[0],
+                matrix[1],
+                "light" if obj == "light" else "camera",
+            )
         if semantic == "POSITION":
             return ("position", "light" if obj == "light" else "camera")
         if semantic == "DIRECTION":
@@ -3269,7 +3487,12 @@ def fx_classify_global(g, program):
             name = fx_annotation(g, "name", program, "") or ""
             item = fx_annotation(g, "item", program, "") or ""
             return ("control", str(name), str(item))
-        if semantic in ("MOUSEPOSITION", "LEFTMOUSEDOWN", "MIDDLEMOUSEDOWN", "RIGHTMOUSEDOWN"):
+        if semantic in (
+            "MOUSEPOSITION",
+            "LEFTMOUSEDOWN",
+            "MIDDLEMOUSEDOWN",
+            "RIGHTMOUSEDOWN",
+        ):
             return ("zero",)
         return None
     if g.init is None and g.name in FX_FLAG_DEFAULTS:
@@ -3284,7 +3507,17 @@ def fx_classify_global(g, program):
 def fx_source_is_runtime(source):
     if source is None:
         return False
-    return source[0] in ("matrix", "position", "direction", "light_color", "time", "elapsed", "viewport", "control", "param")
+    return source[0] in (
+        "matrix",
+        "position",
+        "direction",
+        "light_color",
+        "time",
+        "elapsed",
+        "viewport",
+        "control",
+        "param",
+    )
 
 
 class FxSceneState:
@@ -3434,7 +3667,16 @@ class FxTextureStore:
         if g.semantic in ("MATERIALTEXTURE",):
             return material_texture or None
         if g.semantic and g.semantic not in ("",):
-            if g.semantic.startswith(("RENDERCOLORTARGET", "RENDERDEPTHSTENCILTARGET", "OFFSCREENRENDERTARGET", "ANIMATEDTEXTURE", "MATERIALSPHEREMAP", "MATERIALTOONTEXTURE")):
+            if g.semantic.startswith(
+                (
+                    "RENDERCOLORTARGET",
+                    "RENDERDEPTHSTENCILTARGET",
+                    "OFFSCREENRENDERTARGET",
+                    "ANIMATEDTEXTURE",
+                    "MATERIALSPHEREMAP",
+                    "MATERIALTOONTEXTURE",
+                )
+            ):
                 return None
         resource = fx_annotation(g, "ResourceName", self.program, None)
         if not isinstance(resource, str) or not resource:
@@ -3480,7 +3722,13 @@ def fx_sampler_texture_global(program, info):
 
 
 def fx_is_render_target(g):
-    return g is not None and g.semantic is not None and g.semantic.startswith(("RENDERCOLORTARGET", "OFFSCREENRENDERTARGET", "RENDERDEPTHSTENCILTARGET"))
+    return (
+        g is not None
+        and g.semantic is not None
+        and g.semantic.startswith(
+            ("RENDERCOLORTARGET", "OFFSCREENRENDERTARGET", "RENDERDEPTHSTENCILTARGET")
+        )
+    )
 
 
 class FxNumpyEnv:
@@ -3510,13 +3758,19 @@ class FxNumpyEnv:
             return [ex.B.const(0.0)] * 4
         material_texture = self.state.material.get("texture", "")
         if g is None and info is not None and info.texture is None:
-            path = material_texture if (info.register or "").lower().replace(" ", "") in ("s0", "") else None
+            path = (
+                material_texture
+                if (info.register or "").lower().replace(" ", "") in ("s0", "")
+                else None
+            )
         else:
             path = self.textures.resource_path(g, material_texture)
         image = self.textures.image(path)
         if image is None:
             return [ex.B.const(0.0)] * 4
-        return image.sample(u, v, info.point() if info else False, info.address() if info else "WRAP")
+        return image.sample(
+            u, v, info.point() if info else False, info.address() if info else "WRAP"
+        )
 
 
 def fx_pil_loader(path):
@@ -3568,10 +3822,20 @@ def fx_clip_to_world(clip, view_proj_inverse, proj):
     tiny = np.abs(w) <= 1e-12
     natural = a * w + b
     front = w > 1e-12
-    outside = front & ((z < -1e-6 * np.maximum(1.0, np.abs(w))) | (z > w * (1 + 1e-9) + 1e-6))
+    outside = front & (
+        (z < -1e-6 * np.maximum(1.0, np.abs(w))) | (z > w * (1 + 1e-9) + 1e-6)
+    )
     behind = (w < -1e-12) & (np.abs(z - natural) > 1e-4 * (np.abs(w) + 1.0))
     culled = tiny | outside | behind
-    homo = np.stack([np.asarray(x, dtype=np.float64) * np.ones_like(w), np.asarray(y, dtype=np.float64) * np.ones_like(w), natural, w], axis=-1)
+    homo = np.stack(
+        [
+            np.asarray(x, dtype=np.float64) * np.ones_like(w),
+            np.asarray(y, dtype=np.float64) * np.ones_like(w),
+            natural,
+            w,
+        ],
+        axis=-1,
+    )
     world = homo @ view_proj_inverse
     ww = world[:, 3:4]
     ww = np.where(np.abs(ww) < 1e-20, 1.0, ww)
@@ -3581,7 +3845,18 @@ def fx_clip_to_world(clip, view_proj_inverse, proj):
     return pos, culled
 
 
-FX_NATIVE_INTRINSICS = {"cross", "normalize", "length", "dot", "distance", "reflect", "lerp", "smoothstep", "saturate", "clamp"}
+FX_NATIVE_INTRINSICS = {
+    "cross",
+    "normalize",
+    "length",
+    "dot",
+    "distance",
+    "reflect",
+    "lerp",
+    "smoothstep",
+    "saturate",
+    "clamp",
+}
 
 
 FX_GROUP_INTRINSICS = {
@@ -3665,7 +3940,11 @@ def fx_global_constant(program, name, seen=None):
 
     walk(g.init)
     walk(g.array)
-    return all(fx_global_constant(program, other, seen) for other in ids if other in program.globals)
+    return all(
+        fx_global_constant(program, other, seen)
+        for other in ids
+        if other in program.globals
+    )
 
 
 def fx_function_info(program, function):
@@ -3722,7 +4001,16 @@ def fx_function_info(program, function):
             slots.append(name)
             deps.append(("texture", name))
         elif fx_global_constant(program, name):
-            deps.append(("const", name, fx_stable(g.type), fx_stable(g.init), fx_stable(g.array), fx_stable(g.quals)))
+            deps.append(
+                (
+                    "const",
+                    name,
+                    fx_stable(g.type),
+                    fx_stable(g.init),
+                    fx_stable(g.array),
+                    fx_stable(g.quals),
+                )
+            )
         else:
             pure = False
             break
@@ -3736,7 +4024,16 @@ def fx_function_info(program, function):
             slots.extend(sub["slots"])
     signature = (
         function.name,
-        [(p.name, fx_stable(p.type), sorted(p.quals), fx_stable(p.array), fx_stable(p.default)) for p in function.params],
+        [
+            (
+                p.name,
+                fx_stable(p.type),
+                sorted(p.quals),
+                fx_stable(p.array),
+                fx_stable(p.default),
+            )
+            for p in function.params
+        ],
         fx_stable(function.ret),
         fx_stable(function.body),
         deps,
@@ -3760,7 +4057,9 @@ def fx_intrinsic_values(ex, name, values):
     frame = ex.frames[-1]
     frame.scopes.append({"__a%d" % i: v for i, v in enumerate(values)})
     try:
-        return FX_INTRINSICS[name](ex, [("id", "__a%d" % i) for i in range(len(values))])
+        return FX_INTRINSICS[name](
+            ex, [("id", "__a%d" % i) for i in range(len(values))]
+        )
     finally:
         frame.scopes.pop()
         if pushed:
@@ -3817,7 +4116,11 @@ def fx_expr_text(node):
     if kind == "id":
         return node[1]
     if kind == "bin":
-        return "%s %s %s" % (fx_operand_text(node[2], node[1]), node[1], fx_operand_text(node[3], node[1], True))
+        return "%s %s %s" % (
+            fx_operand_text(node[2], node[1]),
+            node[1],
+            fx_operand_text(node[3], node[1], True),
+        )
     if kind == "un":
         return "%s%s" % (node[1], fx_operand_text(node[2], "unary"))
     if kind == "pre":
@@ -3827,9 +4130,16 @@ def fx_expr_text(node):
     if kind == "assign":
         return "%s %s %s" % (fx_expr_text(node[2]), node[1], fx_expr_text(node[3]))
     if kind == "tern":
-        return "%s ? %s : %s" % (fx_expr_text(node[1]), fx_expr_text(node[2]), fx_expr_text(node[3]))
+        return "%s ? %s : %s" % (
+            fx_expr_text(node[1]),
+            fx_expr_text(node[2]),
+            fx_expr_text(node[3]),
+        )
     if kind == "cast":
-        return "(%s)%s" % (node[1] if isinstance(node[1], str) else "type", fx_expr_text(node[2]))
+        return "(%s)%s" % (
+            node[1] if isinstance(node[1], str) else "type",
+            fx_expr_text(node[2]),
+        )
     if kind in ("ctor", "call"):
         name = node[1] if isinstance(node[1], str) else "type"
         return "%s(%s)" % (name, ", ".join(fx_expr_text(a) for a in node[2]))
@@ -3838,7 +4148,11 @@ def fx_expr_text(node):
     if kind == "index":
         return "%s[%s]" % (fx_expr_text(node[1]), fx_expr_text(node[2]))
     if kind == "mcall":
-        return "%s.%s(%s)" % (fx_expr_text(node[1]), node[2], ", ".join(fx_expr_text(a) for a in node[3]))
+        return "%s.%s(%s)" % (
+            fx_expr_text(node[1]),
+            node[2],
+            ", ".join(fx_expr_text(a) for a in node[3]),
+        )
     if kind == "comma":
         return ", ".join(fx_expr_text(a) for a in node[1])
     if kind == "init":
@@ -3853,8 +4167,12 @@ def fx_stmt_text(node):
     elif kind == "decl":
         parts = []
         for name, _array, init in node[2]:
-            parts.append(name if init is None else "%s = %s" % (name, fx_expr_text(init)))
-        type_name = node[1] if isinstance(node[1], str) else getattr(node[1], "name", "struct")
+            parts.append(
+                name if init is None else "%s = %s" % (name, fx_expr_text(init))
+            )
+        type_name = (
+            node[1] if isinstance(node[1], str) else getattr(node[1], "name", "struct")
+        )
         text = "%s %s" % (type_name, ", ".join(parts))
     elif kind == "return":
         text = "return" if node[1] is None else "return %s" % fx_expr_text(node[1])
