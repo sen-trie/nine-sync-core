@@ -8,6 +8,14 @@ bl_info = {
     "category": "Import-Export",
 }
 
+import importlib as _importlib
+import sys as _sys
+
+for _name in ("common", "pmm", "xfile", "fx", "mme_nodes", "mme", "bridge", "ui"):
+    _module = _sys.modules.get(__name__ + "." + _name)
+    if _module is not None:
+        _importlib.reload(_module)
+
 import bpy
 from bpy.props import PointerProperty
 

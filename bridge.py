@@ -2160,9 +2160,7 @@ def import_accessory(scene, collection, project, settings, acc, entry, unit):
         root["mmd_bridge_accessory"] = key
         collection.objects.link(root)
         log.info("created accessory root '%s'", root.name)
-    fx_path, program, controls, tracks = effect_setup(
-        project, settings, acc, entry, path, root
-    )
+    fx_path, program, controls, tracks = effect_setup(project, settings, acc, entry, path, root)
     stamp = "%s|%s" % (path, os.path.getmtime(path))
     if fx_path:
         stamp += "|%s|%s|density=%.4f|unit=%.6f|%s" % (
@@ -2200,24 +2198,14 @@ def import_accessory(scene, collection, project, settings, acc, entry, unit):
             started = time.time()
             try:
                 children, uncovered, _tracks, total = mme_build_effect(
-                    scene,
-                    collection,
-                    settings,
-                    acc,
-                    root,
-                    path,
-                    fx_path,
-                    unit,
-                    controls,
+                    scene, collection, settings, acc, root, path, fx_path, unit, controls
                 )
                 if uncovered:
                     static = create_x_object(
                         short_name(acc.name, 40) + "_mesh", x_scene(), folder, settings
                     )
                     collection.objects.link(static)
-                    remove_subset_faces(
-                        static, set(range(len(static.data.materials))) - set(uncovered)
-                    )
+                    remove_subset_faces(static, set(range(len(static.data.materials))) - set(uncovered))
                     children.append(static)
                 note = "%s: %d of %d pass(es) running" % (
                     os.path.basename(fx_path),
@@ -2553,9 +2541,7 @@ def build_report(context):
     lines.append(
         "add-on %s | Blender %s | %s"
         % (
-            ".".join(
-                str(v) for v in importlib.import_module(__package__).bl_info["version"]
-            ),
+            ".".join(str(v) for v in importlib.import_module(__package__).bl_info["version"]),
             bpy.app.version_string,
             platform.system(),
         )
@@ -2594,13 +2580,7 @@ def build_report(context):
     lines.append("audio: %s" % (settings.audio_note or "not read"))
     lines.append(
         "effects: on=%s backend=%s density=%.2f live=%s bake_to=%s"
-        % (
-            settings.mme_effects,
-            settings.mme_backend,
-            settings.mme_density,
-            settings.mme_live,
-            settings.mme_bake_target,
-        )
+        % (settings.mme_effects, settings.mme_backend, settings.mme_density, settings.mme_live, settings.mme_bake_target)
     )
     for root in mme_effect_roots(scene):
         passes = mme_effect_passes(root)
@@ -2955,13 +2935,8 @@ def sync(scene):
     if settings.mme_effects and mme_effect_roots(scene):
         if not scene.render.use_lock_interface:
             scene.render.use_lock_interface = True
-            log.info(
-                "render interface locking enabled so effects can update safely while rendering"
-            )
-        if (
-            settings.mme_standard_view
-            and scene.view_settings.view_transform != "Standard"
-        ):
+            log.info("render interface locking enabled so effects can update safely while rendering")
+        if settings.mme_standard_view and scene.view_settings.view_transform != "Standard":
             try:
                 scene.view_settings.view_transform = "Standard"
                 log.info("view transform set to Standard so effect colors match MMD")

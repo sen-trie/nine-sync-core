@@ -434,16 +434,19 @@ def read_accessories(reader):
     reader.u8()
     reader.i32()
     count = reader.u8()
-    reader.skip(count * ACCESSORY_NAME_LENGTH)
+    names = [reader.fixed_string(ACCESSORY_NAME_LENGTH) for _ in range(count)]
     found = []
+    seen = set()
     for position in range(count):
         acc = PmmAccessory()
         acc.index = reader.u8()
-        if acc.index != position:
-            raise PmmError(
-                "accessory record %d out of sync (index %d)" % (position, acc.index)
-            )
         acc.name = reader.fixed_string(ACCESSORY_NAME_LENGTH)
+        if acc.index in seen or acc.name not in names:
+            raise PmmError(
+                "accessory record %d out of sync (index %d, name %r)"
+                % (position, acc.index, acc.name)
+            )
+        seen.add(acc.index)
         acc.path = reader.fixed_string(ACCESSORY_PATH_LENGTH)
         acc.draw_order = reader.u8()
         acc.keys = read_accessory_keys(reader)

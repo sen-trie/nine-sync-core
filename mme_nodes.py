@@ -126,18 +126,10 @@ def mme_core_append(name, key):
 def mme_core_group(name, tree_type, key, build):
     found = _mme_groups.get(key)
     group = bpy.data.node_groups.get(found) if found else None
-    if (
-        group is not None
-        and group.get(MME_KEY_PROP) == key
-        and group.bl_idname == tree_type
-    ):
+    if group is not None and group.get(MME_KEY_PROP) == key and group.bl_idname == tree_type:
         return group
     for group in bpy.data.node_groups:
-        if (
-            group.get(MME_KEY_PROP) == key
-            and group.bl_idname == tree_type
-            and group.library is None
-        ):
+        if group.get(MME_KEY_PROP) == key and group.bl_idname == tree_type and group.library is None:
             _mme_groups[key] = group.name
             _mme_core["stats"]["file"] += 1
             return group
@@ -184,10 +176,7 @@ def mme_build_standard_groups(force=False):
     try:
         program = FxProgram()
         program.params = {}
-        for backend, idname in (
-            (MmeGeoBackend, "GeometryNodeTree"),
-            (MmePsBackend, "ShaderNodeTree"),
-        ):
+        for backend, idname in ((MmeGeoBackend, "GeometryNodeTree"), (MmePsBackend, "ShaderNodeTree")):
             scratch = bpy.data.node_groups.new("MME scratch", idname)
             try:
                 B = backend(scratch)
@@ -214,11 +203,7 @@ def mme_save_core_library(path=None):
     keep = {}
     for group in bpy.data.node_groups:
         key = group.get(MME_KEY_PROP)
-        if (
-            key
-            and group.library is None
-            and str(key).endswith(":v%d" % MME_CORE_VERSION)
-        ):
+        if key and group.library is None and str(key).endswith(":v%d" % MME_CORE_VERSION):
             keep.setdefault(key, group)
     appended = []
     missing = [n for n in mme_core_names() if bpy.data.node_groups.get(n) is None]
@@ -233,10 +218,7 @@ def mme_save_core_library(path=None):
     blocks = set(keep.values())
     for group in list(blocks):
         for node in group.nodes:
-            if (
-                node.bl_idname in ("GeometryNodeGroup", "ShaderNodeGroup")
-                and node.node_tree is not None
-            ):
+            if node.bl_idname in ("GeometryNodeGroup", "ShaderNodeGroup") and node.node_tree is not None:
                 blocks.add(node.node_tree)
     folder = os.path.dirname(path)
     if folder:
@@ -259,9 +241,7 @@ class MmeGroupEnv:
 
     def sample(self, ex, info, u, v, lod):
         g = fx_sampler_texture_global(self.program, info)
-        slot = (
-            g.name if g is not None else (info.name if info is not None else "texture")
-        )
+        slot = g.name if g is not None else (info.name if info is not None else "texture")
         point = info.point() if info else False
         address = info.address() if info else "WRAP"
         extension = {"CLAMP": "EXTEND", "MIRROR": "MIRROR"}.get(address, "REPEAT")
@@ -301,8 +281,7 @@ class MmeGroupCalls:
             if (
                 node.bl_idname == "ShaderNodeSeparateXYZ"
                 and all(c.socket.node == node for c in comps)
-                and [c.socket.identifier for c in comps]
-                == [o.identifier for o in node.outputs[:3]]
+                and [c.socket.identifier for c in comps] == [o.identifier for o in node.outputs[:3]]
                 and node.inputs[0].is_linked
             ):
                 return MmeSock(node.inputs[0].links[0].from_socket)
@@ -337,8 +316,7 @@ class MmeGroupCalls:
             if (
                 node.bl_idname == "FunctionNodeSeparateMatrix"
                 and all(c.socket.node == node for c in comps)
-                and [c.socket.identifier for c in comps]
-                == [o.identifier for o in node.outputs[:16]]
+                and [c.socket.identifier for c in comps] == [o.identifier for o in node.outputs[:16]]
                 and node.inputs[0].is_linked
             ):
                 return MmeSock(node.inputs[0].links[0].from_socket)
@@ -375,24 +353,10 @@ class MmeGroupCalls:
     def group_inputs(self, label, t):
         kind = self.iface_kind(t)
         if kind == "VECTOR":
-            return FxValue(
-                t, self.split_vector(self.new_input(label, "NodeSocketVector", label))
-            )
+            return FxValue(t, self.split_vector(self.new_input(label, "NodeSocketVector", label)))
         if kind == "MATRIX":
-            return FxValue(
-                t, self.split_matrix(self.new_input(label, "NodeSocketMatrix", label))
-            )
-        return FxValue(
-            t,
-            [
-                self.new_input(
-                    fx_comp_label(label, t, k),
-                    "NodeSocketFloat",
-                    fx_comp_label(label, t, k),
-                )
-                for k in range(fx_count(t[1]))
-            ],
-        )
+            return FxValue(t, self.split_matrix(self.new_input(label, "NodeSocketMatrix", label)))
+        return FxValue(t, [self.new_input(fx_comp_label(label, t, k), "NodeSocketFloat", fx_comp_label(label, t, k)) for k in range(fx_count(t[1]))])
 
     def group_outputs(self, label, value):
         t = ("f", value.t[1])
@@ -401,18 +365,10 @@ class MmeGroupCalls:
             return [(label, self.vector_of(value.c, force=True), "NodeSocketVector")]
         if kind == "MATRIX":
             return [(label, self.matrix_of(value.c), "NodeSocketMatrix")]
-        return [
-            (fx_comp_label(label, t, k), c, "NodeSocketFloat")
-            for k, c in enumerate(value.c)
-        ]
+        return [(fx_comp_label(label, t, k), c, "NodeSocketFloat") for k, c in enumerate(value.c)]
 
     def function_group(self, ex, function, ptypes, rt, info):
-        key = "fn:%s:%s:%s:v%d" % (
-            self.tree_tag,
-            function.name,
-            info["hash"],
-            MME_CORE_VERSION,
-        )
+        key = "fn:%s:%s:%s:v%d" % (self.tree_tag, function.name, info["hash"], MME_CORE_VERSION)
         name = mme_group_name("fn %s" % function.name, self.tree_tag, key)
         program = ex.program
         backend = type(self)
@@ -421,9 +377,7 @@ class MmeGroupCalls:
             sub = backend(group)
             sub.group_mode = True
             sub_ex = FxExec(program, sub, MmeGroupEnv(program))
-            values = [
-                sub.group_inputs(p.name, pt) for p, pt in zip(function.params, ptypes)
-            ]
+            values = [sub.group_inputs(p.name, pt) for p, pt in zip(function.params, ptypes)]
             result, _outs = sub_ex.run_function(function, values)
             result = sub_ex.convert(result, rt)
             sub.statement("return")
@@ -456,12 +410,7 @@ class MmeGroupCalls:
             sub.finish(sub.group_outputs("result", FxValue(rt, result.c)))
             group.description = "HLSL intrinsic %s" % signature
 
-        return mme_core_group(
-            mme_group_name(signature, self.tree_tag, key),
-            self.tree.bl_idname,
-            key,
-            build,
-        )
+        return mme_core_group(mme_group_name(signature, self.tree_tag, key), self.tree.bl_idname, key, build)
 
     def matrix_intrinsic(self, name, types, labels):
         if self.tree_tag != "GN" or name != "mul":
@@ -470,11 +419,7 @@ class MmeGroupCalls:
         if types == [v4, m4] or types == [m4, v4]:
             vector_first = types[0] == v4
             v = self.group_inputs(labels[0] if vector_first else labels[1], v4)
-            m = self.new_input(
-                labels[1] if vector_first else labels[0],
-                "NodeSocketMatrix",
-                labels[1] if vector_first else labels[0],
-            )
+            m = self.new_input(labels[1] if vector_first else labels[0], "NodeSocketMatrix", labels[1] if vector_first else labels[0])
             column = self.new("FunctionNodeCombineMatrix")
             column.label = "vector as a matrix column"
             for k in range(16):
@@ -504,28 +449,20 @@ class MmeGroupCalls:
             inputs.append(("Vector_001", b))
         if scale is not None:
             inputs.append(("Scale", scale))
-        return self.native_node(
-            "ShaderNodeVectorMath", label, {"operation": op}, inputs, output
-        )
+        return self.native_node("ShaderNodeVectorMath", label, {"operation": op}, inputs, output)
 
     def vec_mat(self, v, m, dims):
         rows, cols = dims
         k = min(len(v), rows)
         acc = None
         for i in range(k):
-            row = self.vector_of(m[i * cols : i * cols + 3])
+            row = self.vector_of(m[i * cols:i * cols + 3])
             term = self.vm("SCALE", "v[%d] * row %d" % (i, i), row, scale=v[i])
             acc = term if acc is None else self.vm("ADD", "sum of rows", acc, term)
         out = self.split_vector(acc)
         if cols == 4:
             column = self.vector_of([m[i * cols + 3] for i in range(3)])
-            w = self.vm(
-                "DOT_PRODUCT",
-                "w = dot(v.xyz, column w)",
-                self.vector_of(v[:3]),
-                column,
-                output="Value",
-            )
+            w = self.vm("DOT_PRODUCT", "w = dot(v.xyz, column w)", self.vector_of(v[:3]), column, output="Value")
             if k == 4:
                 w = self.add(w, self.mul(v[3], m[3 * cols + 3]))
             out.append(w)
@@ -537,13 +474,7 @@ class MmeGroupCalls:
         vector = self.vector_of(v[:3])
         out = []
         for i in range(rows):
-            value = self.vm(
-                "DOT_PRODUCT",
-                "dot(row %d, v)" % i,
-                self.vector_of(m[i * cols : i * cols + 3]),
-                vector,
-                output="Value",
-            )
+            value = self.vm("DOT_PRODUCT", "dot(row %d, v)" % i, self.vector_of(m[i * cols:i * cols + 3]), vector, output="Value")
             if k == 4:
                 value = self.add(value, self.mul(m[i * cols + 3], v[3]))
             out.append(value)
@@ -567,7 +498,7 @@ class MmeGroupCalls:
             return FxValue(("f", (da[0],)), self.mat_vec(a.c, da, b.c))
         out = []
         for i in range(da[0]):
-            out.extend(self.vec_mat(a.c[i * da[1] : (i + 1) * da[1]], b.c, db))
+            out.extend(self.vec_mat(a.c[i * da[1]:(i + 1) * da[1]], b.c, db))
         return FxValue(("f", (da[0], db[1])), out)
 
     def place_group(self, group, names, values, out_name, label, slots=(), env=None):
@@ -576,9 +507,7 @@ class MmeGroupCalls:
         except (TypeError, ValueError):
             ret = ["f", []]
         rt = (ret[0], tuple(ret[1]))
-        cache_key = ("call", group.name) + tuple(
-            self.key(c) for v in values for c in v.c
-        )
+        cache_key = ("call", group.name) + tuple(self.key(c) for v in values for c in v.c)
         found = self.cache.get(cache_key)
         if found is not None:
             return FxValue(rt, list(found))
@@ -640,21 +569,11 @@ class MmeGroupCalls:
             return None
         group = self.function_group(ex, function, ptypes, rt, info)
         label = "%s(%s)" % (function.name, ", ".join(p.name for p in params))
-        result = self.place_group(
-            group,
-            [p.name for p in params],
-            values,
-            "return",
-            label,
-            info["slots"],
-            ex.env,
-        )
+        result = self.place_group(group, [p.name for p in params], values, "return", label, info["slots"], ex.env)
         return ex.convert(result, rt)
 
     def native_node(self, idname, label, props, inputs, output):
-        key = ("native", idname, tuple(sorted(props.items()))) + tuple(
-            (n, self.key(v) if not isinstance(v, tuple) else v) for n, v in inputs
-        )
+        key = ("native", idname, tuple(sorted(props.items()))) + tuple((n, self.key(v) if not isinstance(v, tuple) else v) for n, v in inputs)
         found = self.cache.get(key)
         if found is not None:
             return found
@@ -679,13 +598,7 @@ class MmeGroupCalls:
         if name in ("dot", "length", "normalize") and all(t == v4 for t in types):
             a = args[0]
             b = args[1] if name == "dot" else args[0]
-            d = self.vm(
-                "DOT_PRODUCT",
-                "dot(xyz)",
-                self.vector_of(a.c[:3]),
-                self.vector_of(b.c[:3]),
-                output="Value",
-            )
+            d = self.vm("DOT_PRODUCT", "dot(xyz)", self.vector_of(a.c[:3]), self.vector_of(b.c[:3]), output="Value")
             d = self.add(d, self.mul(a.c[3], b.c[3]))
             if name == "dot":
                 return FxValue(("f", ()), [d])
@@ -693,85 +606,28 @@ class MmeGroupCalls:
             if name == "length":
                 return FxValue(("f", ()), [length])
             inv = self.select(self.cmp(">", length, 1e-20), self.div(1.0, length), 0.0)
-            xyz = self.split_vector(
-                self.vm("SCALE", "normalize xyz", self.vector_of(a.c[:3]), scale=inv)
-            )
+            xyz = self.split_vector(self.vm("SCALE", "normalize xyz", self.vector_of(a.c[:3]), scale=inv))
             return FxValue(v4, xyz + [self.mul(a.c[3], inv)])
-        if name in (
-            "cross",
-            "normalize",
-            "length",
-            "dot",
-            "distance",
-            "reflect",
-        ) and all(t == v3 for t in types):
+        if name in ("cross", "normalize", "length", "dot", "distance", "reflect") and all(t == v3 for t in types):
             vectors = [self.vector_of(a.c) for a in args]
             if name == "normalize":
-                out = self.native_node(
-                    "ShaderNodeVectorMath",
-                    "normalize",
-                    {"operation": "NORMALIZE"},
-                    [("Vector", vectors[0])],
-                    "Vector",
-                )
+                out = self.native_node("ShaderNodeVectorMath", "normalize", {"operation": "NORMALIZE"}, [("Vector", vectors[0])], "Vector")
                 return FxValue(v3, self.split_vector(out))
             if name == "length":
-                out = self.native_node(
-                    "ShaderNodeVectorMath",
-                    "length",
-                    {"operation": "LENGTH"},
-                    [("Vector", vectors[0])],
-                    "Value",
-                )
+                out = self.native_node("ShaderNodeVectorMath", "length", {"operation": "LENGTH"}, [("Vector", vectors[0])], "Value")
                 return FxValue(("f", ()), [out])
             if name == "cross":
-                out = self.native_node(
-                    "ShaderNodeVectorMath",
-                    "cross",
-                    {"operation": "CROSS_PRODUCT"},
-                    [("Vector", vectors[0]), ("Vector_001", vectors[1])],
-                    "Vector",
-                )
+                out = self.native_node("ShaderNodeVectorMath", "cross", {"operation": "CROSS_PRODUCT"}, [("Vector", vectors[0]), ("Vector_001", vectors[1])], "Vector")
                 return FxValue(v3, self.split_vector(out))
             if name == "dot":
-                out = self.native_node(
-                    "ShaderNodeVectorMath",
-                    "dot",
-                    {"operation": "DOT_PRODUCT"},
-                    [("Vector", vectors[0]), ("Vector_001", vectors[1])],
-                    "Value",
-                )
+                out = self.native_node("ShaderNodeVectorMath", "dot", {"operation": "DOT_PRODUCT"}, [("Vector", vectors[0]), ("Vector_001", vectors[1])], "Value")
                 return FxValue(("f", ()), [out])
             if name == "distance":
-                out = self.native_node(
-                    "ShaderNodeVectorMath",
-                    "distance",
-                    {"operation": "DISTANCE"},
-                    [("Vector", vectors[0]), ("Vector_001", vectors[1])],
-                    "Value",
-                )
+                out = self.native_node("ShaderNodeVectorMath", "distance", {"operation": "DISTANCE"}, [("Vector", vectors[0]), ("Vector_001", vectors[1])], "Value")
                 return FxValue(("f", ()), [out])
-            d = self.native_node(
-                "ShaderNodeVectorMath",
-                "dot(n, i)",
-                {"operation": "DOT_PRODUCT"},
-                [("Vector", vectors[1]), ("Vector_001", vectors[0])],
-                "Value",
-            )
-            scaled = self.native_node(
-                "ShaderNodeVectorMath",
-                "2 * dot(n, i) * n",
-                {"operation": "SCALE"},
-                [("Vector", vectors[1]), ("Scale", self.mul(2.0, d))],
-                "Vector",
-            )
-            out = self.native_node(
-                "ShaderNodeVectorMath",
-                "reflect",
-                {"operation": "SUBTRACT"},
-                [("Vector", vectors[0]), ("Vector_001", scaled)],
-                "Vector",
-            )
+            d = self.native_node("ShaderNodeVectorMath", "dot(n, i)", {"operation": "DOT_PRODUCT"}, [("Vector", vectors[1]), ("Vector_001", vectors[0])], "Value")
+            scaled = self.native_node("ShaderNodeVectorMath", "2 * dot(n, i) * n", {"operation": "SCALE"}, [("Vector", vectors[1]), ("Scale", self.mul(2.0, d))], "Vector")
+            out = self.native_node("ShaderNodeVectorMath", "reflect", {"operation": "SUBTRACT"}, [("Vector", vectors[0]), ("Vector_001", scaled)], "Vector")
             return FxValue(v3, self.split_vector(out))
         if name == "lerp" and len(args) == 3:
             a, b, t = args
@@ -781,16 +637,8 @@ class MmeGroupCalls:
                 out = self.native_node(
                     "ShaderNodeMix",
                     "lerp",
-                    {
-                        "data_type": "VECTOR",
-                        "factor_mode": "UNIFORM" if uniform else "NON_UNIFORM",
-                        "clamp_factor": False,
-                    },
-                    [
-                        ("Factor_Float" if uniform else "Factor_Vector", factor),
-                        ("A_Vector", self.vector_of(a.c)),
-                        ("B_Vector", self.vector_of(b.c)),
-                    ],
+                    {"data_type": "VECTOR", "factor_mode": "UNIFORM" if uniform else "NON_UNIFORM", "clamp_factor": False},
+                    [("Factor_Float" if uniform else "Factor_Vector", factor), ("A_Vector", self.vector_of(a.c)), ("B_Vector", self.vector_of(b.c))],
                     "Result_Vector",
                 )
                 return FxValue(v3, self.split_vector(out))
@@ -799,45 +647,23 @@ class MmeGroupCalls:
                 folded = self.fold(lambda p, q, r: p + (q - p) * r, x, y, s)
                 if folded is not None:
                     return folded
-                return self.native_node(
-                    "ShaderNodeMix",
-                    "lerp",
-                    {"data_type": "FLOAT", "clamp_factor": False},
-                    [("Factor_Float", s), ("A_Float", x), ("B_Float", y)],
-                    "Result_Float",
-                )
+                return self.native_node("ShaderNodeMix", "lerp", {"data_type": "FLOAT", "clamp_factor": False}, [("Factor_Float", s), ("A_Float", x), ("B_Float", y)], "Result_Float")
 
             return ex.elementwise(mix, FxValue(("f", a.t[1]), a.c), b, t)
         if name == "smoothstep" and len(args) == 3:
 
             def step(lo, hi, x):
-                if (
-                    self.known(lo) is not None
-                    and self.known(hi) is not None
-                    and self.known(x) is not None
-                ):
+                if self.known(lo) is not None and self.known(hi) is not None and self.known(x) is not None:
                     return self.np_smoothstep(lo, hi, x)
                 return self.native_node(
                     "ShaderNodeMapRange",
                     "smoothstep",
-                    {
-                        "data_type": "FLOAT",
-                        "interpolation_type": "SMOOTHSTEP",
-                        "clamp": True,
-                    },
-                    [
-                        ("From Min", lo),
-                        ("From Max", hi),
-                        ("Value", x),
-                        ("To Min", 0.0),
-                        ("To Max", 1.0),
-                    ],
+                    {"data_type": "FLOAT", "interpolation_type": "SMOOTHSTEP", "clamp": True},
+                    [("From Min", lo), ("From Max", hi), ("Value", x), ("To Min", 0.0), ("To Max", 1.0)],
                     "Result",
                 )
 
-            return ex.elementwise(
-                step, FxValue(("f", args[0].t[1]), args[0].c), args[1], args[2]
-            )
+            return ex.elementwise(step, FxValue(("f", args[0].t[1]), args[0].c), args[1], args[2])
         if name in ("saturate", "clamp"):
             lo_hi = [0.0, 1.0] if name == "saturate" else None
 
@@ -845,13 +671,7 @@ class MmeGroupCalls:
                 folded = self.fold(lambda p, q, r: min(max(p, q), r), x, lo, hi)
                 if folded is not None:
                     return folded
-                return self.native_node(
-                    "ShaderNodeClamp",
-                    name,
-                    {"clamp_type": "MINMAX"},
-                    [("Value", x), ("Min", lo), ("Max", hi)],
-                    "Result",
-                )
+                return self.native_node("ShaderNodeClamp", name, {"clamp_type": "MINMAX"}, [("Value", x), ("Min", lo), ("Max", hi)], "Result")
 
             if lo_hi is not None:
                 a = args[0]
@@ -862,11 +682,7 @@ class MmeGroupCalls:
         return None
 
     def np_smoothstep(self, lo, hi, x):
-        t = (
-            min(max((float(x) - float(lo)) / (float(hi) - float(lo)), 0.0), 1.0)
-            if float(hi) != float(lo)
-            else 0.0
-        )
+        t = min(max((float(x) - float(lo)) / (float(hi) - float(lo)), 0.0), 1.0) if float(hi) != float(lo) else 0.0
         return t * t * (3.0 - 2.0 * t)
 
     def intrinsic_group(self, ex, name, args):
@@ -878,10 +694,7 @@ class MmeGroupCalls:
             return None
         if name == "mul" and not any(len(a.t[1]) == 2 for a in args):
             return None
-        if (
-            name in ("dot", "length", "normalize", "distance")
-            and max(fx_count(a.t[1]) for a in args) < 3
-        ):
+        if name in ("dot", "length", "normalize", "distance") and max(fx_count(a.t[1]) for a in args) < 3:
             return None
         types = [("f", a.t[1]) for a in args]
         values = [FxValue(t, list(a.c)) for t, a in zip(types, args)]
@@ -1104,12 +917,7 @@ class MmeTreeBackend(MmeGroupCalls):
             return a
         if self.key(a) == self.key(b):
             return 0.0
-        return self.math(
-            "SUBTRACT",
-            a,
-            b,
-            boolish=self.known(a) == 1.0 and self.key(b) in self.boolish,
-        )
+        return self.math("SUBTRACT", a, b, boolish=self.known(a) == 1.0 and self.key(b) in self.boolish)
 
     def mul(self, a, b):
         folded = self.fold(self.np.mul, a, b)
@@ -1290,9 +1098,7 @@ class MmeTreeBackend(MmeGroupCalls):
         found = self.inputs.get(key)
         if found is not None:
             return found
-        item = self.tree.interface.new_socket(
-            label or key, in_out="INPUT", socket_type=socket_type
-        )
+        item = self.tree.interface.new_socket(label or key, in_out="INPUT", socket_type=socket_type)
         if label is None:
             self.auto_named.add(item.identifier)
         node = self.new("NodeGroupInput")
@@ -1321,16 +1127,10 @@ class MmeTreeBackend(MmeGroupCalls):
         for name, value, socket_type in outputs:
             item = existing.pop((name, socket_type), None)
             if item is None:
-                item = self.tree.interface.new_socket(
-                    name, in_out="OUTPUT", socket_type=socket_type
-                )
+                item = self.tree.interface.new_socket(name, in_out="OUTPUT", socket_type=socket_type)
             target = next(s for s in output.inputs if s.identifier == item.identifier)
             if isinstance(value, (list, tuple)):
-                combine = self.new(
-                    self.combine_color
-                    if socket_type == "NodeSocketColor"
-                    else "ShaderNodeCombineXYZ"
-                )
+                combine = self.new(self.combine_color if socket_type == "NodeSocketColor" else "ShaderNodeCombineXYZ")
                 self.block_of[combine.name] = "out"
                 for k, comp in enumerate(value):
                     self.feed(combine.inputs[k], comp)
@@ -1504,14 +1304,7 @@ class MmeGeoBackend(MmeTreeBackend):
 
 def mme_prune_tree(tree, output=None):
     if output is None:
-        output = next(
-            (
-                n
-                for n in tree.nodes
-                if n.bl_idname in ("ShaderNodeOutputMaterial", "NodeGroupOutput")
-            ),
-            None,
-        )
+        output = next((n for n in tree.nodes if n.bl_idname in ("ShaderNodeOutputMaterial", "NodeGroupOutput")), None)
     if output is None:
         return
     upstream = {}
@@ -1525,9 +1318,7 @@ def mme_prune_tree(tree, output=None):
             continue
         keep.add(name)
         stack.extend(upstream.get(name, ()))
-    for node in [
-        n for n in tree.nodes if n.name not in keep and n.bl_idname != "NodeFrame"
-    ]:
+    for node in [n for n in tree.nodes if n.name not in keep and n.bl_idname != "NodeFrame"]:
         tree.nodes.remove(node)
 
 
@@ -1620,15 +1411,8 @@ def mme_layout(tree, block_of, labels):
         heights = []
         for depth in sorted(columns):
             widths.append(max(sizes[n.name][0] for n in columns[depth]))
-            heights.append(
-                sum(sizes[n.name][1] + MME_NODE_GAP_Y for n in columns[depth])
-            )
-        shapes[block] = (
-            columns,
-            widths,
-            sum(widths) + MME_NODE_GAP_X * (len(widths) - 1),
-            max(heights),
-        )
+            heights.append(sum(sizes[n.name][1] + MME_NODE_GAP_Y for n in columns[depth]))
+        shapes[block] = (columns, widths, sum(widths) + MME_NODE_GAP_X * (len(widths) - 1), max(heights))
     by_level = {}
     for block in members:
         by_level.setdefault(level.get(block, 0), []).append(block)
@@ -1649,11 +1433,7 @@ def mme_layout(tree, block_of, labels):
         y = 0.0
         for block in blocks:
             columns, widths, width, height = shapes[block]
-            label = (
-                labels[block]
-                if isinstance(block, int) and block < len(labels)
-                else None
-            )
+            label = labels[block] if isinstance(block, int) and block < len(labels) else None
             framed = label is not None and len(members[block]) > 1
             top = y - (40.0 if framed else 0.0)
             cx = x
@@ -1665,12 +1445,7 @@ def mme_layout(tree, block_of, labels):
                 cx += column_w + MME_NODE_GAP_X
             if framed:
                 frames.append((label, members[block]))
-            elif (
-                label is not None
-                and members[block]
-                and not members[block][0].label
-                and members[block][0].bl_idname != "NodeGroupInput"
-            ):
+            elif label is not None and members[block] and not members[block][0].label and members[block][0].bl_idname != "NodeGroupInput":
                 members[block][0].label = label
             y = top - height - MME_BLOCK_GAP_Y
         x += column_width + MME_BLOCK_GAP_X
@@ -1703,9 +1478,7 @@ def mme_prop_name(prefix, name, index=None):
     text = prefix + name if index is None else "%s%s_%d" % (prefix, name, index)
     if len(text.encode("utf-8")) > 63:
         digest = hashlib.md5(text.encode("utf-8")).hexdigest()[:10]
-        text = (
-            (prefix + digest) if index is None else "%s%s_%d" % (prefix, digest, index)
-        )
+        text = (prefix + digest) if index is None else "%s%s_%d" % (prefix, digest, index)
     return text
 
 
@@ -1743,11 +1516,7 @@ def mme_texture_path(env, info):
         return None, True
     material_texture = env.state.material.get("texture", "")
     if g is None and info is not None and info.texture is None:
-        path = (
-            material_texture
-            if (info.register or "").lower().replace(" ", "") in ("s0", "")
-            else None
-        )
+        path = material_texture if (info.register or "").lower().replace(" ", "") in ("s0", "") else None
     else:
         path = env.textures.resource_path(g, material_texture)
     return path, False
@@ -1799,9 +1568,7 @@ class MmeNodeEnv:
             prop = mme_prop_name(MME_UNIFORM_PREFIX, g.name, index)
             self.uniforms[prop] = (g.name, index)
             comps.append(ex.B.attribute(prop, "OBJECT"))
-        dims = (
-            (4, 4) if len(comps) == 16 else (() if len(comps) == 1 else (len(comps),))
-        )
+        dims = (4, 4) if len(comps) == 16 else (() if len(comps) == 1 else (len(comps),))
         return ex.convert(FxValue(("f", dims), comps), t)
 
     def sample(self, ex, info, u, v, lod):
@@ -1813,9 +1580,7 @@ def mme_ps_inputs(vs_outputs):
         def get(semantic, t):
             if semantic in vs_outputs:
                 count = vs_outputs[semantic]
-                comps = [
-                    ex.B.attribute(mme_varying_name(semantic, k)) for k in range(count)
-                ]
+                comps = [ex.B.attribute(mme_varying_name(semantic, k)) for k in range(count)]
             elif semantic == "VFACE":
                 comps = [1.0]
             else:
@@ -1895,20 +1660,8 @@ def mme_shader_post(tree, group_node, mode, x0):
     cull = put(nodes.new("ShaderNodeAttribute"), 0, -260)
     cull.attribute_name = MME_ATTR_CULL
     cull.label = "Culled vertex (mme_cull)"
-    visible = put(
-        mme_math_node(
-            nodes, "SUBTRACT", "Visible = 1 - culled", 1.0, cull.outputs["Fac"]
-        ),
-        220,
-        -260,
-    )
-    final_alpha = put(
-        mme_math_node(
-            nodes, "MULTIPLY", "Alpha", alpha, visible.outputs[0], clamp=True
-        ),
-        420,
-        -120,
-    )
+    visible = put(mme_math_node(nodes, "SUBTRACT", "Visible = 1 - culled", 1.0, cull.outputs["Fac"]), 220, -260)
+    final_alpha = put(mme_math_node(nodes, "MULTIPLY", "Alpha", alpha, visible.outputs[0], clamp=True), 420, -120)
     if mode == "ADD_ALPHA":
         scaled = put(nodes.new("ShaderNodeMix"), 420, 80)
         scaled.data_type = "RGBA"
@@ -2003,14 +1756,7 @@ def mme_tree_signature(tree):
                     value = str(value)
             parts.append((socket.identifier, value))
     for link in tree.links:
-        parts.append(
-            (
-                link.from_node.name,
-                link.from_socket.identifier,
-                link.to_node.name,
-                link.to_socket.identifier,
-            )
-        )
+        parts.append((link.from_node.name, link.from_socket.identifier, link.to_node.name, link.to_socket.identifier))
     return hashlib.md5(repr(sorted(parts, key=repr)).encode("utf-8")).hexdigest()
 
 
@@ -2046,7 +1792,7 @@ def mme_friendly_input(key, item_name):
     if key.startswith(MME_VARYING_PREFIX):
         return "Vertex output %s" % item_name
     if key.startswith(MME_LOOP_PREFIX):
-        return "Loop index %s" % key[len(MME_LOOP_PREFIX) :]
+        return "Loop index %s" % key[len(MME_LOOP_PREFIX):]
     return item_name
 
 
@@ -2058,9 +1804,7 @@ def mme_wire_inputs(tree, group_node, B):
     row = 0
     for key, sock in B.inputs.items():
         identifier = sock.socket.identifier
-        target = next(
-            (s for s in group_node.inputs if s.identifier == identifier), None
-        )
+        target = next((s for s in group_node.inputs if s.identifier == identifier), None)
         if target is None:
             continue
         attr = nodes.new("ShaderNodeAttribute")
@@ -2077,9 +1821,7 @@ def mme_wire_inputs(tree, group_node, B):
 def mme_compile_material(name, runtime, draw, state, vs_outputs, owner=None):
     program = runtime.program
     mat = mme_owned(bpy.data.materials, owner) if owner else None
-    edited = mat is not None and mat.get(MME_SIG_PROP) != mme_tree_signature(
-        mat.node_tree
-    )
+    edited = mat is not None and mat.get(MME_SIG_PROP) != mme_tree_signature(mat.node_tree)
     if mat is None:
         mat = bpy.data.materials.new(name)
         if owner:
@@ -2090,9 +1832,7 @@ def mme_compile_material(name, runtime, draw, state, vs_outputs, owner=None):
         mat[MME_GROUP_PROP] = group.name
     group[MME_OWNER_PROP] = owner or name
     mme_reset_group(group)
-    mme_group_outputs(
-        group, {("Color", "NodeSocketColor"), ("Alpha", "NodeSocketFloat")}
-    )
+    mme_group_outputs(group, {("Color", "NodeSocketColor"), ("Alpha", "NodeSocketFloat")})
     B = MmePsBackend(group)
     env = MmeNodeEnv(program, state, runtime.textures, runtime.controls_runtime)
     provider = mme_ps_inputs(vs_outputs)
@@ -2140,12 +1880,7 @@ def mme_compile_material(name, runtime, draw, state, vs_outputs, owner=None):
         if B.known(discard) is None or B.known(discard) != 0.0:
             alpha = B.mul(alpha, B.sub(1.0, discard))
         B.statement("output color and alpha")
-        B.finish(
-            [
-                ("Color", [r, g, b], "NodeSocketColor"),
-                ("Alpha", alpha, "NodeSocketFloat"),
-            ]
-        )
+        B.finish([("Color", [r, g, b], "NodeSocketColor"), ("Alpha", alpha, "NodeSocketFloat")])
     except Exception:
         if not edited and mat.users == 0:
             bpy.data.materials.remove(mat)
@@ -2153,45 +1888,24 @@ def mme_compile_material(name, runtime, draw, state, vs_outputs, owner=None):
         raise
     mode = mme_blend_mode(draw.fx_pass.states)
     tree = mat.node_tree
-    group_node = next(
-        (
-            n
-            for n in tree.nodes
-            if n.bl_idname == "ShaderNodeGroup" and n.node_tree == group
-        ),
-        None,
-    )
+    group_node = next((n for n in tree.nodes if n.bl_idname == "ShaderNodeGroup" and n.node_tree == group), None)
     if not edited or group_node is None:
         for node in list(tree.nodes):
             tree.nodes.remove(node)
         group_node = tree.nodes.new("ShaderNodeGroup")
         group_node.node_tree = group
         group_node.name = "MME Pixel Shader"
-        group_node.label = "%s (%s)" % (
-            draw.fx_pass.name or "pass",
-            fx_entry(program, draw.fx_pass.ps)[0].name,
-        )
+        group_node.label = "%s (%s)" % (draw.fx_pass.name or "pass", fx_entry(program, draw.fx_pass.ps)[0].name)
         group_node.width = 240
         group_node.location = (0, 0)
         mme_shader_post(tree, group_node, mode, 340)
         mme_material_setup(mat, mode, draw.fx_pass.states)
     else:
-        log.info(
-            "material %s was edited; only its pixel shader group was regenerated",
-            mat.name,
-        )
+        log.info("material %s was edited; only its pixel shader group was regenerated", mat.name)
     mme_wire_inputs(tree, group_node, B)
     mat[MME_SIG_PROP] = mme_tree_signature(tree)
-    varyings = sorted(
-        k
-        for k in B.inputs
-        if k.startswith(MME_VARYING_PREFIX) and B.kinds.get(k) == "GEOMETRY"
-    )
-    uniforms = [
-        [k, env.uniforms[k][0], env.uniforms[k][1]]
-        for k in B.inputs
-        if k in env.uniforms
-    ]
+    varyings = sorted(k for k in B.inputs if k.startswith(MME_VARYING_PREFIX) and B.kinds.get(k) == "GEOMETRY")
+    uniforms = [[k, env.uniforms[k][0], env.uniforms[k][1]] for k in B.inputs if k in env.uniforms]
     loop_attrs = sorted(k for k in B.inputs if k.startswith(MME_LOOP_PREFIX))
     return mat, varyings, uniforms, mode, loop_attrs, len(group.nodes)
 
@@ -2209,9 +1923,7 @@ def mme_fallback_material(name, runtime, subset, mode="ALPHA", reason="", owner=
         mat[MME_GROUP_PROP] = group.name
     group[MME_OWNER_PROP] = owner or name
     mme_reset_group(group)
-    mme_group_outputs(
-        group, {("Color", "NodeSocketColor"), ("Alpha", "NodeSocketFloat")}
-    )
+    mme_group_outputs(group, {("Color", "NodeSocketColor"), ("Alpha", "NodeSocketFloat")})
     B = MmePsBackend(group)
     B.statement("fallback: material diffuse x texture")
     color = [1.0, 1.0, 1.0, 1.0]
@@ -2220,26 +1932,13 @@ def mme_fallback_material(name, runtime, subset, mode="ALPHA", reason="", owner=
         texture = xmat.texture.split("*")[0].strip() if xmat.texture else ""
         found = resolve_x_texture(texture, runtime.x_folder) if texture else None
         if found:
-            sampled = B.image_sample(
-                mme_effect_image(found),
-                "Linear",
-                "REPEAT",
-                B.attribute(mme_varying_name("TEXCOORD0", 0)),
-                B.attribute(mme_varying_name("TEXCOORD0", 1)),
-            )
+            sampled = B.image_sample(mme_effect_image(found), "Linear", "REPEAT", B.attribute(mme_varying_name("TEXCOORD0", 0)), B.attribute(mme_varying_name("TEXCOORD0", 1)))
             color = [B.mul(c, s) for c, s in zip(color, sampled)]
-    B.finish(
-        [
-            ("Color", color[:3], "NodeSocketColor"),
-            ("Alpha", color[3], "NodeSocketFloat"),
-        ]
-    )
+    B.finish([("Color", color[:3], "NodeSocketColor"), ("Alpha", color[3], "NodeSocketFloat")])
     if reason:
         warning = group.nodes.new("GeometryNodeWarning")
         warning.warning_type = "WARNING"
-        warning.inputs["Message"].default_value = (
-            "Pixel shader not converted: %s" % reason
-        )[:200]
+        warning.inputs["Message"].default_value = ("Pixel shader not converted: %s" % reason)[:200]
         warning.location = (0, 200)
     tree = mat.node_tree
     for node in list(tree.nodes):
@@ -2274,10 +1973,7 @@ class MmeGeoEnv:
             return None
         values = self.state.values(source, g)
         runtime = fx_source_is_runtime(source)
-        if (
-            source[0] == "control"
-            and self.controls.get(g.name, {}).get("kind", "const") == "const"
-        ):
+        if source[0] == "control" and self.controls.get(g.name, {}).get("kind", "const") == "const":
             runtime = False
         if not runtime:
             return fx_value_from_list(ex, values, t)
@@ -2384,11 +2080,7 @@ class MmeGeoScene:
                 node.inputs[index].default_value = value
             else:
                 self.link(value, node.inputs[index])
-        out = (
-            node.outputs["Value"]
-            if op in ("DOT_PRODUCT", "LENGTH", "DISTANCE")
-            else node.outputs["Vector"]
-        )
+        out = node.outputs["Value"] if op in ("DOT_PRODUCT", "LENGTH", "DISTANCE") else node.outputs["Vector"]
         return out
 
     def scale(self, vec, factor):
@@ -2453,11 +2145,7 @@ class MmeGeoScene:
         key = ("info", obj.name if obj is not None else "")
         if key in self.cache:
             return self.cache[key]
-        node = self.node(
-            "GeometryNodeObjectInfo",
-            "Object: %s" % (obj.name if obj else "-"),
-            transform_space="ORIGINAL",
-        )
+        node = self.node("GeometryNodeObjectInfo", "Object: %s" % (obj.name if obj else "-"), transform_space="ORIGINAL")
         node.inputs["Object"].default_value = obj
         self.cache[key] = node
         return node
@@ -2466,9 +2154,7 @@ class MmeGeoScene:
         if "self" in self.cache:
             return self.cache["self"]
         self_node = self.node("GeometryNodeSelfObject")
-        info = self.node(
-            "GeometryNodeObjectInfo", "This pass object", transform_space="ORIGINAL"
-        )
+        info = self.node("GeometryNodeObjectInfo", "This pass object", transform_space="ORIGINAL")
         self.link(self_node.outputs[0], info.inputs["Object"])
         self.cache["self"] = info
         return info
@@ -2491,58 +2177,12 @@ class MmeGeoScene:
 
     def mmd_matrix_impl(self, transform, scale):
         iu = self.inv_unit()
-        pre = self.combine_matrix(
-            [
-                iu,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                iu,
-                0.0,
-                0.0,
-                iu,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                1.0,
-            ],
-            "MMD units and axes",
-        )
-        scaled = self.combine_matrix(
-            [
-                scale,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                scale,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                scale,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                1.0,
-            ],
-            "accessory scale",
-        )
-        return self.mat_mul(
-            pre, transform, scaled, self.const_matrix(MME_SWAP, "swap Y/Z")
-        )
+        pre = self.combine_matrix([iu, 0.0, 0.0, 0.0, 0.0, 0.0, iu, 0.0, 0.0, iu, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0], "MMD units and axes")
+        scaled = self.combine_matrix([scale, 0.0, 0.0, 0.0, 0.0, scale, 0.0, 0.0, 0.0, 0.0, scale, 0.0, 0.0, 0.0, 0.0, 1.0], "accessory scale")
+        return self.mat_mul(pre, transform, scaled, self.const_matrix(MME_SWAP, "swap Y/Z"))
 
     def mmd_world(self, transform, scale=1.0):
-        node = self.group_node(
-            mme_geo_matrix_group(),
-            "Blender transform to MMD",
-            {"Transform": transform, "Unit": self.unit, "Scale": scale},
-        )
+        node = self.group_node(mme_geo_matrix_group(), "Blender transform to MMD", {"Transform": transform, "Unit": self.unit, "Scale": scale})
         return node.outputs["Matrix"]
 
     def world(self):
@@ -2555,29 +2195,18 @@ class MmeGeoScene:
         r = self.vec_node("NORMALIZE", self.vec_node("CROSS_PRODUCT", up, f))
         u = self.vec_node("CROSS_PRODUCT", f, r)
         rs, us, fs = self.split(r), self.split(u), self.split(f)
-        dots = [
-            self.B.neg(MmeSock(self.vec_node("DOT_PRODUCT", v, eye))) for v in (r, u, f)
-        ]
+        dots = [self.B.neg(MmeSock(self.vec_node("DOT_PRODUCT", v, eye))) for v in (r, u, f)]
         comps = []
         for k in range(3):
             comps.extend([rs[k], us[k], fs[k], 0.0])
         comps.extend(dots + [1.0])
-        return {
-            "r": rs,
-            "u": us,
-            "f": fs,
-            "rv": r,
-            "uv": u,
-            "matrix": self.combine_matrix(comps, label),
-        }
+        return {"r": rs, "u": us, "f": fs, "rv": r, "uv": u, "matrix": self.combine_matrix(comps, label)}
 
     def camera_impl(self):
         B = self.B
         B.statement("Camera: view matrix in MMD space")
         active = self.node("GeometryNodeInputActiveCamera")
-        info = self.node(
-            "GeometryNodeObjectInfo", "Scene camera", transform_space="ORIGINAL"
-        )
+        info = self.node("GeometryNodeObjectInfo", "Scene camera", transform_space="ORIGINAL")
         self.link(active.outputs[0], info.inputs["Object"])
         transform = info.outputs["Transform"]
         eye = self.scale(self.swap(info.outputs["Location"]), self.inv_unit())
@@ -2589,9 +2218,7 @@ class MmeGeoScene:
         self.link(transform, up.inputs["Transform"])
         f = self.vec_node("NORMALIZE", self.swap(forward.outputs[0]))
         view = self.look(eye, f, self.swap(up.outputs[0]), "ViewMatrix")
-        B.statement(
-            "Camera: projection matrix (MMD, near %g, far %g)" % (FX_NEAR, FX_FAR)
-        )
+        B.statement("Camera: projection matrix (MMD, near %g, far %g)" % (FX_NEAR, FX_FAR))
         cam_info = self.node("GeometryNodeCameraInfo")
         self.link(active.outputs[0], cam_info.inputs["Camera"])
         proj = self.node("FunctionNodeSeparateMatrix", "Blender projection")
@@ -2606,24 +2233,7 @@ class MmeGeoScene:
         c23 = B.select(ortho, 0.0, 1.0)
         c32 = B.select(ortho, -FX_NEAR / (FX_FAR - FX_NEAR), -FX_NEAR * q)
         c33 = B.select(ortho, 1.0, 0.0)
-        comps = [
-            xs,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            ys,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            c22,
-            c23,
-            0.0,
-            0.0,
-            c32,
-            c33,
-        ]
+        comps = [xs, 0.0, 0.0, 0.0, 0.0, ys, 0.0, 0.0, 0.0, 0.0, c22, c23, 0.0, 0.0, c32, c33]
         return {
             "eye": eye,
             "f": f,
@@ -2642,9 +2252,7 @@ class MmeGeoScene:
         if "camera" in self.cache:
             return self.cache["camera"]
         self.B.statement("Camera in MMD space")
-        node = self.group_node(
-            mme_geo_camera_group(), "MMD camera", {"Unit": self.unit}
-        )
+        node = self.group_node(mme_geo_camera_group(), "MMD camera", {"Unit": self.unit})
         out = node.outputs
         ortho = MmeSock(out["Orthographic"])
         self.B.boolish.add(self.B.key(ortho))
@@ -2675,12 +2283,7 @@ class MmeGeoScene:
         eye = self.scale(d, -1000.0)
         view = self.look(eye, d, (0.0, 1.0, 0.0), "Light ViewMatrix")
         _view, proj = FxSceneState().light_matrices()
-        return {
-            "d": d,
-            "eye": eye,
-            "view": view["matrix"],
-            "proj": self.const_matrix(np.asarray(proj).T, "Light ProjectionMatrix"),
-        }
+        return {"d": d, "eye": eye, "view": view["matrix"], "proj": self.const_matrix(np.asarray(proj).T, "Light ProjectionMatrix")}
 
     def light(self):
         if "light" in self.cache:
@@ -2690,58 +2293,18 @@ class MmeGeoScene:
         light = self.light_object()
         if light is not None:
             loc = [
-                self.driven(
-                    "light:%d" % k,
-                    "Light location %s" % "xyz"[k],
-                    {
-                        "expr": "var",
-                        "vars": [
-                            {
-                                "name": "var",
-                                "type": "SINGLE_PROP",
-                                "id_type": "OBJECT",
-                                "id": light.name,
-                                "path": "location",
-                                "index": k,
-                            }
-                        ],
-                    },
-                    light.location[k],
-                )
+                self.driven("light:%d" % k, "Light location %s" % "xyz"[k], {"expr": "var", "vars": [{"name": "var", "type": "SINGLE_PROP", "id_type": "OBJECT", "id": light.name, "path": "location", "index": k}]}, light.location[k])
                 for k in range(3)
             ]
-            direction = self.combine(
-                [B.neg(loc[0]), B.neg(loc[2]), B.neg(loc[1])], "MMD light direction"
-            )
+            direction = self.combine([B.neg(loc[0]), B.neg(loc[2]), B.neg(loc[1])], "MMD light direction")
             color = [
-                self.driven(
-                    "lightcolor:%d" % k,
-                    "Light color %s" % "rgb"[k],
-                    {
-                        "expr": "var",
-                        "vars": [
-                            {
-                                "name": "var",
-                                "type": "SINGLE_PROP",
-                                "id_type": "LIGHT",
-                                "id": light.data.name,
-                                "path": "color",
-                                "index": k,
-                            }
-                        ],
-                    },
-                    light.data.color[k],
-                )
+                self.driven("lightcolor:%d" % k, "Light color %s" % "rgb"[k], {"expr": "var", "vars": [{"name": "var", "type": "SINGLE_PROP", "id_type": "LIGHT", "id": light.data.name, "path": "color", "index": k}]}, light.data.color[k])
                 for k in range(3)
             ]
         else:
-            direction = self.combine(
-                [float(v) for v in self.state.light_dir], "MMD light direction"
-            )
+            direction = self.combine([float(v) for v in self.state.light_dir], "MMD light direction")
             color = [float(v) for v in self.state.light_color]
-        node = self.group_node(
-            mme_geo_light_group(), "MMD light", {"Direction": direction}
-        )
+        node = self.group_node(mme_geo_light_group(), "MMD light", {"Direction": direction})
         out = node.outputs
         found = {
             "d": self.split(out["Direction"]),
@@ -2779,13 +2342,7 @@ class MmeGeoScene:
         return m
 
     def prop_spec(self, obj, path, index=None, expr="var"):
-        var = {
-            "name": "var",
-            "type": "SINGLE_PROP",
-            "id_type": "OBJECT",
-            "id": obj.name,
-            "path": path,
-        }
+        var = {"name": "var", "type": "SINGLE_PROP", "id_type": "OBJECT", "id": obj.name, "path": path}
         if index is not None:
             var["index"] = index
         return {"expr": expr, "vars": [var]}
@@ -2796,32 +2353,13 @@ class MmeGeoScene:
             return [0.0] * n
         suffix = "" if obj == self.root else " (%s)" % obj.name
         if lower == "tr":
-            return [
-                self.driven(
-                    "tr:" + obj.name,
-                    "Tr" + suffix,
-                    self.prop_spec(obj, '["mme_tr"]'),
-                    obj.get("mme_tr", 1.0),
-                )
-            ]
+            return [self.driven("tr:" + obj.name, "Tr" + suffix, self.prop_spec(obj, '["mme_tr"]'), obj.get("mme_tr", 1.0))]
         if lower == "si":
-            return [
-                self.driven(
-                    "si:" + obj.name,
-                    "Si" + suffix,
-                    self.prop_spec(obj, '["mme_si"]', expr="var * %r" % ACCESSORY_UNIT),
-                    float(obj.get("mme_si", 1.0)) * ACCESSORY_UNIT,
-                )
-            ]
+            return [self.driven("si:" + obj.name, "Si" + suffix, self.prop_spec(obj, '["mme_si"]', expr="var * %r" % ACCESSORY_UNIT), float(obj.get("mme_si", 1.0)) * ACCESSORY_UNIT)]
         if lower in ("x", "y", "z", "xyz", ""):
             if lower == "" and is_bool:
                 return [1.0]
-            pos = self.split(
-                self.scale(
-                    self.swap(self.object_info(obj).outputs["Location"]),
-                    1.0 / self.unit,
-                )
-            )
+            pos = self.split(self.scale(self.swap(self.object_info(obj).outputs["Location"]), 1.0 / self.unit))
             if lower == "xyz":
                 return pos
             if lower == "":
@@ -2830,12 +2368,7 @@ class MmeGeoScene:
         if lower in ("rx", "ry", "rz", "rxyz"):
             axes = {"rx": [0], "ry": [2], "rz": [1], "rxyz": [0, 2, 1]}[lower]
             return [
-                self.driven(
-                    "rot:%s:%d" % (obj.name, k),
-                    "Rotation %s (%s)" % ("xyz"[k], obj.name),
-                    self.prop_spec(obj, "rotation_euler", k, "-var"),
-                    -obj.rotation_euler[k],
-                )
+                self.driven("rot:%s:%d" % (obj.name, k), "Rotation %s (%s)" % ("xyz"[k], obj.name), self.prop_spec(obj, "rotation_euler", k, "-var"), -obj.rotation_euler[k])
                 for k in axes
             ]
         return [0.0]
@@ -2860,44 +2393,16 @@ class MmeGeoScene:
         key = ("bone", armature.name, bone)
         if key in self.cache:
             return self.cache[key]
-        loc = [
-            self.driven(
-                "bone:%s:%s:%s" % (armature.name, bone, t),
-                "%s %s" % (bone, t),
-                self.bone_spec(armature, bone, t),
-            )
-            for t in ("LOC_X", "LOC_Y", "LOC_Z")
-        ]
+        loc = [self.driven("bone:%s:%s:%s" % (armature.name, bone, t), "%s %s" % (bone, t), self.bone_spec(armature, bone, t)) for t in ("LOC_X", "LOC_Y", "LOC_Z")]
         self.cache[key] = loc
         return loc
 
     def bone_matrix(self, armature, bone):
         loc = self.combine(self.bone_location(armature, bone), "bone location")
         quat = self.node("FunctionNodeQuaternionToRotation")
-        for name, kind in zip(
-            ("W", "X", "Y", "Z"), ("ROT_W", "ROT_X", "ROT_Y", "ROT_Z")
-        ):
-            self.B.feed(
-                quat.inputs[name],
-                self.driven(
-                    "bone:%s:%s:%s" % (armature.name, bone, kind),
-                    "%s %s" % (bone, kind),
-                    self.bone_spec(armature, bone, kind),
-                    1.0 if kind == "ROT_W" else 0.0,
-                ),
-            )
-        scale = self.combine(
-            [
-                self.driven(
-                    "bone:%s:%s:%s" % (armature.name, bone, kind),
-                    "%s %s" % (bone, kind),
-                    self.bone_spec(armature, bone, kind),
-                    1.0,
-                )
-                for kind in ("SCALE_X", "SCALE_Y", "SCALE_Z")
-            ],
-            "bone scale",
-        )
+        for name, kind in zip(("W", "X", "Y", "Z"), ("ROT_W", "ROT_X", "ROT_Y", "ROT_Z")):
+            self.B.feed(quat.inputs[name], self.driven("bone:%s:%s:%s" % (armature.name, bone, kind), "%s %s" % (bone, kind), self.bone_spec(armature, bone, kind), 1.0 if kind == "ROT_W" else 0.0))
+        scale = self.combine([self.driven("bone:%s:%s:%s" % (armature.name, bone, kind), "%s %s" % (bone, kind), self.bone_spec(armature, bone, kind), 1.0) for kind in ("SCALE_X", "SCALE_Y", "SCALE_Z")], "bone scale")
         combine = self.node("FunctionNodeCombineTransform")
         self.link(loc, combine.inputs["Translation"])
         self.link(quat.outputs[0], combine.inputs["Rotation"])
@@ -2909,9 +2414,7 @@ class MmeGeoScene:
         kind = desc.get("kind")
         scale = ACCESSORY_UNIT * self.unit
         if kind == "self":
-            return self.mmd_world(
-                self.object_info(self.root).outputs["Transform"], scale
-            )
+            return self.mmd_world(self.object_info(self.root).outputs["Transform"], scale)
         if kind in ("object", "model"):
             obj = bpy.data.objects.get(desc.get("object", ""))
             return self.mmd_world(self.object_info(obj).outputs["Transform"], scale)
@@ -2930,23 +2433,10 @@ class MmeGeoScene:
         if kind == "self":
             return self.object_items(self.root, desc.get("item", ""), gname, n, is_bool)
         if kind == "object":
-            return self.object_items(
-                bpy.data.objects.get(desc.get("object", "")),
-                desc.get("item", ""),
-                gname,
-                n,
-                is_bool,
-            )
+            return self.object_items(bpy.data.objects.get(desc.get("object", "")), desc.get("item", ""), gname, n, is_bool)
         if kind == "prop":
             prop = desc.get("prop", "")
-            return [
-                self.driven(
-                    "prop:" + prop,
-                    prop,
-                    self.prop_spec(self.root, '["%s"]' % prop),
-                    self.root.get(prop, 0.0),
-                )
-            ]
+            return [self.driven("prop:" + prop, prop, self.prop_spec(self.root, '["%s"]' % prop), self.root.get(prop, 0.0))]
         if kind == "bone":
             armature = bpy.data.objects.get(desc.get("object", ""))
             if armature is None:
@@ -2957,57 +2447,26 @@ class MmeGeoScene:
         if kind == "model":
             if is_bool:
                 return [1.0]
-            return self.object_items(
-                bpy.data.objects.get(desc.get("object", "")), "", gname, n, is_bool
-            )
+            return self.object_items(bpy.data.objects.get(desc.get("object", "")), "", gname, n, is_bool)
         return [0.0]
 
     def param_values(self, gname, n):
         meta = mme_param_meta(self.root).get(gname, {})
         prop = meta.get("prop") or mme_prop_name(MME_PARAM_PREFIX, gname)
         size = int(meta.get("size", 1))
-        default = (
-            list(self.root.get(prop, meta.get("default", [0.0])))
-            if size > 1
-            else [self.root.get(prop, (meta.get("default") or [0.0])[0])]
-        )
+        default = list(self.root.get(prop, meta.get("default", [0.0]))) if size > 1 else [self.root.get(prop, (meta.get("default") or [0.0])[0])]
         out = []
         for k in range(size):
             path = '["%s"]' % prop
             label = meta.get("label") or gname
             if size > 1:
                 label = "%s.%s" % (label, "xyzw"[k] if k < 4 else str(k))
-            out.append(
-                self.driven(
-                    "param:%s:%d" % (gname, k),
-                    label,
-                    self.prop_spec(self.root, path, k if size > 1 else None),
-                    float(default[k]) if k < len(default) else 0.0,
-                )
-            )
+            out.append(self.driven("param:%s:%d" % (gname, k), label, self.prop_spec(self.root, path, k if size > 1 else None), float(default[k]) if k < len(default) else 0.0))
         return out
 
     def scene_spec(self, expr, names):
-        paths = {
-            "fps": "render.fps",
-            "base": "render.fps_base",
-            "rx": "render.resolution_x",
-            "ry": "render.resolution_y",
-            "pct": "render.resolution_percentage",
-        }
-        return {
-            "expr": expr,
-            "vars": [
-                {
-                    "name": n,
-                    "type": "SINGLE_PROP",
-                    "id_type": "SCENE",
-                    "id": self.scene.name,
-                    "path": paths[n],
-                }
-                for n in names
-            ],
-        }
+        paths = {"fps": "render.fps", "base": "render.fps_base", "rx": "render.resolution_x", "ry": "render.resolution_y", "pct": "render.resolution_percentage"}
+        return {"expr": expr, "vars": [{"name": n, "type": "SINGLE_PROP", "id_type": "SCENE", "id": self.scene.name, "path": paths[n]} for n in names]}
 
     def scalar_values(self, source, gname, n):
         kind = source[0]
@@ -3020,43 +2479,20 @@ class MmeGeoScene:
             else:
                 values = self.camera()["eye"] + [1.0]
         elif kind == "direction":
-            values = (
-                self.light()["d"] if source[1] == "light" else self.camera()["f"]
-            ) + [0.0]
+            values = (self.light()["d"] if source[1] == "light" else self.camera()["f"]) + [0.0]
         elif kind == "light_color":
-            values = (
-                [0.0, 0.0, 0.0, 1.0]
-                if source[1] == "DIFFUSE"
-                else list(self.light()["color"]) + [1.0]
-            )
+            values = [0.0, 0.0, 0.0, 1.0] if source[1] == "DIFFUSE" else list(self.light()["color"]) + [1.0]
         elif kind == "time":
             time_node = self.node("GeometryNodeInputSceneTime")
             values = [MmeSock(time_node.outputs["Seconds"])]
         elif kind == "elapsed":
             fps = scene_fps(self.scene) or PMM_FPS
-            values = [
-                self.driven(
-                    "elapsed",
-                    "ElapsedTime",
-                    self.scene_spec("base / fps", ("fps", "base")),
-                    1.0 / fps,
-                )
-            ]
+            values = [self.driven("elapsed", "ElapsedTime", self.scene_spec("base / fps", ("fps", "base")), 1.0 / fps)]
         elif kind == "viewport":
             r = self.scene.render
             values = [
-                self.driven(
-                    "viewport:0",
-                    "Viewport width",
-                    self.scene_spec("rx * pct / 100", ("rx", "pct")),
-                    r.resolution_x * r.resolution_percentage / 100.0,
-                ),
-                self.driven(
-                    "viewport:1",
-                    "Viewport height",
-                    self.scene_spec("ry * pct / 100", ("ry", "pct")),
-                    r.resolution_y * r.resolution_percentage / 100.0,
-                ),
+                self.driven("viewport:0", "Viewport width", self.scene_spec("rx * pct / 100", ("rx", "pct")), r.resolution_x * r.resolution_percentage / 100.0),
+                self.driven("viewport:1", "Viewport height", self.scene_spec("ry * pct / 100", ("ry", "pct")), r.resolution_y * r.resolution_percentage / 100.0),
             ]
         elif kind == "control":
             values = self.control_values(gname, n)
@@ -3086,19 +2522,11 @@ class MmeGeoScene:
             if key not in self.cache:
                 self.B.statement("Vertex data from the .x file")
                 if name == MME_ATTR_SRC:
-                    node = self.node(
-                        "GeometryNodeInputNamedAttribute",
-                        "source vertex index",
-                        data_type="INT",
-                    )
+                    node = self.node("GeometryNodeInputNamedAttribute", "source vertex index", data_type="INT")
                     node.inputs["Name"].default_value = name
                     self.cache[key] = [MmeSock(node.outputs["Attribute"])]
                 else:
-                    node = self.node(
-                        "GeometryNodeInputNamedAttribute",
-                        name,
-                        data_type="FLOAT_VECTOR",
-                    )
+                    node = self.node("GeometryNodeInputNamedAttribute", name, data_type="FLOAT_VECTOR")
                     node.inputs["Name"].default_value = name
                     self.cache[key] = self.split(node.outputs["Attribute"])
             return self.cache[key][k]
@@ -3114,11 +2542,7 @@ def mme_set_drivers(obj, mod, drivers, defaults):
         if item is not None:
             item.value = value
     for identifier, spec in drivers:
-        mme_add_driver(
-            obj,
-            'modifiers["%s"].properties.inputs.%s.value' % (mod.name, identifier),
-            spec,
-        )
+        mme_add_driver(obj, 'modifiers["%s"].properties.inputs.%s.value' % (mod.name, identifier), spec)
 
 
 def mme_add_driver(owner, path, spec, index=-1):
@@ -3163,9 +2587,7 @@ def mme_bake_node(S, geometry):
     return bake.outputs[0]
 
 
-def mme_build_geo_tree(
-    label, runtime, draw, state, root, unit, varyings, loop_attrs, scene
-):
+def mme_build_geo_tree(label, runtime, draw, state, root, unit, varyings, loop_attrs, scene):
     program = runtime.program
     function, args = fx_entry(program, draw.fx_pass.vs)
     if function is None:
@@ -3186,20 +2608,16 @@ def mme_build_geo_tree(
             if var:
                 key = "l:" + var
                 needs[key] = ("loop", var)
-                ex.overrides[var] = FxValue(
-                    ("i", ()), [B.new_input(key, label="LoopGetIndex %s" % var)]
-                )
+                ex.overrides[var] = FxValue(("i", ()), [B.new_input(key, label="LoopGetIndex %s" % var)])
         outputs = fx_run_entry(ex, function, args, mme_geo_vertex_inputs(needs)(ex))
         position = outputs.get("POSITION0")
         if position is not None and fx_is_numeric(position.t):
             clip = list(ex.convert(position, ("f", (4,))).c)
         else:
             clip = [0.0, 0.0, 0.0, 0.0]
-        outs = [
-            ("Clip %s" % c, clip[k], "NodeSocketFloat") for k, c in enumerate("xyzw")
-        ]
+        outs = [("Clip %s" % c, clip[k], "NodeSocketFloat") for k, c in enumerate("xyzw")]
         for name in varyings:
-            semantic, _sep, index = name[len(MME_VARYING_PREFIX) :].rpartition("_")
+            semantic, _sep, index = name[len(MME_VARYING_PREFIX):].rpartition("_")
             value = outputs.get(semantic)
             comp = 0.0
             if value is not None and fx_is_numeric(value.t):
@@ -3211,12 +2629,8 @@ def mme_build_geo_tree(
         inner_inputs = {key: B.input_identifier(key) for key in list(B.inputs)}
         top = bpy.data.node_groups.new("MME " + label, "GeometryNodeTree")
         top[MME_OWNER_PROP] = owner
-        top.interface.new_socket(
-            "Geometry", in_out="INPUT", socket_type="NodeSocketGeometry"
-        )
-        top.interface.new_socket(
-            "Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry"
-        )
+        top.interface.new_socket("Geometry", in_out="INPUT", socket_type="NodeSocketGeometry")
+        top.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
         S = MmeGeoScene(top, root, unit, scene, state, controls, program)
         T = S.B
         group_in = T.new("NodeGroupInput")
@@ -3227,18 +2641,7 @@ def mme_build_geo_tree(
             density = S.driven(
                 "density",
                 "Effect Density",
-                {
-                    "expr": "var",
-                    "vars": [
-                        {
-                            "name": "var",
-                            "type": "SINGLE_PROP",
-                            "id_type": "SCENE",
-                            "id": scene.name,
-                            "path": "mmd_bridge.mme_density",
-                        }
-                    ],
-                },
+                {"expr": "var", "vars": [{"name": "var", "type": "SINGLE_PROP", "id_type": "SCENE", "id": scene.name, "path": "mmd_bridge.mme_density"}]},
                 scene.mmd_bridge.mme_density,
             )
             params = getattr(program, "params", {})
@@ -3256,12 +2659,7 @@ def mme_build_geo_tree(
             points = S.node("GeometryNodePoints", "loop instances")
             T.feed(points.inputs["Count"], total)
             index = S.node("GeometryNodeInputIndex")
-            store = S.node(
-                "GeometryNodeStoreNamedAttribute",
-                "store loop instance",
-                data_type="INT",
-                domain="POINT",
-            )
+            store = S.node("GeometryNodeStoreNamedAttribute", "store loop instance", data_type="INT", domain="POINT")
             store.inputs["Name"].default_value = MME_ATTR_INST
             S.link(points.outputs[0], store.inputs["Geometry"])
             S.link(index.outputs[0], store.inputs["Value"])
@@ -3271,23 +2669,16 @@ def mme_build_geo_tree(
             realize = S.node("GeometryNodeRealizeInstances")
             S.link(instance.outputs[0], realize.inputs[0])
             geometry = realize.outputs[0]
-            inst_attr = S.node(
-                "GeometryNodeInputNamedAttribute", "loop instance", data_type="INT"
-            )
+            inst_attr = S.node("GeometryNodeInputNamedAttribute", "loop instance", data_type="INT")
             inst_attr.inputs["Name"].default_value = MME_ATTR_INST
             remaining = MmeSock(inst_attr.outputs["Attribute"])
             T.statement("LoopGetIndex values")
-            for (var, _count, _name), value in reversed(
-                list(zip(draw.loops, effective))
-            ):
+            for (var, _count, _name), value in reversed(list(zip(draw.loops, effective))):
                 if var:
                     S.cache[("loopvar", var)] = T.imod(remaining, value)
                 remaining = T.idiv(remaining, value)
         T.statement("Vertex shader: %s" % function.name)
-        vs = S.node(
-            "GeometryNodeGroup",
-            "Vertex shader: %s (%s)" % (function.name, draw.fx_pass.name or "pass"),
-        )
+        vs = S.node("GeometryNodeGroup", "Vertex shader: %s (%s)" % (function.name, draw.fx_pass.name or "pass"))
         vs.node_tree = inner
         vs.width = 260
         for key, identifier in inner_inputs.items():
@@ -3303,13 +2694,7 @@ def mme_build_geo_tree(
         clip_node = S.group_node(
             mme_geo_clip_group(),
             "Clip space to object space",
-            {
-                "Clip X": vs.outputs["Clip x"],
-                "Clip Y": vs.outputs["Clip y"],
-                "Clip Z": vs.outputs["Clip z"],
-                "Clip W": vs.outputs["Clip w"],
-                "Unit": unit,
-            },
+            {"Clip X": vs.outputs["Clip x"], "Clip Y": vs.outputs["Clip y"], "Clip Z": vs.outputs["Clip z"], "Clip W": vs.outputs["Clip w"], "Unit": unit},
         )
         culled = MmeSock(clip_node.outputs["Culled"])
         T.boolish.add(T.key(culled))
@@ -3322,12 +2707,7 @@ def mme_build_geo_tree(
 
         def store(name, value, data_type="FLOAT"):
             nonlocal geometry
-            node = S.node(
-                "GeometryNodeStoreNamedAttribute",
-                name,
-                data_type=data_type,
-                domain="POINT",
-            )
+            node = S.node("GeometryNodeStoreNamedAttribute", name, data_type=data_type, domain="POINT")
             node.inputs["Name"].default_value = name
             S.link(geometry, node.inputs["Geometry"])
             T.feed(node.inputs["Value"], value)
@@ -3338,7 +2718,7 @@ def mme_build_geo_tree(
             value = MmeSock(vs.outputs[name])
             store(name, T.select(T.cmp("==", value, value), value, 0.0))
         for name in loop_attrs:
-            var = name[len(MME_LOOP_PREFIX) :]
+            var = name[len(MME_LOOP_PREFIX):]
             store(name, S.cache.get(("loopvar", var), 0.0))
         T.statement("Output")
         geometry = mme_bake_node(S, geometry)
@@ -3379,12 +2759,7 @@ def mme_geo_matrix_group():
         S.B.finish([("Matrix", MmeSock(matrix), "NodeSocketMatrix")])
         group.description = "Blender object transform to an MMD row-vector world matrix"
 
-    return mme_core_group(
-        mme_group_name("Blender to MMD matrix", "GN", key),
-        "GeometryNodeTree",
-        key,
-        build,
-    )
+    return mme_core_group(mme_group_name("Blender to MMD matrix", "GN", key), "GeometryNodeTree", key, build)
 
 
 def mme_geo_camera_group():
@@ -3411,9 +2786,7 @@ def mme_geo_camera_group():
         )
         group.description = "Scene camera as MMD view and projection matrices"
 
-    return mme_core_group(
-        mme_group_name("Camera (MMD)", "GN", key), "GeometryNodeTree", key, build
-    )
+    return mme_core_group(mme_group_name("Camera (MMD)", "GN", key), "GeometryNodeTree", key, build)
 
 
 def mme_geo_light_group():
@@ -3434,9 +2807,7 @@ def mme_geo_light_group():
         )
         group.description = "MMD light direction as light view and projection matrices"
 
-    return mme_core_group(
-        mme_group_name("Light (MMD)", "GN", key), "GeometryNodeTree", key, build
-    )
+    return mme_core_group(mme_group_name("Light (MMD)", "GN", key), "GeometryNodeTree", key, build)
 
 
 def mme_geo_clip_group():
@@ -3445,9 +2816,7 @@ def mme_geo_clip_group():
     def build(group):
         S = mme_geo_group_scene(group)
         T = S.B
-        x, y, z, w = [
-            T.new_input("Clip " + c, "NodeSocketFloat", "Clip " + c) for c in "XYZW"
-        ]
+        x, y, z, w = [T.new_input("Clip " + c, "NodeSocketFloat", "Clip " + c) for c in "XYZW"]
         unit = S.unit
         cam = S.camera()
         T.statement("Clip space to MMD world space")
@@ -3462,12 +2831,7 @@ def mme_geo_clip_group():
             T.vm("SCALE", "forward * z", T.vector_of(cam["f"]), scale=vz),
             T.vm("SCALE", "eye * w", T.vector_of(cam["eye"]), scale=vw),
         ]
-        total = T.vm(
-            "ADD",
-            "view to world",
-            T.vm("ADD", "right + up", terms[0], terms[1]),
-            T.vm("ADD", "forward + eye", terms[2], terms[3]),
-        )
+        total = T.vm("ADD", "view to world", T.vm("ADD", "right + up", terms[0], terms[1]), T.vm("ADD", "forward + eye", terms[2], terms[3]))
         world_vector = T.vm("SCALE", "divide by w", total, scale=T.div(1.0, vw))
         world = T.split_vector(world_vector)
         T.statement("Culling (outside the MMD view volume)")
@@ -3478,67 +2842,33 @@ def mme_geo_clip_group():
         near_out = T.cmp("<", z, T.mul(-1e-6, T.max(1.0, abs_w)))
         far_out = T.cmp(">", z, T.add(T.mul(w, 1.0 + 1e-9), 1e-6))
         outside = T.land(front, T.lor(near_out, far_out))
-        behind = T.land(
-            T.cmp("<", w, -1e-12),
-            T.cmp(
-                ">", T.unary("abs", T.sub(z, natural)), T.mul(1e-4, T.add(abs_w, 1.0))
-            ),
-        )
+        behind = T.land(T.cmp("<", w, -1e-12), T.cmp(">", T.unary("abs", T.sub(z, natural)), T.mul(1e-4, T.add(abs_w, 1.0))))
         persp = T.lor(tiny, T.lor(outside, behind))
-        ortho_cull = T.lor(
-            T.cmp("<", abs_w, 1e-12), T.lor(T.cmp("<", z, 0.0), T.cmp(">", z, w))
-        )
+        ortho_cull = T.lor(T.cmp("<", abs_w, 1e-12), T.lor(T.cmp("<", z, 0.0), T.cmp(">", z, w)))
         culled = T.select(ortho, ortho_cull, persp)
         for value in world:
             culled = T.lor(culled, T.lnot(T.cmp("==", value, value)))
         T.statement("MMD world to object space")
-        blender = T.vm(
-            "SCALE",
-            "MMD units to Blender",
-            T.vector_of([world[0], world[2], world[1]]),
-            scale=unit,
-        ).socket
+        blender = T.vm("SCALE", "MMD units to Blender", T.vector_of([world[0], world[2], world[1]]), scale=unit).socket
         to_local = S.node("FunctionNodeTransformPoint")
         S.link(blender, to_local.inputs["Vector"])
-        S.link(
-            S.invert(S.self_info().outputs["Transform"]), to_local.inputs["Transform"]
-        )
+        S.link(S.invert(S.self_info().outputs["Transform"]), to_local.inputs["Transform"])
         T.statement("culled vertices collapse to the origin")
-        choose = S.node(
-            "GeometryNodeSwitch", "culled ? origin : position", input_type="VECTOR"
-        )
+        choose = S.node("GeometryNodeSwitch", "culled ? origin : position", input_type="VECTOR")
         T.feed(choose.inputs["Switch"], culled)
         S.link(to_local.outputs[0], choose.inputs["False"])
         choose.inputs["True"].default_value = (0.0, 0.0, 0.0)
-        T.finish(
-            [
-                ("Position", MmeSock(choose.outputs[0]), "NodeSocketVector"),
-                ("Culled", culled, "NodeSocketBool"),
-            ]
-        )
+        T.finish([("Position", MmeSock(choose.outputs[0]), "NodeSocketVector"), ("Culled", culled, "NodeSocketBool")])
         group.description = "MMD clip-space vertex position to this object's local space, with MMD culling"
 
-    return mme_core_group(
-        mme_group_name("Clip to object (MMD)", "GN", key),
-        "GeometryNodeTree",
-        key,
-        build,
-    )
+    return mme_core_group(mme_group_name("Clip to object (MMD)", "GN", key), "GeometryNodeTree", key, build)
 
 
 def mme_drop_orphan_groups(owner):
-    for group in [
-        g
-        for g in bpy.data.node_groups
-        if g.get(MME_OWNER_PROP) == owner and g.bl_idname == "GeometryNodeTree"
-    ]:
+    for group in [g for g in bpy.data.node_groups if g.get(MME_OWNER_PROP) == owner and g.bl_idname == "GeometryNodeTree"]:
         if group.users == 0 and not group.use_fake_user:
             bpy.data.node_groups.remove(group)
-    for group in [
-        g
-        for g in bpy.data.node_groups
-        if g.get(MME_OWNER_PROP) == owner and g.bl_idname == "GeometryNodeTree"
-    ]:
+    for group in [g for g in bpy.data.node_groups if g.get(MME_OWNER_PROP) == owner and g.bl_idname == "GeometryNodeTree"]:
         if group.users == 0 and not group.use_fake_user:
             bpy.data.node_groups.remove(group)
 
@@ -3547,23 +2877,14 @@ def mme_bake_only_tree(label, root):
     mme_drop_orphan_groups("%s|%s" % (root.get("mmd_bridge_accessory"), label))
     top = bpy.data.node_groups.new("MME " + label, "GeometryNodeTree")
     top[MME_OWNER_PROP] = "%s|%s" % (root.get("mmd_bridge_accessory"), label)
-    top.interface.new_socket(
-        "Geometry", in_out="INPUT", socket_type="NodeSocketGeometry"
-    )
-    top.interface.new_socket(
-        "Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry"
-    )
+    top.interface.new_socket("Geometry", in_out="INPUT", socket_type="NodeSocketGeometry")
+    top.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
     S = MmeGeoScene(top, root, 1.0, bpy.context.scene, None, {}, None)
     group_in = S.node("NodeGroupInput")
     group_in.location = (0, 0)
     time_node = S.node("GeometryNodeInputSceneTime", "re-evaluate every frame")
     time_node.location = (0, -160)
-    stamp = S.node(
-        "GeometryNodeStoreNamedAttribute",
-        "frame stamp",
-        data_type="FLOAT",
-        domain="POINT",
-    )
+    stamp = S.node("GeometryNodeStoreNamedAttribute", "frame stamp", data_type="FLOAT", domain="POINT")
     stamp.inputs["Name"].default_value = "mme_frame"
     stamp.location = (220, 0)
     S.link(group_in.outputs[0], stamp.inputs["Geometry"])

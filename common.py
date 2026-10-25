@@ -373,11 +373,7 @@ MME_CORE_FILE = "mme_core.blend"
 _mme_groups = {}
 
 
-_mme_core = {
-    "names": None,
-    "path": None,
-    "stats": {"built": 0, "file": 0, "library": 0},
-}
+_mme_core = {"names": None, "path": None, "stats": {"built": 0, "file": 0, "library": 0}}
 
 
 def mme_load_controls(root):
