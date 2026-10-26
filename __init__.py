@@ -1,82 +1,54 @@
+ADDON_VERSION = (0, 2, 0)
+
 bl_info = {
-    "name": "NineSync",
+    "name": "NineSync: PMM Bridge",
     "author": "",
-    "version": (0, 1, 0),
+    "version": ADDON_VERSION,
     "blender": (5, 3, 0),
     "location": "View3D > Sidebar > NineSync",
-    "description": "\u2468-Sync: live-sync MikuMikuDance .pmm projects through mmd_tools and import their MME effects (.fx)",
+    "description": "⑨-Sync: live-sync MikuMikuDance .pmm projects (models, camera, light, audio) through mmd_tools",
     "category": "Import-Export",
 }
 
 import importlib as _importlib
 import sys as _sys
 
-for _name in ("common", "pmm", "xfile", "fx", "mme_nodes", "mme", "bridge", "ui"):
+for _name in ("common", "hooks", "pmm", "bridge", "ui"):
     _module = _sys.modules.get(__name__ + "." + _name)
     if _module is not None:
         _importlib.reload(_module)
 
 import bpy
-from bpy.props import BoolProperty, PointerProperty
+from bpy.props import PointerProperty
 
+from . import hooks
 from .common import (
     MIN_BLENDER,
-    MME_PARAMS_PROP,
-    MME_REBUILD_DELAY,
     NINESYNC_NAME,
-    _mme_runtimes,
-    _mme_state,
+    legacy_monolith_active,
     log,
-    mme_effect_roots,
-    redraw_all,
     setup_logging,
 )
-from .mme import (
-    accessory_visible_get,
-    accessory_visible_set,
-    mme_progress_tick,
-    mme_rebuild_needed,
-    mme_revive_drivers,
-    mme_run_rebuilds,
-    mme_update_scene,
-)
-from .bridge import (
-    sweep_stale_temp,
-)
+from .bridge import sweep_stale_temp
 from .ui import (
     CLASSES,
+    LEGACY_CLASSES,
     MMDBridgeSettings,
-    menu_import_accessory,
+    addon_preferences,
+    apply_import_scale,
     schedule_relink,
     settings_outdated,
 )
 
 
+_state = {"legacy": False}
+
+
 @bpy.app.handlers.persistent
-def mme_frame_handler(scene, depsgraph=None):
-    if _mme_state.get("progress") is not None:
-        mme_progress_tick(scene.frame_current)
-    if _mme_state["busy"]:
+def ninesync_load_handler(*_args):
+    if _state["legacy"]:
         return
-    _mme_state["busy"] = True
-    try:
-        updated = mme_update_scene(scene, depsgraph)
-        if updated and depsgraph is not None and _mme_state.get("only") is not None:
-            depsgraph.update()
-    finally:
-        _mme_state["busy"] = False
-
-
-@bpy.app.handlers.persistent
-def mme_load_handler(*_args):
-    _mme_runtimes.clear()
-    _mme_state["errors"].clear()
-    try:
-        revived = mme_revive_drivers([c for root in mme_effect_roots(bpy.context.scene) for c in root.children])
-        if revived:
-            log.info("reset %d effect driver(s) that Blender had marked invalid", revived)
-    except (AttributeError, RuntimeError):
-        pass
+    hooks.register_core(ADDON_VERSION)
     try:
         if settings_outdated(bpy.context.scene):
             schedule_relink()
@@ -84,42 +56,13 @@ def mme_load_handler(*_args):
         pass
 
 
-@bpy.app.handlers.persistent
-def mme_param_watch(scene, depsgraph=None):
-    if _mme_state["busy"] or _mme_state.get("only") is not None or depsgraph is None:
-        return
-    screen = getattr(bpy.context, "screen", None)
-    if screen is not None and screen.is_animation_playing:
-        return
-    if bpy.app.is_job_running("RENDER"):
-        return
-    for update in depsgraph.updates:
-        obj = update.id.original if isinstance(update.id, bpy.types.Object) else None
-        if obj is None or not obj.get(MME_PARAMS_PROP):
-            continue
-        if obj.name in _mme_state["rebuild"]:
-            continue
-        if mme_rebuild_needed(obj):
-            settings = getattr(scene, "mmd_bridge", None)
-            if settings is not None and not settings.mme_auto_rebuild:
-                if obj.name not in _mme_state["stale"]:
-                    _mme_state["stale"].add(obj.name)
-                    redraw_all()
-                continue
-            _mme_state["rebuild"].add(obj.name)
-            if bpy.app.timers.is_registered(mme_run_rebuilds):
-                bpy.app.timers.unregister(mme_run_rebuilds)
-            bpy.app.timers.register(mme_run_rebuilds, first_interval=MME_REBUILD_DELAY)
-
-
 def remove_handlers():
-    for handlers, name in (
-        (bpy.app.handlers.frame_change_post, "mme_frame_handler"),
-        (bpy.app.handlers.load_post, "mme_load_handler"),
-        (bpy.app.handlers.depsgraph_update_post, "mme_param_watch"),
-    ):
-        for handler in [h for h in handlers if getattr(h, "__name__", "") == name]:
-            handlers.remove(handler)
+    for handler in [
+        h
+        for h in bpy.app.handlers.load_post
+        if getattr(h, "__name__", "") == "ninesync_load_handler"
+    ]:
+        bpy.app.handlers.load_post.remove(handler)
 
 
 def register():
@@ -129,26 +72,25 @@ def register():
             % (MIN_BLENDER[0], MIN_BLENDER[1], bpy.app.version_string)
         )
     setup_logging()
+    if legacy_monolith_active():
+        _state["legacy"] = True
+        for cls in LEGACY_CLASSES:
+            bpy.utils.register_class(cls)
+        log.error(
+            "the old combined NineSync is enabled; disable it before using NineSync: PMM Bridge"
+        )
+        return
+    _state["legacy"] = False
     for cls in CLASSES:
         bpy.utils.register_class(cls)
     bpy.types.Scene.mmd_bridge = PointerProperty(type=MMDBridgeSettings)
-    bpy.types.Object.ninesync_visible = BoolProperty(
-        name="Visible",
-        description="Show this accessory in the viewport and in renders (sets Hide in Viewport and Disable in Renders on its meshes, like mmd_tools)",
-        get=accessory_visible_get,
-        set=accessory_visible_set,
-    )
-    bpy.types.TOPBAR_MT_file_import.remove(menu_import_accessory)
-    bpy.types.TOPBAR_MT_file_import.append(menu_import_accessory)
+    hooks.register_core(ADDON_VERSION)
     remove_handlers()
-    bpy.app.handlers.frame_change_post.append(mme_frame_handler)
-    bpy.app.handlers.load_post.append(mme_load_handler)
-    bpy.app.handlers.depsgraph_update_post.append(mme_param_watch)
-    _mme_runtimes.clear()
+    bpy.app.handlers.load_post.append(ninesync_load_handler)
     sweep_stale_temp()
     if not bpy.app.timers.is_registered(startup_check):
         bpy.app.timers.register(startup_check, first_interval=1.0)
-    log.info("%s registered", NINESYNC_NAME)
+    log.info("%s PMM Bridge registered", NINESYNC_NAME)
 
 
 def startup_check():
@@ -156,6 +98,14 @@ def startup_check():
         scene = bpy.context.scene
     except AttributeError:
         return None
+    if _state["legacy"]:
+        return None
+    try:
+        prefs = addon_preferences()
+        if prefs is not None and prefs.use_import_scale:
+            apply_import_scale(prefs.import_scale)
+    except (AttributeError, RuntimeError):
+        pass
     if scene is not None and settings_outdated(scene):
         schedule_relink()
     return None
@@ -163,10 +113,15 @@ def startup_check():
 
 def unregister():
     remove_handlers()
-    _mme_runtimes.clear()
-    bpy.types.TOPBAR_MT_file_import.remove(menu_import_accessory)
-    if hasattr(bpy.types.Object, "ninesync_visible"):
-        del bpy.types.Object.ninesync_visible
+    hooks.unregister_core()
+    if _state["legacy"]:
+        for cls in reversed(LEGACY_CLASSES):
+            try:
+                bpy.utils.unregister_class(cls)
+            except (RuntimeError, ValueError):
+                pass
+        _state["legacy"] = False
+        return
     if hasattr(bpy.types.Scene, "mmd_bridge"):
         del bpy.types.Scene.mmd_bridge
     for cls in reversed(CLASSES):
@@ -174,15 +129,7 @@ def unregister():
 
 
 def reload_in_place():
-    remove_handlers()
-    bpy.types.TOPBAR_MT_file_import.remove(menu_import_accessory)
-    for cls in reversed(CLASSES):
-        try:
-            bpy.utils.unregister_class(cls)
-        except (RuntimeError, ValueError):
-            pass
-    if hasattr(bpy.types.Scene, "mmd_bridge"):
-        del bpy.types.Scene.mmd_bridge
+    unregister()
     register()
 
 

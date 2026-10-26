@@ -1,8 +1,5 @@
 import bpy
-import hashlib
-import json
 import logging
-import numpy as np
 import sys
 
 
@@ -16,12 +13,6 @@ NINESYNC_CATEGORY = "NineSync"
 
 
 NINESYNC_MAIN_LABEL = NINESYNC_NAME + ": PMM Bridge"
-
-
-NINESYNC_FX_LABEL = NINESYNC_NAME + ": FX Importer"
-
-
-NINESYNC_ACC_LABEL = NINESYNC_NAME + ": Accessories (.x)"
 
 
 LOG_TEXT_NAME = "NineSyncLog"
@@ -125,34 +116,7 @@ REPORT_TEXT_NAME = "NineSyncReport"
 REPORT_LOG_LINES = 300
 
 
-ACCESSORY_COLLECTION = "MMD_Accessories"
-
-
-ACCESSORY_PREFIX = "MMDAcc_"
-
-
-ACCESSORY_FOLLOW_PREFIX = "MMDBridgeAcc"
-
-
-ACCESSORY_VISIBLE_PROP = "mme_visible"
-
-
-ACCESSORY_VISIBLE_MODIFIER = "NineSync Visible"
-
-
-ACCESSORY_VISIBLE_GROUP = "NineSync Visibility"
-
-
-ACCESSORY_OWNED_PATHS = ("location", "rotation_euler", "scale", '["mme_tr"]', '["mme_si"]')
-
-
-ACCESSORY_UNIT = 10.0
-
-
-X_IMPORTER_MODULES = ("io_directx_x", "io_scene_x")
-
-
-X_IMPORTER_URL = "https://extensions.blender.org/add-ons/io-directx-x/"
+ADDON_PACKAGE = (__package__ or __name__).split(".")[0] if not (__package__ or "").startswith("bl_ext.") else ".".join((__package__ or "").split(".")[:3])
 
 
 MMD_TOOLS_URL = "https://extensions.blender.org/add-ons/mmd-tools/"
@@ -194,20 +158,6 @@ def iter_fcurves(action):
             for bag in getattr(strip, "channelbags", []):
                 found.extend(bag.fcurves)
     return found
-
-
-def remove_fcurve(action, fcurve):
-    fcurves = getattr(action, "fcurves", None)
-    if fcurves is not None:
-        fcurves.remove(fcurve)
-        return True
-    for layer in action.layers:
-        for strip in layer.strips:
-            for bag in getattr(strip, "channelbags", []):
-                if any(f == fcurve for f in bag.fcurves):
-                    bag.fcurves.remove(fcurve)
-                    return True
-    return False
 
 
 def ensure_collection(scene, name):
@@ -261,13 +211,6 @@ def short_name(text, limit=48):
     return out or "accessory"
 
 
-def accessory_key(acc):
-    key = getattr(acc, "key", None)
-    if key:
-        return key
-    return "%d:%s" % (acc.index, acc.name)
-
-
 def node_input(node, *names):
     for name in names:
         found = node.inputs.get(name)
@@ -281,223 +224,6 @@ def node_socket(node, identifier, outputs=False):
         if socket.identifier == identifier:
             return socket
     return None
-
-
-def find_accessory_root(collection, key):
-    for obj in collection.objects:
-        if obj.get("mmd_bridge_accessory") == key:
-            return obj
-    return None
-
-
-MME_DRAW_PROP = "mme_draw"
-
-
-MME_VARYINGS_PROP = "mme_varyings"
-
-
-MME_UNIFORMS_PROP = "mme_uniforms"
-
-
-MME_ATTR_SRC = "mme_src"
-
-
-MME_ATTR_INST = "mme_inst"
-
-
-MME_ATTR_CULL = "mme_cull"
-
-
-MME_VARYING_PREFIX = "mmeV_"
-
-
-MME_LOOP_PREFIX = "mmeL_"
-
-
-MME_UNIFORM_PREFIX = "mmeU_"
-
-
-MME_CONTROL_PREFIX = "mmeC_"
-
-
-MME_IGNORED_PROP = "mme_ignored_sources"
-
-
-MME_USE_PREFIX = "mmeUse_"
-
-
-MME_IMAGE_PREFIX = "MME_"
-
-
-MME_GAMMA = 2.2
-
-
-MME_PRUNE_TR = (1.0, 0.8, 0.6, 0.4, 0.2, 0.0)
-
-
-MME_SWAP = np.array(
-    [[1.0, 0, 0, 0], [0, 0, 1.0, 0], [0, 1.0, 0, 0], [0, 0, 0, 1.0]], dtype=np.float64
-)
-
-
-MME_SWAP3 = MME_SWAP[:3, :3]
-
-
-MME_SELF_NAMES = ("(self)", "(offscreenowner)")
-
-
-MME_PARAM_PREFIX = "mmeP_"
-
-
-MME_PARAMS_PROP = "mme_params"
-
-
-MME_PARAM_BUILT_PROP = "mme_param_built"
-
-
-MME_GN_MODIFIER = "MME"
-
-
-MME_BACKEND_PROP = "mme_backend"
-
-
-MME_PRUNED_PROP = "mme_pruned"
-
-
-MME_BAKED_PROP = "mme_baked"
-
-
-MME_DRIVEN_PROP = "mme_driven"
-
-
-MME_OWNER_PROP = "mme_owner"
-
-
-MME_GROUP_PROP = "mme_group"
-
-
-MME_SIG_PROP = "mme_sig"
-
-
-MME_ATTR_POS = "mme_p"
-
-
-MME_ATTR_NRM = "mme_n"
-
-
-MME_ATTR_UV = "mme_uv"
-
-
-MME_REBUILD_DELAY = 0.6
-
-
-_mme_runtimes = {}
-
-
-_mme_state = {"busy": False, "errors": set(), "only": None, "rebuild": set(), "progress": None, "stale": set()}
-
-
-MME_CORE_VERSION = 2
-
-
-MME_KEY_PROP = "mme_key"
-
-
-MME_RET_PROP = "mme_ret"
-
-
-MME_CORE_FILE = "mme_core.blend"
-
-
-_mme_groups = {}
-
-
-_mme_core = {"names": None, "path": None, "stats": {"built": 0, "file": 0, "library": 0}}
-
-
-def mme_load_controls_raw(root):
-    try:
-        return json.loads(root.get("mme_controls", "{}"))
-    except (TypeError, ValueError):
-        return {}
-
-
-def mme_control_source(desc):
-    return (desc.get("source") or (desc.get("from") or "").split(" / ")[0]).strip()
-
-
-def mme_control_toggleable(desc):
-    return desc.get("kind") in ("prop", "model", "bone", "object", "shapekey") and mme_control_source(desc).lower() not in MME_SELF_NAMES
-
-
-def mme_use_prop(source):
-    text = MME_USE_PREFIX + source
-    if len(text.encode("utf-8")) > 63:
-        text = MME_USE_PREFIX + hashlib.md5(source.encode("utf-8")).hexdigest()[:12]
-    return text
-
-
-def mme_control_use_prop(desc):
-    if not mme_control_toggleable(desc):
-        return None
-    return mme_use_prop(mme_control_source(desc))
-
-
-def mme_ensure_use_props(root, controls):
-    legacy = root.get(MME_IGNORED_PROP)
-    ignored = set()
-    if legacy is not None:
-        try:
-            ignored = {str(v).lower() for v in json.loads(legacy)}
-        except (TypeError, ValueError):
-            ignored = set()
-        del root[MME_IGNORED_PROP]
-    for desc in controls.values():
-        prop = mme_control_use_prop(desc)
-        if prop is None or prop in root:
-            continue
-        source = mme_control_source(desc)
-        root[prop] = source.lower() not in ignored
-        try:
-            root.id_properties_ui(prop).update(
-                description="Use %s in this effect. Untick (or keyframe it off) to run the effect as if the controller were not loaded in MMD, so it falls back to its own parameters" % source
-            )
-        except (TypeError, AttributeError):
-            pass
-        root.update_tag()
-
-
-def mme_load_controls(root):
-    return mme_load_controls_raw(root)
-
-
-def mme_param_meta(root):
-    try:
-        return json.loads(root.get(MME_PARAMS_PROP, "{}"))
-    except (TypeError, ValueError):
-        return {}
-
-
-def mme_shapekey_spec(desc):
-    obj = bpy.data.objects.get(desc.get("object", ""))
-    keys = obj.data.shape_keys if obj is not None and obj.type == "MESH" else None
-    if keys is None or desc.get("key", "") not in keys.key_blocks:
-        return None
-    return {
-        "expr": "var",
-        "vars": [{"name": "var", "type": "SINGLE_PROP", "id_type": "KEY", "id": keys.name, "path": 'key_blocks["%s"].value' % desc.get("key", "")}],
-    }
-
-
-def mme_effect_roots(scene):
-    collection = bpy.data.collections.get(ACCESSORY_COLLECTION)
-    if collection is None:
-        return []
-    return [
-        obj
-        for obj in collection.objects
-        if obj.get("mme_fx") and obj.get("mmd_bridge_accessory") is not None
-    ]
 
 
 def scene_fps(scene):
@@ -514,5 +240,19 @@ def short_text(text, limit=80):
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-def mme_effect_passes(root):
-    return [c for c in root.children if c.get(MME_DRAW_PROP)]
+FX_URL = ""
+
+
+CORE_URL = ""
+
+
+WRAP_MARGIN = 40
+
+
+WRAP_CHAR = 6.2
+
+
+def legacy_monolith_active():
+    prop = bpy.types.Scene.bl_rna.properties.get("mmd_bridge")
+    fixed = getattr(prop, "fixed_type", None) if prop is not None else None
+    return fixed is not None and "mme_backend" in fixed.bl_rna.properties
