@@ -31,7 +31,7 @@ Both add-ons put their panels in the sidebar tab `NineSync`. They never import e
 ```
 __init__.py   register, load handler, hook registration
 hooks.py      hook registry client (identical in ninesync-fx)
-pmm.py        PMM parser (vendored into ninesync-fx; keep identical)
+pmm.py        PMM parser (core only; FX reads PMM data through ctx.project)
 common/       constants, logging, scene and animation helpers (no sync logic)
 sync/         everything that touches mmd_tools or writes animation:
               engine, models, morphs, UV morphs, clips, camera, light,
