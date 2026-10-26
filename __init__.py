@@ -17,7 +17,7 @@ for _name in ("common", "pmm", "xfile", "fx", "mme_nodes", "mme", "bridge", "ui"
         _importlib.reload(_module)
 
 import bpy
-from bpy.props import PointerProperty
+from bpy.props import BoolProperty, PointerProperty
 
 from .common import (
     MIN_BLENDER,
@@ -32,6 +32,8 @@ from .common import (
     setup_logging,
 )
 from .mme import (
+    accessory_visible_get,
+    accessory_visible_set,
     mme_progress_tick,
     mme_rebuild_needed,
     mme_revive_drivers,
@@ -44,6 +46,7 @@ from .bridge import (
 from .ui import (
     CLASSES,
     MMDBridgeSettings,
+    menu_import_accessory,
     schedule_relink,
     settings_outdated,
 )
@@ -129,6 +132,14 @@ def register():
     for cls in CLASSES:
         bpy.utils.register_class(cls)
     bpy.types.Scene.mmd_bridge = PointerProperty(type=MMDBridgeSettings)
+    bpy.types.Object.ninesync_visible = BoolProperty(
+        name="Visible",
+        description="Show this accessory in the viewport and in renders (sets Hide in Viewport and Disable in Renders on its meshes, like mmd_tools)",
+        get=accessory_visible_get,
+        set=accessory_visible_set,
+    )
+    bpy.types.TOPBAR_MT_file_import.remove(menu_import_accessory)
+    bpy.types.TOPBAR_MT_file_import.append(menu_import_accessory)
     remove_handlers()
     bpy.app.handlers.frame_change_post.append(mme_frame_handler)
     bpy.app.handlers.load_post.append(mme_load_handler)
@@ -153,6 +164,9 @@ def startup_check():
 def unregister():
     remove_handlers()
     _mme_runtimes.clear()
+    bpy.types.TOPBAR_MT_file_import.remove(menu_import_accessory)
+    if hasattr(bpy.types.Object, "ninesync_visible"):
+        del bpy.types.Object.ninesync_visible
     if hasattr(bpy.types.Scene, "mmd_bridge"):
         del bpy.types.Scene.mmd_bridge
     for cls in reversed(CLASSES):
@@ -161,6 +175,7 @@ def unregister():
 
 def reload_in_place():
     remove_handlers()
+    bpy.types.TOPBAR_MT_file_import.remove(menu_import_accessory)
     for cls in reversed(CLASSES):
         try:
             bpy.utils.unregister_class(cls)

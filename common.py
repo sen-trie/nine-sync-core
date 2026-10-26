@@ -143,7 +143,7 @@ ACCESSORY_VISIBLE_MODIFIER = "NineSync Visible"
 ACCESSORY_VISIBLE_GROUP = "NineSync Visibility"
 
 
-ACCESSORY_OWNED_PATHS = ("location", "rotation_euler", "scale", '["mme_tr"]', '["mme_si"]', '["mme_visible"]')
+ACCESSORY_OWNED_PATHS = ("location", "rotation_euler", "scale", '["mme_tr"]', '["mme_si"]')
 
 
 ACCESSORY_UNIT = 10.0
@@ -194,6 +194,20 @@ def iter_fcurves(action):
             for bag in getattr(strip, "channelbags", []):
                 found.extend(bag.fcurves)
     return found
+
+
+def remove_fcurve(action, fcurve):
+    fcurves = getattr(action, "fcurves", None)
+    if fcurves is not None:
+        fcurves.remove(fcurve)
+        return True
+    for layer in action.layers:
+        for strip in layer.strips:
+            for bag in getattr(strip, "channelbags", []):
+                if any(f == fcurve for f in bag.fcurves):
+                    bag.fcurves.remove(fcurve)
+                    return True
+    return False
 
 
 def ensure_collection(scene, name):
@@ -248,6 +262,9 @@ def short_name(text, limit=48):
 
 
 def accessory_key(acc):
+    key = getattr(acc, "key", None)
+    if key:
+        return key
     return "%d:%s" % (acc.index, acc.name)
 
 
@@ -410,7 +427,7 @@ def mme_control_source(desc):
 
 
 def mme_control_toggleable(desc):
-    return desc.get("kind") in ("prop", "model", "bone", "object") and mme_control_source(desc).lower() not in MME_SELF_NAMES
+    return desc.get("kind") in ("prop", "model", "bone", "object", "shapekey") and mme_control_source(desc).lower() not in MME_SELF_NAMES
 
 
 def mme_use_prop(source):
@@ -459,6 +476,17 @@ def mme_param_meta(root):
         return json.loads(root.get(MME_PARAMS_PROP, "{}"))
     except (TypeError, ValueError):
         return {}
+
+
+def mme_shapekey_spec(desc):
+    obj = bpy.data.objects.get(desc.get("object", ""))
+    keys = obj.data.shape_keys if obj is not None and obj.type == "MESH" else None
+    if keys is None or desc.get("key", "") not in keys.key_blocks:
+        return None
+    return {
+        "expr": "var",
+        "vars": [{"name": "var", "type": "SINGLE_PROP", "id_type": "KEY", "id": keys.name, "path": 'key_blocks["%s"].value' % desc.get("key", "")}],
+    }
 
 
 def mme_effect_roots(scene):

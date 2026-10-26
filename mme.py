@@ -4,6 +4,7 @@ import json
 import math
 import numpy as np
 import os
+import sys
 import tempfile
 import time
 import traceback
@@ -31,7 +32,6 @@ from .common import (
     MME_DRIVEN_PROP,
     MME_GN_MODIFIER,
     MME_GROUP_PROP,
-    MME_KEY_PROP,
     MME_LOOP_PREFIX,
     MME_OWNER_PROP,
     MME_PARAMS_PROP,
@@ -62,9 +62,11 @@ from .common import (
     mme_load_controls,
     mme_load_controls_raw,
     mme_param_meta,
+    mme_shapekey_spec,
     model_key,
     pose_bone_name,
     redraw_all,
+    remove_fcurve,
     scene_fps,
     short_name,
     short_text,
@@ -95,6 +97,7 @@ from .fx import (
     fx_lh_look,
     fx_lh_ortho,
     fx_lh_perspective,
+    fx_overridden_params,
     fx_parse_file,
     fx_plan_draws,
     fx_read_text,
@@ -114,6 +117,7 @@ from .mme_nodes import (
     MME_PROGRESS_REDRAW,
     MME_PROGRESS_WIDTH,
     MME_RUNTIME_VALUES_PROP,
+    MME_SIMPLIFY_BUDGET,
     MME_SIMPLIFY_TR,
     MME_SIMPLIFY_VARIANTS,
     MME_TRANSPARENT_BOUNCES,
@@ -177,98 +181,72 @@ def mme_purge_owned(prefix):
     return removed
 
 
-def mme_ensure_visible_prop(root):
-    if ACCESSORY_VISIBLE_PROP in root:
-        return
-    root[ACCESSORY_VISIBLE_PROP] = True
-    try:
-        root.id_properties_ui(ACCESSORY_VISIBLE_PROP).update(
-            description="Show this accessory and its effect in the viewport and in renders. Keyframable; the PMM's visibility keys are written here"
-        )
-    except (TypeError, AttributeError):
-        pass
-    root.update_tag()
-
-
-def mme_migrate_visibility(root):
-    if ACCESSORY_VISIBLE_PROP in root:
-        return
-    mme_ensure_visible_prop(root)
-    for child in root.children:
-        anim = child.animation_data
-        if anim is None or anim.action is None:
-            continue
-        curve = next((f for f in iter_fcurves(anim.action) if f.data_path == "hide_viewport"), None)
-        if curve is None:
-            continue
-        for point in curve.keyframe_points:
-            root[ACCESSORY_VISIBLE_PROP] = point.co[1] < 0.5
-            root.keyframe_insert('["%s"]' % ACCESSORY_VISIBLE_PROP, frame=point.co[0])
-        root[ACCESSORY_VISIBLE_PROP] = not child.hide_viewport
-        return
-    hidden = [c.hide_viewport for c in root.children]
-    root[ACCESSORY_VISIBLE_PROP] = not (hidden and all(hidden))
-
-
-def mme_visibility_group():
-    group = bpy.data.node_groups.get(ACCESSORY_VISIBLE_GROUP)
-    if group is not None and group.bl_idname == "GeometryNodeTree" and group.get(MME_KEY_PROP) == ACCESSORY_VISIBLE_GROUP:
-        return group
-    if group is None:
-        group = bpy.data.node_groups.new(ACCESSORY_VISIBLE_GROUP, "GeometryNodeTree")
-    group.nodes.clear()
-    group.interface.clear()
-    group.interface.new_socket("Geometry", in_out="INPUT", socket_type="NodeSocketGeometry")
-    visible = group.interface.new_socket("Visible", in_out="INPUT", socket_type="NodeSocketBool")
-    visible.default_value = True
-    group.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
-    nodes, links = group.nodes, group.links
-    inputs = nodes.new("NodeGroupInput")
-    inputs.location = (-300, 0)
-    switch = nodes.new("GeometryNodeSwitch")
-    switch.input_type = "GEOMETRY"
-    switch.label = "Visible (driven by the accessory's eye toggle)"
-    outputs = nodes.new("NodeGroupOutput")
-    outputs.location = (300, 0)
-    links.new(inputs.outputs["Geometry"], switch.inputs["True"])
-    links.new(inputs.outputs["Visible"], switch.inputs["Switch"])
-    links.new(switch.outputs[0], outputs.inputs["Geometry"])
-    group[MME_KEY_PROP] = ACCESSORY_VISIBLE_GROUP
-    return group
-
-
 def mme_link_visibility(root):
-    mme_migrate_visibility(root)
-    group = mme_visibility_group()
-    identifier = next(item.identifier for item in group.interface.items_tree if getattr(item, "name", "") == "Visible" and getattr(item, "in_out", "") == "INPUT")
+    curve = None
+    anim = root.animation_data
+    if anim is not None and anim.action is not None:
+        curve = next((f for f in iter_fcurves(anim.action) if f.data_path == '["%s"]' % ACCESSORY_VISIBLE_PROP), None)
+    legacy_keys = [(p.co[0], p.co[1] >= 0.5) for p in curve.keyframe_points] if curve is not None else []
+    legacy_value = root.get(ACCESSORY_VISIBLE_PROP)
+    if curve is not None:
+        remove_fcurve(anim.action, curve)
+    if ACCESSORY_VISIBLE_PROP in root:
+        del root[ACCESSORY_VISIBLE_PROP]
     for child in root.children:
         anim = child.animation_data
         if anim is not None:
-            for path in ("hide_viewport", "hide_render"):
-                try:
-                    child.driver_remove(path)
-                except TypeError:
-                    pass
-            if anim.action is not None:
-                paths = {f.data_path for f in iter_fcurves(anim.action)}
-                if paths <= {"hide_viewport", "hide_render"}:
-                    anim.action = None
-                    child.hide_viewport = False
-                    child.hide_render = False
-        if child.type != "MESH":
-            continue
+            for fcurve in list(anim.drivers):
+                if fcurve.data_path in ("hide_viewport", "hide_render") or ACCESSORY_VISIBLE_MODIFIER in fcurve.data_path:
+                    anim.drivers.remove(fcurve)
         modifier = child.modifiers.get(ACCESSORY_VISIBLE_MODIFIER)
-        if modifier is None:
-            modifier = child.modifiers.new(ACCESSORY_VISIBLE_MODIFIER, "NODES")
-        modifier.node_group = group
-        modifier.show_in_editmode = False
-        mme_add_driver(
-            child,
-            'modifiers["%s"].properties.inputs.%s.value' % (ACCESSORY_VISIBLE_MODIFIER, identifier),
-            {"expr": "v", "vars": [{"name": "v", "type": "SINGLE_PROP", "id_type": "OBJECT", "id": root.name, "path": '["%s"]' % ACCESSORY_VISIBLE_PROP}]},
-        )
-        child.update_tag()
-    root.update_tag()
+        if modifier is not None:
+            child.modifiers.remove(modifier)
+        if legacy_keys:
+            for frame, shown in legacy_keys:
+                child.hide_viewport = not shown
+                child.hide_render = not shown
+                child.keyframe_insert("hide_viewport", frame=frame)
+                child.keyframe_insert("hide_render", frame=frame)
+        elif legacy_value is not None:
+            child.hide_viewport = not bool(legacy_value)
+            child.hide_render = not bool(legacy_value)
+    group = bpy.data.node_groups.get(ACCESSORY_VISIBLE_GROUP)
+    if group is not None and group.users == 0:
+        bpy.data.node_groups.remove(group)
+
+
+def mme_capture_visibility(root):
+    for child in root.children:
+        if child.animation_data is not None and child.animation_data.action is not None:
+            return child.animation_data.action, child.hide_viewport, child.hide_render
+    for child in root.children:
+        return None, child.hide_viewport, child.hide_render
+    return None, False, False
+
+
+def mme_restore_visibility(children, captured):
+    action, hide_viewport, hide_render = captured
+    for child in children:
+        child.hide_viewport = hide_viewport
+        child.hide_render = hide_render
+        if action is not None:
+            anim = child.animation_data_create()
+            anim.action = action
+            if anim.action_suitable_slots:
+                anim.action_slot = anim.action_suitable_slots[0]
+
+
+def accessory_visible_get(self):
+    children = [c for c in self.children if c.type == "MESH"] or list(self.children)
+    if not children:
+        return True
+    return any(not c.hide_viewport for c in children)
+
+
+def accessory_visible_set(self, value):
+    for child in self.children:
+        child.hide_viewport = not value
+        child.hide_render = not value
 
 
 def mme_geometry_cache_file(x_path):
@@ -554,6 +532,11 @@ def mme_control_values(desc, root, depsgraph, unit, t):
 
 def mme_control_values_raw(desc, root, depsgraph, unit, t):
     kind = desc.get("kind")
+    if kind == "shapekey":
+        obj = bpy.data.objects.get(desc.get("object", ""))
+        keys = obj.data.shape_keys if obj is not None and obj.type == "MESH" else None
+        block = keys.key_blocks.get(desc.get("key", "")) if keys is not None else None
+        return [float(block.value) if block is not None else 0.0]
     if kind == "const":
         return list(desc.get("values", [0.0]))
     if kind == "self":
@@ -1000,7 +983,8 @@ def mme_alpha_gates(runtime, draw, state, vs_outputs, tr_names, instances):
     closed = {c: True for c in candidates}
     lit = False
     try:
-        for value in samples:
+        for step, value in enumerate(samples):
+            mme_progress_within(0.1 * (step + 1) / len(samples), "finding alpha gates %d/%d" % (step + 1, len(samples)))
             if value is not None:
                 for name in tr_names:
                     probe.controls[name] = [value]
@@ -1077,7 +1061,8 @@ def mme_strip_samples(runtime, draw, state, used, rows, layout, instances, tr_na
         for index in sorted(set(picks.tolist())):
             runs.append((mme_apply_variant(state, variants[index]), None))
     positions, varyings, culled = [], [], []
-    for probe, value in runs:
+    for step, (probe, value) in enumerate(runs):
+        mme_progress_within(0.65 + 0.15 * (step + 1) / len(runs), "simplifying strips %d/%d" % (step + 1, len(runs)))
         if value is not None:
             for name in tr_names:
                 probe.controls[name] = [value]
@@ -1123,9 +1108,13 @@ def mme_simplify_rows(params, pos, var, cul, tolerance):
     var_tol = max(tolerance * 4.0, 1e-3)
     keep = {0, n - 1}
     stack = [(0, n - 1)]
+    deadline = time.time() + MME_SIMPLIFY_BUDGET
     while stack:
         a, b = stack.pop()
         if b - a < 2:
+            continue
+        if time.time() > deadline:
+            keep.update(range(a, b + 1))
             continue
         mid = np.arange(a + 1, b)
         t = ((params[mid] - params[a]) / max(params[b] - params[a], 1e-12))[None, None, :, None]
@@ -1140,6 +1129,14 @@ def mme_simplify_rows(params, pos, var, cul, tolerance):
         score = np.maximum(perr / local, verr / var_tol)
         score = np.where(all_culled, 0.0, np.where(mixed, np.inf, score))
         worst = score.max(axis=(0, 1, 3))
+        hard = np.isinf(worst)
+        if hard.any():
+            fixed = [a] + (np.nonzero(hard)[0] + a + 1).tolist() + [b]
+            keep.update(fixed)
+            for lo, hi in zip(fixed[:-1], fixed[1:]):
+                if hi - lo >= 2:
+                    stack.append((lo, hi))
+            continue
         k = int(np.argmax(worst))
         if worst[k] > 1.0:
             split = a + 1 + k
@@ -1330,6 +1327,11 @@ def mme_uniform_driver(program, gname, index, root, controls, scene):
             if use_prop is not None:
                 spec = {"expr": "var * use", "vars": spec["vars"] + [dict(prop_var(root, '["%s"]' % use_prop), name="use")]}
             return spec
+        if desc.get("kind") == "shapekey":
+            spec = mme_shapekey_spec(desc)
+            if spec is not None and use_prop is not None:
+                spec = {"expr": "var * use", "vars": spec["vars"] + [dict(prop_var(root, '["%s"]' % use_prop), name="use")]}
+            return spec
         if desc.get("kind") == "model" and use_prop is not None:
             t = fx_resolve_type(g.type, program)
             if fx_is_numeric(t) and t[0] == "b":
@@ -1428,6 +1430,7 @@ def mme_build_pass(runtime, draw, state, root, collection, unit, density, label,
     probe_one = MmePassData(draw, used[:1], np.zeros(1, dtype=np.int64), mme_loop_values(draw, np.zeros(1, dtype=np.int64), density), runtime)
     probe_outputs, _ex = mme_run_vs(runtime, probe_one, state)
     probe_varyings = {k: len(v.c) for k, v in probe_outputs.items() if k != "POSITION0" and fx_is_numeric(v.t)}
+    reduce_started = time.time()
     mme_progress_within(0.05, "finding alpha gates")
     gates = mme_alpha_gates(runtime, draw, state, probe_varyings, tr_names, instances)
     keep, opened = mme_prune_mask(runtime, data, state, tr_names, gates)
@@ -1448,7 +1451,7 @@ def mme_build_pass(runtime, draw, state, root, collection, unit, density, label,
         log.debug("strip simplification for %s failed: %s", label, error)
     if before != len(local_faces):
         log.info(
-            "effect pass %s: %d of %d faces kept (%d never drawn, %d always transparent%s, %d merged along strips)",
+            "effect pass %s: %d of %d faces kept (%d never drawn, %d always transparent%s, %d merged along strips) in %.1fs",
             label,
             len(local_faces),
             before,
@@ -1456,6 +1459,7 @@ def mme_build_pass(runtime, draw, state, root, collection, unit, density, label,
             culled_faces - gated_faces,
             " via " + ", ".join("%s.%s" % (sem, "xyzw"[k] if k < 4 else k) for sem, k in gates) if gates else "",
             gated_faces - len(local_faces),
+            time.time() - reduce_started,
         )
     if backend == "GEONODES":
         faces = local_faces
@@ -1789,6 +1793,10 @@ def mme_resolve_controls(program, project, settings, acc, root):
             if model is None:
                 stem = os.path.splitext(lower)[0]
                 model = next((m for k, m in by_path.items() if os.path.splitext(k)[0] == stem), None)
+            if model is None:
+                found = mme_scene_control(name, item)
+                if found is not None:
+                    desc = found
             if model is not None:
                 item_obj = items.get(model_key(model))
                 target = item_obj.target if item_obj is not None else None
@@ -1807,6 +1815,44 @@ def mme_resolve_controls(program, project, settings, acc, root):
         desc["source"] = name
         controls[g.name] = desc
     return controls, morph_tracks
+
+
+def mme_scene_model(name):
+    lower = name.lower()
+    stem = os.path.splitext(lower.replace("\\", "/").rsplit("/", 1)[-1])[0]
+    roots = [o for o in bpy.data.objects if getattr(o, "mmd_type", "") == "ROOT"]
+
+    def names(obj):
+        mmd_root = getattr(obj, "mmd_root", None)
+        found = [obj.name]
+        if mmd_root is not None:
+            found += [mmd_root.name, mmd_root.name_e]
+        return [n.lower() for n in found if n]
+
+    for obj in roots:
+        if stem in names(obj) or lower in names(obj):
+            return obj
+    for obj in roots:
+        if any(stem and (stem in n or n in stem) for n in names(obj)):
+            return obj
+    return None
+
+
+def mme_scene_control(name, item):
+    root = mme_scene_model(name)
+    if root is None:
+        return None
+    if not item:
+        return {"kind": "model", "object": root.name}
+    for child in root.children_recursive:
+        keys = child.data.shape_keys if child.type == "MESH" else None
+        if keys is not None and item in keys.key_blocks:
+            return {"kind": "shapekey", "object": child.name, "key": item}
+    armature = find_armature(root)
+    bone = pose_bone_name(armature, item) if armature is not None else None
+    if bone is not None:
+        return {"kind": "bone", "object": armature.name, "bone": bone}
+    return None
 
 
 def mme_key_morph_props(root, morph_tracks):
@@ -1899,6 +1945,7 @@ def mme_build_effect(scene, collection, settings, acc, root, x_path, fx_path, un
         if owns:
             mme_progress_end()
     root["mme_structural"] = json.dumps(fx_structural_params(runtime.program))
+    root["mme_overrides"] = json.dumps(fx_overridden_params(runtime.program))
     root.update_tag()
     root[MME_PARAM_BUILT_PROP] = json.dumps(mme_param_signature(root))
     stats = dict(_mme_core["stats"])
@@ -1940,7 +1987,8 @@ def mme_rebuild_effect(scene, root):
         return 0
     unit = float(root.get("mme_unit", 1.0)) or 1.0
     passes = [c for c in root.children if c.get(MME_DRAW_PROP)]
-    mme_migrate_visibility(root)
+    mme_link_visibility(root)
+    captured = mme_capture_visibility(root)
     for child in passes:
         remove_accessory_children_single(child)
     started = time.time()
@@ -1949,7 +1997,7 @@ def mme_rebuild_effect(scene, root):
     )
     for child in children:
         child.scale = (ACCESSORY_UNIT * unit,) * 3
-    mme_link_visibility(root)
+    mme_restore_visibility(children, captured)
     root.update_tag()
     log.info("effect '%s' rebuilt in %.1fs: %d of %d pass(es)", root.name, time.time() - started, len(children), total)
     return len(children)
@@ -2023,6 +2071,12 @@ def remove_subset_faces(obj, subsets):
 def effect_setup(project, settings, acc, entry, path, root):
     if not settings.mme_effects:
         return None, None, {}, {}
+    if entry is not None and not entry.effect_checked:
+        entry.effect_checked = True
+        entry.use_effect = True
+        entry.use_effect = bool(mme_find_effect(acc, path, settings, entry))
+        if not entry.use_effect:
+            log.info("accessory '%s': no MME effect (.fx) found; effects are off for it", acc.name)
     fx_path = mme_find_effect(acc, path, settings, entry)
     if not fx_path:
         return None, None, {}, {}
@@ -2066,6 +2120,45 @@ def mme_progress_bar(fraction, width=MME_PROGRESS_WIDTH):
     return "[%s%s%s] %3d%%" % ("=" * filled, head, " " * (width - filled - len(head)), int(round(fraction * 100)))
 
 
+def mme_progress_targets():
+    wm = getattr(bpy.context, "window_manager", None)
+    if wm is None:
+        return None, None
+    window = getattr(bpy.context, "window", None)
+    if window is None and len(wm.windows):
+        window = wm.windows[0]
+    workspace = getattr(window, "workspace", None) if window is not None else None
+    return wm, workspace
+
+
+def mme_quiet_redraw():
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except (AttributeError, ValueError, OSError):
+        pass
+    saved = []
+    try:
+        null = os.open(os.devnull, os.O_WRONLY)
+        for fd in (1, 2):
+            saved.append((fd, os.dup(fd)))
+            os.dup2(null, fd)
+        os.close(null)
+    except OSError:
+        for fd, copy in saved:
+            os.dup2(copy, fd)
+            os.close(copy)
+        saved = None
+    try:
+        bpy.ops.wm.redraw_timer(type="DRAW_WIN_SWAP", iterations=1)
+    except (RuntimeError, AttributeError):
+        pass
+    finally:
+        for fd, copy in saved or ():
+            os.dup2(copy, fd)
+            os.close(copy)
+
+
 def mme_progress_begin(context, title, count, start=0, end=0):
     if _mme_state.get("progress") is not None:
         return False
@@ -2078,13 +2171,13 @@ def mme_progress_begin(context, title, count, start=0, end=0):
         "detail": "",
         "start": start,
         "end": end,
-        "wm": getattr(context, "window_manager", None),
-        "workspace": getattr(context, "workspace", None),
         "drawn": 0.0,
+        "began": time.time(),
     }
+    wm, _workspace = mme_progress_targets()
     try:
-        context.window_manager.progress_begin(0, 100)
-    except (AttributeError, RuntimeError):
+        wm.progress_begin(0, 100)
+    except (AttributeError, RuntimeError, ReferenceError):
         pass
     mme_progress_draw(force=True)
     return True
@@ -2131,8 +2224,10 @@ def mme_progress_draw(force=False):
         parts.append("pass %d/%d %s" % (min(progress["index"] + 1, progress["count"]), progress["count"], progress["label"]))
     if progress["detail"]:
         parts.append(progress["detail"])
+    parts.append("%.0fs" % (time.time() - progress["began"]))
+    wm, workspace = mme_progress_targets()
     try:
-        progress["wm"].progress_update(fraction * 100.0)
+        wm.progress_update(fraction * 100.0)
     except (AttributeError, RuntimeError, ReferenceError):
         pass
     now = time.time()
@@ -2140,10 +2235,11 @@ def mme_progress_draw(force=False):
         return
     progress["drawn"] = now
     try:
-        progress["workspace"].status_text_set("  ".join(parts))
-        bpy.ops.wm.redraw_timer(type="DRAW_WIN_SWAP", iterations=1)
+        workspace.status_text_set("  ".join(parts))
     except (AttributeError, RuntimeError, ReferenceError):
-        pass
+        return
+    if not bpy.app.background:
+        mme_quiet_redraw()
 
 
 def mme_progress_end():
@@ -2151,12 +2247,13 @@ def mme_progress_end():
     _mme_state["progress"] = None
     if progress is None:
         return
+    wm, workspace = mme_progress_targets()
     try:
-        progress["wm"].progress_end()
+        wm.progress_end()
     except (AttributeError, RuntimeError, ReferenceError):
         pass
     try:
-        progress["workspace"].status_text_set(None)
+        workspace.status_text_set(None)
     except (AttributeError, RuntimeError, ReferenceError):
         pass
 

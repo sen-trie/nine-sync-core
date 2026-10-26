@@ -12,6 +12,7 @@ import sys
 import tempfile
 import time
 import traceback
+import types
 from mathutils import Matrix, Vector
 
 from .common import (
@@ -20,7 +21,6 @@ from .common import (
     ACCESSORY_OWNED_PATHS,
     ACCESSORY_PREFIX,
     ACCESSORY_UNIT,
-    ACCESSORY_VISIBLE_PROP,
     ACTION_PREFIX,
     AUDIO_STRIP_NAME,
     CAMERA_COLLECTION,
@@ -74,7 +74,9 @@ from .common import (
     short_text,
 )
 from .pmm import (
+    AccessoryKey,
     PmmError,
+    PmmProject,
     build_scene_vmd,
     build_vmd,
     parse_pmm,
@@ -90,10 +92,11 @@ from .mme import (
     mme_build_effect,
     mme_clear_root_props,
     mme_effect_stamp,
-    mme_ensure_visible_prop,
+    mme_find_effect,
     mme_key_morph_props,
     mme_link_visibility,
     mme_purge_owned,
+    mme_update_scene,
     remove_accessory_children,
     remove_accessory_children_single,
     remove_subset_faces,
@@ -1817,7 +1820,8 @@ def import_scene_elements(scene, project, settings):
 def refresh_accessories(settings, project):
     wanted = [accessory_key(a) for a in project.accessories]
     for index in reversed(range(len(settings.accessories))):
-        if settings.accessories[index].key not in wanted:
+        entry = settings.accessories[index]
+        if entry.key not in wanted and not entry.standalone:
             settings.accessories.remove(index)
     present = {e.key: e for e in settings.accessories}
     for acc in project.accessories:
@@ -2105,6 +2109,12 @@ def accessory_owned_path(path):
 
 
 def key_accessory(root, acc, unit):
+    if getattr(acc, "standalone", False):
+        for name in ("mme_tr", "mme_si"):
+            if name not in root:
+                root[name] = 1.0
+        mme_link_visibility(root)
+        return
     anim = root.animation_data or root.animation_data_create()
     low, high = frame_span(k.frame for k in acc.keys)
     kept = snapshot_outside([root], low, high, keep_all=lambda path: not accessory_owned_path(path))
@@ -2126,23 +2136,35 @@ def key_accessory(root, acc, unit):
         root.keyframe_insert("scale", frame=key.frame)
         root.keyframe_insert('["mme_tr"]', frame=key.frame)
         root.keyframe_insert('["mme_si"]', frame=key.frame)
-    visible = {bool(k.visible) for k in acc.keys}
-    mme_ensure_visible_prop(root)
-    root[ACCESSORY_VISIBLE_PROP] = bool(acc.keys[0].visible) if acc.keys else True
-    if visible != {True}:
-        for key in acc.keys:
-            root[ACCESSORY_VISIBLE_PROP] = bool(key.visible)
-            root.keyframe_insert('["%s"]' % ACCESSORY_VISIBLE_PROP, frame=key.frame)
     action = anim.action
     if action is not None:
         for fcurve in iter_fcurves(action):
-            constant = fcurve.data_path == '["%s"]' % ACCESSORY_VISIBLE_PROP
             for point in fcurve.keyframe_points:
-                point.interpolation = "CONSTANT" if constant else "LINEAR"
+                point.interpolation = "LINEAR"
     restore_points(kept)
     if anim.action is not None:
         anim.action.name = ACTION_PREFIX + "Acc_" + short_name(acc.name, 40)
     mme_link_visibility(root)
+    visible = {bool(k.visible) for k in acc.keys}
+    for child in root.children:
+        child_anim = child.animation_data
+        if child_anim is not None:
+            child_anim.action = None
+        child.hide_viewport = False
+        child.hide_render = False
+        if visible == {True}:
+            continue
+        for key in acc.keys:
+            child.hide_viewport = not key.visible
+            child.hide_render = not key.visible
+            child.keyframe_insert("hide_viewport", frame=key.frame)
+            child.keyframe_insert("hide_render", frame=key.frame)
+        child_action = child.animation_data.action if child.animation_data else None
+        if child_action is not None:
+            child_action.name = ACTION_PREFIX + "Acc_vis_" + short_name(acc.name, 30)
+            for fcurve in iter_fcurves(child_action):
+                for point in fcurve.keyframe_points:
+                    point.interpolation = "CONSTANT"
 
 
 def import_accessory(scene, collection, project, settings, acc, entry, unit):
@@ -2279,6 +2301,89 @@ def import_accessory(scene, collection, project, settings, acc, entry, unit):
             }
     apply_accessory_parent(root, project, settings, acc, entry)
     return True
+
+
+def standalone_key(settings, name):
+    taken = {e.key for e in settings.accessories}
+    key = "x:%s" % name
+    number = 2
+    while key in taken:
+        key = "x:%s#%d" % (name, number)
+        number += 1
+    return key
+
+
+def standalone_accessory(path, key):
+    acc = types.SimpleNamespace()
+    acc.index = -1
+    acc.name = os.path.basename(path)
+    acc.path = path
+    acc.draw_order = 0
+    acc.key = key
+    acc.standalone = True
+    acc.keys = [AccessoryKey(0, 1, -1, 0, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0), 1.0, 0, 1.0)]
+    return acc
+
+
+def import_plain_accessory(context, path, unit):
+    with open(path, "rb") as handle:
+        raw = handle.read()
+    name = os.path.basename(path)
+    collection = context.collection or context.scene.collection
+    if x_header_mode(raw) == "txt":
+        xscene = parse_x_bytes(raw)
+        for note in xscene.warnings:
+            log.warning("accessory '%s': %s", name, note)
+        child = create_x_object(short_name(name, 40) + "_mesh", xscene, os.path.dirname(path), context.scene.mmd_bridge)
+        collection.objects.link(child)
+        children = [child]
+    else:
+        children = import_x_with_addon(path)
+        for child in children:
+            for owner in list(child.users_collection):
+                owner.objects.unlink(child)
+            collection.objects.link(child)
+    root = bpy.data.objects.new(ACCESSORY_PREFIX + short_name(name), None)
+    root.empty_display_type = "PLAIN_AXES"
+    collection.objects.link(root)
+    root.location = context.scene.cursor.location
+    for child in children:
+        child.parent = root
+        child.scale = (ACCESSORY_UNIT * unit,) * 3
+    log.info("imported plain accessory '%s' (%d part(s), no MME effect)", name, len(children))
+    return root
+
+
+def import_standalone_accessory(context, path, unit, use_effect=True, effect_path=""):
+    scene = context.scene
+    settings = scene.mmd_bridge
+    name = os.path.basename(path)
+    probe = standalone_accessory(path, "")
+    fx_path = ""
+    if use_effect and settings.mme_effects:
+        fx_path = effect_path if effect_path and os.path.isfile(effect_path) else (mme_find_effect(probe, path, settings, None) or "")
+    if not fx_path:
+        return import_plain_accessory(context, path, unit)
+    key = standalone_key(settings, name)
+    entry = settings.accessories.add()
+    entry.key = key
+    entry.display = name
+    entry.standalone = True
+    entry.enabled = False
+    entry.effect_checked = True
+    entry.use_effect = True
+    entry.effect_path = effect_path or ""
+    collection = ensure_collection(scene, ACCESSORY_COLLECTION)
+    acc = standalone_accessory(path, key)
+    started = time.time()
+    if not import_accessory(scene, collection, PmmProject(), settings, acc, entry, unit):
+        return None
+    root = find_accessory_root(collection, key)
+    if root is not None:
+        root.location = scene.cursor.location
+        mme_update_scene(scene, context.evaluated_depsgraph_get(), force=True)
+    log.info("imported accessory '%s' with effect %s in %.1fs", name, os.path.basename(fx_path), time.time() - started)
+    return root
 
 
 def import_accessories(scene, project, settings):

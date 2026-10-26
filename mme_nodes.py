@@ -38,6 +38,7 @@ from .common import (
     mme_control_use_prop,
     mme_load_controls,
     mme_param_meta,
+    mme_shapekey_spec,
     node_socket,
     scene_fps,
 )
@@ -104,6 +105,9 @@ MME_VARIANT_MAX = 48
 MME_SIMPLIFY_VARIANTS = 8
 
 
+MME_SIMPLIFY_BUDGET = 15.0
+
+
 MME_PROGRESS_WIDTH = 24
 
 
@@ -113,7 +117,7 @@ MME_WRAP_MARGIN = 40
 MME_WRAP_CHAR = 6.2
 
 
-MME_PROGRESS_REDRAW = 0.1
+MME_PROGRESS_REDRAW = 0.25
 
 
 MME_RUNTIME_VALUES_PROP = "mme_runtime_values"
@@ -2484,6 +2488,13 @@ class MmeGeoScene:
     def control_values_raw(self, gname, n):
         desc = self.controls.get(gname, {})
         kind = desc.get("kind")
+        if kind == "shapekey":
+            spec = mme_shapekey_spec(desc)
+            if spec is None:
+                return [0.0]
+            obj = bpy.data.objects.get(desc.get("object", ""))
+            value = obj.data.shape_keys.key_blocks[desc.get("key", "")].value
+            return [self.driven("sk:%s:%s" % (desc.get("object", ""), desc.get("key", "")), desc.get("key", ""), spec, float(value))]
         g = self.program.globals.get(gname)
         t = fx_resolve_type(g.type, self.program) if g is not None else ("f", ())
         is_bool = fx_is_numeric(t) and t[0] == "b"
@@ -2621,6 +2632,8 @@ def mme_add_driver(owner, path, spec, index=-1):
                 target.id = bpy.data.scenes.get(var_spec["id"])
             elif var_spec["id_type"] == "LIGHT":
                 target.id = bpy.data.lights.get(var_spec["id"])
+            elif var_spec["id_type"] == "KEY":
+                target.id = bpy.data.shape_keys.get(var_spec["id"])
             else:
                 target.id = bpy.data.objects.get(var_spec["id"])
                 if target.id is not None:

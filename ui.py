@@ -7,11 +7,11 @@ import textwrap
 import time
 import traceback
 from bpy.props import BoolProperty, CollectionProperty, EnumProperty, FloatProperty, PointerProperty, StringProperty
-from bpy.types import Operator, Panel, PropertyGroup
+from bpy.types import Operator, OperatorFileListElement, Panel, PropertyGroup
+from bpy_extras.io_utils import ImportHelper
 
 from .common import (
     ACCESSORY_COLLECTION,
-    ACCESSORY_VISIBLE_PROP,
     CAMERA_COLLECTION,
     LIGHT_COLLECTION,
     LOG_TEXT_NAME,
@@ -40,6 +40,7 @@ from .common import (
     find_accessory_root,
     find_rig_root,
     fps_differs,
+    iter_fcurves,
     log,
     mme_control_source,
     mme_control_use_prop,
@@ -82,6 +83,7 @@ from .bridge import (
     current_scale,
     describe_audio,
     first_armature,
+    import_standalone_accessory,
     is_mmd_root,
     item_state,
     item_status_text,
@@ -149,7 +151,13 @@ class MMDBridgeTarget(PropertyGroup):
 class MMDBridgeAccessory(PropertyGroup):
     key: StringProperty()
     display: StringProperty()
-    enabled: BoolProperty(name="Enabled", default=True)
+    enabled: BoolProperty(
+        name="Sync From PMM",
+        description="Update this accessory from the PMM when you press Sync. Turn off to keep it as it is in Blender",
+        default=True,
+    )
+    standalone: BoolProperty(default=False)
+    effect_checked: BoolProperty(default=False)
     use_effect: BoolProperty(
         name="Use Effect",
         description="Run this accessory's MME effect (.fx). Turn off to import the plain mesh",
@@ -568,6 +576,95 @@ class MMDBRIDGE_OT_refresh_effects(Operator):
         return {"FINISHED"}
 
 
+class NINESYNC_OT_key_accessory_visibility(Operator):
+    bl_idname = "ninesync.key_accessory_visibility"
+    bl_label = "Keyframe Visibility"
+    bl_description = "Insert a visibility keyframe (Hide in Viewport and Disable in Renders) on this accessory's meshes at the current frame. Click on a keyed frame to remove the key"
+    bl_options = {"REGISTER", "UNDO", "INTERNAL"}
+
+    root_name: StringProperty(options={"HIDDEN", "SKIP_SAVE"})
+
+    def execute(self, context):
+        root = bpy.data.objects.get(self.root_name)
+        if root is None:
+            return {"CANCELLED"}
+        frame = context.scene.frame_current
+        remove = accessory_visibility_keyed(root, frame)
+        for child in root.children:
+            for path in ("hide_viewport", "hide_render"):
+                if remove:
+                    try:
+                        child.keyframe_delete(path, frame=frame)
+                    except RuntimeError:
+                        pass
+                else:
+                    child.keyframe_insert(path, frame=frame)
+            anim = child.animation_data
+            if anim is not None and anim.action is not None:
+                for fcurve in iter_fcurves(anim.action):
+                    if fcurve.data_path in ("hide_viewport", "hide_render"):
+                        for point in fcurve.keyframe_points:
+                            point.interpolation = "CONSTANT"
+        redraw_all()
+        return {"FINISHED"}
+
+
+class NINESYNC_OT_import_accessory(Operator, ImportHelper):
+    bl_idname = "import_scene.ninesync_accessory"
+    bl_label = "Import MMD Accessory"
+    bl_description = "Import MikuMikuDance accessories (.x) without a PMM. Accessories with an MME effect (.fx) are built and listed in the NineSync panels"
+    bl_options = {"REGISTER", "UNDO", "PRESET"}
+
+    filename_ext = ".x"
+    filter_glob: StringProperty(default="*.x", options={"HIDDEN"})
+    files: CollectionProperty(type=OperatorFileListElement, options={"HIDDEN", "SKIP_SAVE"})
+    directory: StringProperty(subtype="DIR_PATH", options={"HIDDEN", "SKIP_SAVE"})
+    scale: FloatProperty(
+        name="Scale",
+        description="Size multiplier, matching mmd_tools' import scale (0.08 by default)",
+        default=0.08,
+        min=0.0001,
+        soft_max=10.0,
+    )
+    use_effect: BoolProperty(
+        name="MME Effect",
+        description="Build the accessory's MME effect (.fx) when one is found next to it",
+        default=True,
+    )
+    effect_path: StringProperty(
+        name="Effect File",
+        description="Effect (.fx) to use instead of the one next to the .x. Leave empty to look it up",
+        subtype="FILE_PATH",
+    )
+
+    def execute(self, context):
+        if refuse_if_outdated(self, context):
+            return {"CANCELLED"}
+        names = [f.name for f in self.files if f.name] or [os.path.basename(self.filepath)]
+        folder = self.directory or os.path.dirname(self.filepath)
+        imported = 0
+        for name in names:
+            path = os.path.join(folder, name)
+            if not os.path.isfile(path):
+                self.report({"WARNING"}, "Not found: %s" % path)
+                continue
+            try:
+                root = import_standalone_accessory(context, path, self.scale, self.use_effect, bpy.path.abspath(self.effect_path) if self.effect_path else "")
+            except Exception as error:
+                log.error("import of '%s' failed: %s\n%s", path, error, traceback.format_exc())
+                self.report({"ERROR"}, "%s: %s" % (name, short_text(error, 80)))
+                continue
+            if root is not None:
+                imported += 1
+        self.report({"INFO"}, "Imported %d accessory file(s)" % imported)
+        redraw_all()
+        return {"FINISHED"} if imported else {"CANCELLED"}
+
+
+def menu_import_accessory(self, context):
+    self.layout.operator(NINESYNC_OT_import_accessory.bl_idname, text="MMD Accessory (.x)", icon="EMPTY_AXIS")
+
+
 class MMDBRIDGE_OT_bake_effects(Operator):
     bl_idname = "ninesync.bake_effects"
     bl_label = "Bake Effects"
@@ -934,25 +1031,59 @@ class MMDBRIDGE_PT_accessories(Panel):
             return
         collection = bpy.data.collections.get(ACCESSORY_COLLECTION)
         active = getattr(context, "active_object", None)
+        frame = context.scene.frame_current
         box = layout.box()
         for entry in settings.accessories:
             root = find_accessory_root(collection, entry.key) if collection is not None else None
             row = box.row(align=True)
-            row.prop(entry, "enabled", text="")
-            icon = "SHADERFX" if root is not None and root.get("mme_fx") else "MESH_DATA"
-            if root is not None:
-                chosen = active is not None and (active == root or getattr(active, "parent", None) == root)
-                pick = row.operator("ninesync.select_object", text=entry.display, icon=icon, depress=chosen)
-                pick.name = root.name
-                if ACCESSORY_VISIBLE_PROP in root:
-                    shown = bool(root.get(ACCESSORY_VISIBLE_PROP, True))
-                    row.prop(root, '["%s"]' % ACCESSORY_VISIBLE_PROP, text="", icon="HIDE_OFF" if shown else "HIDE_ON", emboss=False)
+            if entry.standalone:
+                row.label(text="", icon="IMPORT")
             else:
+                row.prop(entry, "enabled", text="", icon="LINKED" if entry.enabled else "UNLINKED")
+            icon = "SHADERFX" if root is not None and root.get("mme_fx") else "MESH_DATA"
+            if root is None:
                 sub = row.row(align=True)
                 sub.enabled = False
                 sub.label(text=entry.display, icon=icon)
-            if armature is not None:
+            else:
+                chosen = active is not None and (active == root or getattr(active, "parent", None) == root)
+                pick = row.operator("ninesync.select_object", text=entry.display, icon=icon, depress=chosen)
+                pick.name = root.name
+                shown = root.ninesync_visible
+                row.prop(root, "ninesync_visible", text="", icon="HIDE_OFF" if shown else "HIDE_ON", emboss=False)
+                keyed = accessory_visibility_keyed(root, frame)
+                key = row.operator(
+                    "ninesync.key_accessory_visibility",
+                    text="",
+                    icon="DECORATE_KEYFRAME" if keyed else ("DECORATE_ANIMATE" if accessory_visibility_animated(root) else "DECORATE"),
+                    emboss=False,
+                )
+                key.root_name = root.name
+            if armature is not None and not entry.standalone:
                 row.prop_search(entry, "parent_bone", armature.pose, "bones", text="", icon="BONE_DATA")
+        layout.operator("import_scene.ninesync_accessory", text="Import Accessory (.x)", icon="IMPORT")
+
+
+def accessory_visibility_curves(root):
+    for child in root.children:
+        anim = child.animation_data
+        if anim is None or anim.action is None:
+            continue
+        for fcurve in iter_fcurves(anim.action):
+            if fcurve.data_path == "hide_viewport":
+                return fcurve
+    return None
+
+
+def accessory_visibility_animated(root):
+    return accessory_visibility_curves(root) is not None
+
+
+def accessory_visibility_keyed(root, frame):
+    fcurve = accessory_visibility_curves(root)
+    if fcurve is None:
+        return False
+    return any(abs(p.co[0] - frame) < 0.5 for p in fcurve.keyframe_points)
 
 
 def fx_effect_root(obj):
@@ -990,6 +1121,28 @@ def fx_pass_summary(obj):
     return info, backend, loops, flags
 
 
+def mme_overriding_sources(root, name):
+    try:
+        gates = json.loads(root.get("mme_overrides", "{}")).get(name, [])
+    except (TypeError, ValueError, AttributeError):
+        return []
+    if not gates:
+        return []
+    controls = mme_load_controls(root)
+    found = []
+    for gname in gates:
+        desc = controls.get(gname, {})
+        if desc.get("kind", "const") == "const":
+            continue
+        prop = mme_control_use_prop(desc)
+        if prop is not None and not bool(root.get(prop, True)):
+            continue
+        source = mme_control_source(desc)
+        if source and source not in found:
+            found.append(source)
+    return found
+
+
 def fx_control_text(desc):
     kind = desc.get("kind")
     source = desc.get("from") or ""
@@ -1001,6 +1154,8 @@ def fx_control_text(desc):
         return "%s: %s" % (desc.get("object", ""), desc.get("item") or "transform")
     if kind == "prop":
         return "morph %s (keyed)" % source
+    if kind == "shapekey":
+        return "shape key %s on %s (live)" % (desc.get("key", ""), desc.get("object", ""))
     if kind == "bone":
         return "bone %s on %s" % (desc.get("bone", ""), desc.get("object", ""))
     if kind == "model":
@@ -1044,12 +1199,20 @@ def draw_fx_selected(layout, context, root, active):
             structural = set()
         if not meta:
             body.label(text="This effect exposes no parameters")
+        overriders = set()
         for name, info in sorted(meta.items(), key=lambda item: item[1].get("order", 0)):
             if info.get("prop") not in root:
                 continue
+            by = mme_overriding_sources(root, name)
+            overriders.update(by)
             row = body.row(align=True)
+            row.active = not by
             row.prop(root, '["%s"]' % info["prop"], text=info.get("label") or name)
-            row.label(text="", icon="MODIFIER" if name in structural else "BLANK1")
+            row.label(text="", icon="LINKED" if by else ("MODIFIER" if name in structural else "BLANK1"))
+        if overriders:
+            hint = body.row()
+            hint.active = False
+            hint.label(text="Greyed: set by %s" % ", ".join(sorted(overriders)), icon="LINKED")
         if structural & set(meta):
             draw_wrapped(body, "Wrench parameters change the geometry and can be keyframed: the build covers every keyed value, and editing the keys rebuilds the effect.")
     layout.row().prop(settings, "fx_info_tab", expand=True)
@@ -1166,7 +1329,6 @@ class NINESYNC_PT_fx(Panel):
         row.scale_y = 1.3
         row.alert = bool(_mme_state["stale"])
         row.operator("ninesync.refresh_effects", text="Rebuild All Effects", icon="SHADERFX")
-        draw_wrapped(layout, "Effects show in Material Preview and Rendered mode. Offscreen blur and post passes are approximated.")
 
 
 class NINESYNC_PT_fx_selected(Panel):
@@ -1207,20 +1369,31 @@ class NINESYNC_PT_fx_accessories(Panel):
         layout = self.layout
         settings = context.scene.mmd_bridge
         if not len(settings.accessories):
-            draw_wrapped(layout, "Read a PMM in %s first." % NINESYNC_MAIN_LABEL)
+            draw_wrapped(layout, "Sync a PMM, or use File > Import > MMD Accessory (.x).")
+            return
+        collection = bpy.data.collections.get(ACCESSORY_COLLECTION)
+        active = getattr(context, "active_object", None)
         for entry in settings.accessories:
+            root = find_accessory_root(collection, entry.key) if collection is not None else None
             row = layout.row(align=True)
             row.prop(entry, "use_effect", text="", icon="SHADERFX")
-            row.label(text=entry.display)
-            if entry.use_effect:
-                layout.prop(entry, "effect_path", text="Effect")
-            if entry.effect_note:
-                note_row = layout.row()
-                note_row.scale_y = 0.85
-                note_row.alert = entry.effect_note.startswith(("Effect failed", "Effect error"))
-                note_row.label(text=short_text(entry.effect_note, 60), icon="INFO")
-            if entry.use_effect:
-                draw_effect_controls(layout, entry)
+            name = row.row(align=True)
+            name.enabled = entry.use_effect
+            if root is not None:
+                chosen = active is not None and (active == root or getattr(active, "parent", None) == root)
+                pick = name.operator("ninesync.select_object", text=entry.display, depress=chosen)
+                pick.name = root.name
+            else:
+                name.label(text=entry.display)
+            path = row.row(align=True)
+            path.enabled = entry.use_effect
+            path.scale_x = 1.4
+            path.prop(entry, "effect_path", text="")
+            if entry.use_effect and entry.effect_note.startswith(("Effect failed", "Effect error", "File not found")):
+                note = layout.row()
+                note.scale_y = 0.8
+                note.alert = True
+                note.label(text=entry.effect_note, icon="ERROR")
 
 
 class NINESYNC_PT_fx_bake(Panel):
@@ -1340,6 +1513,8 @@ CLASSES = (
     MMDBRIDGE_OT_clean,
     MMDBRIDGE_OT_copy_report,
     MMDBRIDGE_OT_refresh_effects,
+    NINESYNC_OT_key_accessory_visibility,
+    NINESYNC_OT_import_accessory,
     MMDBRIDGE_OT_bake_effects,
     MMDBRIDGE_OT_reset_params,
     MMDBRIDGE_OT_dismiss_scale_warning,

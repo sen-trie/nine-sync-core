@@ -1240,6 +1240,65 @@ def fx_vs_globals(program, passes=None):
     return names
 
 
+def fx_overridden_params(program):
+    params = set(getattr(program, "params", {}))
+    controls = set()
+    for g in program.globals.values():
+        source = fx_classify_global(g, program)
+        if source is not None and source[0] == "control":
+            controls.add(g.name)
+    found = {}
+
+    def ids(node, out):
+        if isinstance(node, tuple):
+            if len(node) > 1 and node[0] == "id" and isinstance(node[1], str):
+                out.add(node[1])
+            for item in node:
+                ids(item, out)
+        elif isinstance(node, list):
+            for item in node:
+                ids(item, out)
+        return out
+
+    def target(node):
+        while isinstance(node, tuple) and len(node) > 1:
+            if node[0] == "id":
+                return node[1]
+            node = next((item for item in node[1:] if isinstance(item, tuple)), None)
+        return None
+
+    def assigned(node, out):
+        if isinstance(node, tuple):
+            if len(node) > 3 and node[0] == "assign":
+                name = target(node[2])
+                if name in params:
+                    out.add(name)
+            for item in node:
+                assigned(item, out)
+        elif isinstance(node, list):
+            for item in node:
+                assigned(item, out)
+        return out
+
+    def walk(node):
+        if isinstance(node, tuple):
+            if node and node[0] == "if" and len(node) == 4:
+                gates = ids(node[1], set()) & controls
+                if gates:
+                    for name in assigned(node[2], set()):
+                        found.setdefault(name, set()).update(gates)
+            for item in node:
+                walk(item)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    for functions in program.functions.values():
+        for function in functions:
+            walk(function.body)
+    return {name: sorted(gates) for name, gates in found.items()}
+
+
 def fx_structural_params(program):
     params = getattr(program, "params", {})
     used = fx_vs_globals(program) | set(fx_script_values(program, "loopbycount"))
