@@ -10,35 +10,23 @@ bl_info = {
     "category": "Import-Export",
 }
 
-import importlib as _importlib
 import sys as _sys
 
-for _name in ("common", "hooks", "pmm", "bridge", "ui"):
-    _module = _sys.modules.get(__name__ + "." + _name)
-    if _module is not None:
-        _importlib.reload(_module)
+for _name in [n for n in _sys.modules if n.startswith(__name__ + ".")]:
+    del _sys.modules[_name]
 
 import bpy
 from bpy.props import PointerProperty
 
 from . import hooks
-from .common import (
-    MIN_BLENDER,
-    NINESYNC_NAME,
-    legacy_monolith_active,
-    log,
-    setup_logging,
-)
-from .bridge import sweep_stale_temp
-from .ui import (
-    CLASSES,
-    LEGACY_CLASSES,
-    MMDBridgeSettings,
-    addon_preferences,
-    apply_import_scale,
-    schedule_relink,
-    settings_outdated,
-)
+from .common.addon import legacy_monolith_active
+from .common.constants import MIN_BLENDER, NINESYNC_NAME
+from .common.logger import log, setup_logging
+from .sync.tempfiles import sweep_stale_temp
+from .ui import CLASSES, LEGACY_CLASSES
+from .ui.preferences import addon_preferences, apply_import_scale
+from .ui.properties import MMDBridgeSettings
+from .ui.relink import schedule_relink, settings_outdated
 
 
 _state = {"legacy": False}

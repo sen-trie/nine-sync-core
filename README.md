@@ -14,11 +14,11 @@ Accessories (`.x`) and MME effects (`.fx`) are handled by the separate add-on **
 
 Both add-ons put their panels in the sidebar tab `NineSync`. They never import each other. They meet in a small registry stored in `bpy.app.driver_namespace["ninesync_hooks"]` (see `hooks.py`, identical in both repos):
 
-| Hook | Called by core | FX does |
-|---|---|---|
-| `post_sync(ctx)` | `sync()`, after camera and light, before audio | imports accessories and effects, returns the item count |
-| `clean(scene, options)` | Clean, when "Accessories & effects" is ticked | deletes accessory objects, returns a counts dict |
-| `report(context)` | Support Report | returns extra report lines |
+| Hook                    | Called by core                                 | FX does                                                 |
+| ----------------------- | ---------------------------------------------- | ------------------------------------------------------- |
+| `post_sync(ctx)`        | `sync()`, after camera and light, before audio | imports accessories and effects, returns the item count |
+| `clean(scene, options)` | Clean, when "Accessories & effects" is ticked  | deletes accessory objects, returns a counts dict        |
+| `report(context)`       | Support Report                                 | returns extra report lines                              |
 
 `ctx` is a `types.SimpleNamespace` with `scene`, `project` (already retimed), `pmm_path`, `targets` (`{model_key: mmd_tools root}`), `unit`, `retimed` (always True from core), `integrated` (True), `core_version`.
 
@@ -26,24 +26,21 @@ Both add-ons put their panels in the sidebar tab `NineSync`. They never import e
 
 `API_VERSION` is 1. On a mismatch each side logs a warning and skips the hooks.
 
-## Old combined NineSync
-
-If the old single add-on is still enabled, this add-on registers only a warning panel. Disable the old one and restart Blender.
-
 ## Layout
 
 ```
 __init__.py   register, load handler, hook registration
-common.py     constants and small helpers
 hooks.py      hook registry client (identical in ninesync-fx)
 pmm.py        PMM parser (vendored into ninesync-fx; keep identical)
-bridge.py     model, camera, light, audio, UV morph sync, clean, report
-ui.py         properties, operators, panels, preferences
-tests/        headless tests
+common/       constants, logging, scene and animation helpers (no sync logic)
+sync/         everything that touches mmd_tools or writes animation:
+              engine, models, morphs, UV morphs, clips, camera, light,
+              audio, clean, report
+ui/           properties, operators, preferences, panels/
 ```
 
 ## Compatibility
 
-| core | FX | hook API |
-|---|---|---|
-| 0.2.x | 0.2.x | 1 |
+| core  | FX    | hook API |
+| ----- | ----- | -------- |
+| 0.2.x | 0.2.x | 1        |
