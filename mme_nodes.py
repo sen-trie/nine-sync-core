@@ -95,10 +95,28 @@ MME_GATE_PROBES = 96
 MME_TRANSPARENT_BOUNCES = 128
 
 
+MME_VARIANT_FRAMES = 24
+
+
+MME_VARIANT_MAX = 48
+
+
+MME_SIMPLIFY_VARIANTS = 8
+
+
 MME_PROGRESS_WIDTH = 24
 
 
+MME_WRAP_MARGIN = 40
+
+
+MME_WRAP_CHAR = 6.2
+
+
 MME_PROGRESS_REDRAW = 0.1
+
+
+MME_RUNTIME_VALUES_PROP = "mme_runtime_values"
 
 
 def mme_group_name(label, tag, key):
@@ -2605,6 +2623,8 @@ def mme_add_driver(owner, path, spec, index=-1):
                 target.id = bpy.data.lights.get(var_spec["id"])
             else:
                 target.id = bpy.data.objects.get(var_spec["id"])
+                if target.id is not None:
+                    target.id.update_tag()
             path_text = var_spec["path"]
             if "index" in var_spec:
                 path_text = "%s[%d]" % (path_text, var_spec["index"])

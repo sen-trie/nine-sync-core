@@ -17,8 +17,10 @@ from mathutils import Matrix, Vector
 from .common import (
     ACCESSORY_COLLECTION,
     ACCESSORY_FOLLOW_PREFIX,
+    ACCESSORY_OWNED_PATHS,
     ACCESSORY_PREFIX,
     ACCESSORY_UNIT,
+    ACCESSORY_VISIBLE_PROP,
     ACTION_PREFIX,
     AUDIO_STRIP_NAME,
     CAMERA_COLLECTION,
@@ -30,6 +32,7 @@ from .common import (
     MMD_TOOLS_URL,
     MME_BACKEND_PROP,
     MME_BAKED_PROP,
+    MME_CONTROL_PREFIX,
     MME_DRAW_PROP,
     NINESYNC_NAME,
     PMM_FPS,
@@ -87,7 +90,9 @@ from .mme import (
     mme_build_effect,
     mme_clear_root_props,
     mme_effect_stamp,
+    mme_ensure_visible_prop,
     mme_key_morph_props,
+    mme_link_visibility,
     mme_purge_owned,
     remove_accessory_children,
     remove_accessory_children_single,
@@ -392,7 +397,7 @@ def model_frames(model):
             yield key.frame
 
 
-def snapshot_outside(owners, low, high, sources=None):
+def snapshot_outside(owners, low, high, sources=None, keep_all=None):
     saved = []
     for owner in owners:
         key = owner.as_pointer()
@@ -407,9 +412,10 @@ def snapshot_outside(owners, low, high, sources=None):
             if fcurve.data_path.startswith("constraints["):
                 continue
             points = []
+            everything = keep_all is not None and keep_all(fcurve.data_path)
             for point in fcurve.keyframe_points:
                 frame = point.co[0]
-                if frame < low - FRAME_EPSILON or frame > high + FRAME_EPSILON:
+                if everything or frame < low - FRAME_EPSILON or frame > high + FRAME_EPSILON:
                     points.append(
                         (
                             frame,
@@ -443,16 +449,20 @@ def find_fcurve(owner, data_path, index):
 
 
 def create_fcurve(owner, data_path, index, group, frame):
-    try:
-        if group:
-            owner.keyframe_insert(
-                data_path=data_path, index=index, frame=frame, group=group
-            )
-        else:
-            owner.keyframe_insert(data_path=data_path, index=index, frame=frame)
-    except (TypeError, RuntimeError, ValueError, KeyError):
-        return None
-    return find_fcurve(owner, data_path, index)
+    for attempt in ((index, -1) if index == 0 else (index,)):
+        try:
+            if group:
+                owner.keyframe_insert(
+                    data_path=data_path, index=attempt, frame=frame, group=group
+                )
+            else:
+                owner.keyframe_insert(data_path=data_path, index=attempt, frame=frame)
+        except (TypeError, RuntimeError, ValueError, KeyError):
+            continue
+        found = find_fcurve(owner, data_path, index)
+        if found is not None:
+            return found
+    return None
 
 
 def restore_points(saved):
@@ -2090,10 +2100,14 @@ def apply_accessory_parent(root, project, settings, acc, entry):
     log.info("accessory '%s' follows %s / %s", acc.name, armature.name, bone)
 
 
+def accessory_owned_path(path):
+    return path in ACCESSORY_OWNED_PATHS or path.startswith('["%s' % MME_CONTROL_PREFIX)
+
+
 def key_accessory(root, acc, unit):
     anim = root.animation_data or root.animation_data_create()
     low, high = frame_span(k.frame for k in acc.keys)
-    kept = snapshot_outside([root], low, high)
+    kept = snapshot_outside([root], low, high, keep_all=lambda path: not accessory_owned_path(path))
     anim.action = None
     purge_actions(ACTION_PREFIX + "Acc_")
     root.rotation_mode = "YXZ"
@@ -2112,34 +2126,23 @@ def key_accessory(root, acc, unit):
         root.keyframe_insert("scale", frame=key.frame)
         root.keyframe_insert('["mme_tr"]', frame=key.frame)
         root.keyframe_insert('["mme_si"]', frame=key.frame)
+    visible = {bool(k.visible) for k in acc.keys}
+    mme_ensure_visible_prop(root)
+    root[ACCESSORY_VISIBLE_PROP] = bool(acc.keys[0].visible) if acc.keys else True
+    if visible != {True}:
+        for key in acc.keys:
+            root[ACCESSORY_VISIBLE_PROP] = bool(key.visible)
+            root.keyframe_insert('["%s"]' % ACCESSORY_VISIBLE_PROP, frame=key.frame)
     action = anim.action
     if action is not None:
         for fcurve in iter_fcurves(action):
+            constant = fcurve.data_path == '["%s"]' % ACCESSORY_VISIBLE_PROP
             for point in fcurve.keyframe_points:
-                point.interpolation = "LINEAR"
+                point.interpolation = "CONSTANT" if constant else "LINEAR"
     restore_points(kept)
     if anim.action is not None:
         anim.action.name = ACTION_PREFIX + "Acc_" + short_name(acc.name, 40)
-    visible = {bool(k.visible) for k in acc.keys}
-    for child in root.children:
-        child_anim = child.animation_data
-        if child_anim is not None:
-            child_anim.action = None
-        child.hide_viewport = False
-        child.hide_render = False
-        if visible == {True}:
-            continue
-        for key in acc.keys:
-            child.hide_viewport = not key.visible
-            child.hide_render = not key.visible
-            child.keyframe_insert("hide_viewport", frame=key.frame)
-            child.keyframe_insert("hide_render", frame=key.frame)
-        child_action = child.animation_data.action if child.animation_data else None
-        if child_action is not None:
-            child_action.name = ACTION_PREFIX + "Acc_vis_" + short_name(acc.name, 30)
-            for fcurve in iter_fcurves(child_action):
-                for point in fcurve.keyframe_points:
-                    point.interpolation = "CONSTANT"
+    mme_link_visibility(root)
 
 
 def import_accessory(scene, collection, project, settings, acc, entry, unit):

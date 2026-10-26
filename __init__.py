@@ -27,11 +27,14 @@ from .common import (
     _mme_runtimes,
     _mme_state,
     log,
+    mme_effect_roots,
+    redraw_all,
     setup_logging,
 )
 from .mme import (
     mme_progress_tick,
     mme_rebuild_needed,
+    mme_revive_drivers,
     mme_run_rebuilds,
     mme_update_scene,
 )
@@ -66,6 +69,12 @@ def mme_load_handler(*_args):
     _mme_runtimes.clear()
     _mme_state["errors"].clear()
     try:
+        revived = mme_revive_drivers([c for root in mme_effect_roots(bpy.context.scene) for c in root.children])
+        if revived:
+            log.info("reset %d effect driver(s) that Blender had marked invalid", revived)
+    except (AttributeError, RuntimeError):
+        pass
+    try:
         if settings_outdated(bpy.context.scene):
             schedule_relink()
     except AttributeError:
@@ -88,6 +97,12 @@ def mme_param_watch(scene, depsgraph=None):
         if obj.name in _mme_state["rebuild"]:
             continue
         if mme_rebuild_needed(obj):
+            settings = getattr(scene, "mmd_bridge", None)
+            if settings is not None and not settings.mme_auto_rebuild:
+                if obj.name not in _mme_state["stale"]:
+                    _mme_state["stale"].add(obj.name)
+                    redraw_all()
+                continue
             _mme_state["rebuild"].add(obj.name)
             if bpy.app.timers.is_registered(mme_run_rebuilds):
                 bpy.app.timers.unregister(mme_run_rebuilds)

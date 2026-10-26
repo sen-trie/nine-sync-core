@@ -21,6 +21,9 @@ NINESYNC_MAIN_LABEL = NINESYNC_NAME + ": PMM Bridge"
 NINESYNC_FX_LABEL = NINESYNC_NAME + ": FX Importer"
 
 
+NINESYNC_ACC_LABEL = NINESYNC_NAME + ": Accessories (.x)"
+
+
 LOG_TEXT_NAME = "NineSyncLog"
 
 
@@ -129,6 +132,18 @@ ACCESSORY_PREFIX = "MMDAcc_"
 
 
 ACCESSORY_FOLLOW_PREFIX = "MMDBridgeAcc"
+
+
+ACCESSORY_VISIBLE_PROP = "mme_visible"
+
+
+ACCESSORY_VISIBLE_MODIFIER = "NineSync Visible"
+
+
+ACCESSORY_VISIBLE_GROUP = "NineSync Visibility"
+
+
+ACCESSORY_OWNED_PATHS = ("location", "rotation_euler", "scale", '["mme_tr"]', '["mme_si"]', '["mme_visible"]')
 
 
 ACCESSORY_UNIT = 10.0
@@ -362,7 +377,7 @@ MME_REBUILD_DELAY = 0.6
 _mme_runtimes = {}
 
 
-_mme_state = {"busy": False, "errors": set(), "only": None, "rebuild": set(), "progress": None}
+_mme_state = {"busy": False, "errors": set(), "only": None, "rebuild": set(), "progress": None, "stale": set()}
 
 
 MME_CORE_VERSION = 2
@@ -432,6 +447,7 @@ def mme_ensure_use_props(root, controls):
             )
         except (TypeError, AttributeError):
             pass
+        root.update_tag()
 
 
 def mme_load_controls(root):

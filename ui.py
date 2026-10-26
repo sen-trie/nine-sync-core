@@ -11,6 +11,7 @@ from bpy.types import Operator, Panel, PropertyGroup
 
 from .common import (
     ACCESSORY_COLLECTION,
+    ACCESSORY_VISIBLE_PROP,
     CAMERA_COLLECTION,
     LIGHT_COLLECTION,
     LOG_TEXT_NAME,
@@ -26,6 +27,7 @@ from .common import (
     MME_SELF_NAMES,
     MME_UNIFORMS_PROP,
     MME_VARYINGS_PROP,
+    NINESYNC_ACC_LABEL,
     NINESYNC_CATEGORY,
     NINESYNC_FX_LABEL,
     NINESYNC_MAIN_LABEL,
@@ -56,6 +58,8 @@ from .fx import (
     FxError,
 )
 from .mme_nodes import (
+    MME_WRAP_CHAR,
+    MME_WRAP_MARGIN,
     mme_build_standard_groups,
     mme_core_names,
     mme_core_path,
@@ -93,7 +97,13 @@ from .bridge import (
 )
 
 
-def draw_wrapped(layout, text, width=38):
+def draw_wrapped(layout, text, width=None):
+    if width is None:
+        width = 38
+        region = getattr(bpy.context, "region", None)
+        if region is not None and region.width > 1:
+            scale = bpy.context.preferences.system.ui_scale or 1.0
+            width = max(16, int((region.width / scale - MME_WRAP_MARGIN) / MME_WRAP_CHAR))
     column = layout.column(align=True)
     column.scale_y = 0.85
     for line in textwrap.wrap(text, width):
@@ -211,6 +221,11 @@ class MMDBridgeSettings(PropertyGroup):
         max=0.05,
         precision=4,
         step=0.01,
+    )
+    mme_auto_rebuild: BoolProperty(
+        name="Auto Rebuild",
+        description="Rebuild an effect automatically after you edit a parameter that changes its geometry (wrench icon). Turn off for heavy effects: edits then only mark the effect as out of date until you press Rebuild",
+        default=True,
     )
     mme_live: BoolProperty(
         name="Live Effect Preview",
@@ -686,13 +701,12 @@ class MMDBRIDGE_PT_main(Panel):
                 box,
                 "Camera keyframe interpolation may not match MMD exactly because of the different distance scale.",
             )
-        box = layout.box()
-        header = box.row()
-        header.label(text="Models")
-        header.operator("ninesync.scan", text="", icon="FILE_REFRESH")
-        if not len(settings.targets):
+        header, box = layout.panel("ninesync_models", default_closed=False)
+        header.label(text="Models (%d)" % len(settings.targets))
+        header.operator("ninesync.scan", text="", icon="FILE_REFRESH", emboss=False)
+        if box is not None and not len(settings.targets):
             box.label(text="Press the refresh icon to read the PMM")
-        for item in settings.targets:
+        for item in (settings.targets if box is not None else ()):
             state = item_state(item)
             row = box.row(align=True)
             row.prop(item, "enabled", text="")
@@ -704,7 +718,7 @@ class MMDBRIDGE_PT_main(Panel):
                 note_row = box.row()
                 note_row.alert = state == "ERROR"
                 note_row.scale_y = 0.85
-                note_row.label(text=short_text(note, 60))
+                note_row.label(text=note)
             if settings.use_clips and item.target is not None:
                 clip_row = box.row(align=True)
                 clip_row.label(text="", icon="NLA")
@@ -896,30 +910,49 @@ def draw_effect_controls(layout, entry):
 
 
 class MMDBRIDGE_PT_accessories(Panel):
-    bl_label = "Accessories (.x)"
+    bl_label = NINESYNC_ACC_LABEL
     bl_idname = "NINESYNC_PT_accessories"
+    bl_order = 1
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_category = NINESYNC_CATEGORY
-    bl_parent_id = "NINESYNC_PT_main"
-    bl_options = {"DEFAULT_CLOSED"}
 
     def draw(self, context):
         layout = self.layout
+        if settings_outdated(context.scene):
+            return
         settings = context.scene.mmd_bridge
-        layout.prop(settings, "sync_accessories")
-        layout.prop(settings, "sphere_maps")
-        layout.prop(settings, "accessory_dir")
+        col = layout.column()
+        col.use_property_split = True
+        col.use_property_decorate = False
+        col.prop(settings, "sync_accessories")
+        col.prop(settings, "sphere_maps")
+        col.prop(settings, "accessory_dir")
         armature = first_armature(settings)
         if not len(settings.accessories):
-            layout.label(text="Press the refresh icon in Models to read the PMM")
+            layout.label(text="Press the refresh icon in Models to read the PMM", icon="INFO")
+            return
+        collection = bpy.data.collections.get(ACCESSORY_COLLECTION)
+        active = getattr(context, "active_object", None)
+        box = layout.box()
         for entry in settings.accessories:
-            row = layout.row(align=True)
+            root = find_accessory_root(collection, entry.key) if collection is not None else None
+            row = box.row(align=True)
             row.prop(entry, "enabled", text="")
-            row.label(text=entry.display)
+            icon = "SHADERFX" if root is not None and root.get("mme_fx") else "MESH_DATA"
+            if root is not None:
+                chosen = active is not None and (active == root or getattr(active, "parent", None) == root)
+                pick = row.operator("ninesync.select_object", text=entry.display, icon=icon, depress=chosen)
+                pick.name = root.name
+                if ACCESSORY_VISIBLE_PROP in root:
+                    shown = bool(root.get(ACCESSORY_VISIBLE_PROP, True))
+                    row.prop(root, '["%s"]' % ACCESSORY_VISIBLE_PROP, text="", icon="HIDE_OFF" if shown else "HIDE_ON", emboss=False)
+            else:
+                sub = row.row(align=True)
+                sub.enabled = False
+                sub.label(text=entry.display, icon=icon)
             if armature is not None:
-                row.prop_search(entry, "parent_bone", armature.pose, "bones", text="")
-        draw_wrapped(layout, "MME effects (.fx) for these accessories are set up in the %s panel." % NINESYNC_FX_LABEL)
+                row.prop_search(entry, "parent_bone", armature.pose, "bones", text="", icon="BONE_DATA")
 
 
 def fx_effect_root(obj):
@@ -977,9 +1010,12 @@ def fx_control_text(desc):
 
 def draw_fx_selected(layout, context, root, active):
     settings = context.scene.mmd_bridge
+    stale = root.name in _mme_state["stale"]
     row = layout.row(align=True)
     row.scale_y = 1.2
-    rebuild = row.operator("ninesync.refresh_effects", text="Rebuild", icon="FILE_REFRESH")
+    rebuild_cell = row.row(align=True)
+    rebuild_cell.alert = stale
+    rebuild = rebuild_cell.operator("ninesync.refresh_effects", text="Rebuild (out of date)" if stale else "Rebuild", icon="FILE_REFRESH")
     rebuild.root_name = root.name
     bake = row.operator("ninesync.bake_effects", text="Bake", icon="RENDER_ANIMATION")
     bake.root_name = root.name
@@ -1015,7 +1051,7 @@ def draw_fx_selected(layout, context, root, active):
             row.prop(root, '["%s"]' % info["prop"], text=info.get("label") or name)
             row.label(text="", icon="MODIFIER" if name in structural else "BLANK1")
         if structural & set(meta):
-            draw_wrapped(body, "Parameters with the wrench change the geometry; the effect rebuilds after you edit them.")
+            draw_wrapped(body, "Wrench parameters change the geometry and can be keyframed: the build covers every keyed value, and editing the keys rebuilds the effect.")
     layout.row().prop(settings, "fx_info_tab", expand=True)
     box = layout.box()
     tab = settings.fx_info_tab
@@ -1044,7 +1080,7 @@ def draw_fx_selected(layout, context, root, active):
                 right = split.row()
                 right.alert = missing
                 right.enabled = not off
-                right.label(text=short_text(fx_control_text(desc), 48))
+                right.label(text=fx_control_text(desc))
             box.separator(factor=0.5)
     elif tab == "PASSES":
         for obj in mme_effect_passes(root):
@@ -1104,7 +1140,7 @@ class NINESYNC_PT_fx(Panel):
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_category = NINESYNC_CATEGORY
-    bl_order = 1
+    bl_order = 2
 
     def draw(self, context):
         layout = self.layout
@@ -1117,14 +1153,18 @@ class NINESYNC_PT_fx(Panel):
             draw_wrapped(layout, "Turn this on and sync to import accessory effects.")
             return
         col = layout.column()
+        col.use_property_split = True
+        col.use_property_decorate = False
         col.prop(settings, "mme_backend")
         col.prop(settings, "mme_density", slider=True)
         col.prop(settings, "mme_tolerance")
+        col.prop(settings, "mme_auto_rebuild")
         if settings.mme_backend == "PYTHON":
             col.prop(settings, "mme_live")
         col.prop(settings, "mme_standard_view")
         row = layout.row()
         row.scale_y = 1.3
+        row.alert = bool(_mme_state["stale"])
         row.operator("ninesync.refresh_effects", text="Rebuild All Effects", icon="SHADERFX")
         draw_wrapped(layout, "Effects show in Material Preview and Rendered mode. Offscreen blur and post passes are approximated.")
 
