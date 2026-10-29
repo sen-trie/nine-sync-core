@@ -67,6 +67,18 @@ class MMDBridgeTarget(PropertyGroup):
     )
 
 
+# One row of the Create MMD Project checklist: an mmd_tools model and the PMX it
+# was loaded from.
+class MMDBridgeExportItem(PropertyGroup):
+    enabled: BoolProperty(name="Include", default=True)
+    target: PointerProperty(name="Model", type=bpy.types.Object, poll=is_mmd_root)
+    pmx_path: StringProperty(
+        name="PMX File",
+        description="Original PMX the model was loaded from. MMD loads the model from this path when it opens the project",
+        subtype="FILE_PATH",
+    )
+
+
 class MMDBridgeSettings(PropertyGroup):
     filepath: StringProperty(name="PMM File", subtype="FILE_PATH")
     status: StringProperty(default="Idle")
@@ -147,3 +159,22 @@ class MMDBridgeSettings(PropertyGroup):
         default=False,
     )
     targets: CollectionProperty(type=MMDBridgeTarget)
+    export_items: CollectionProperty(type=MMDBridgeExportItem)
+    export_path: StringProperty(
+        name="PMM File",
+        description="Where Create PMM saves the project",
+        subtype="FILE_PATH",
+    )
+    export_camera: BoolProperty(
+        name="Include Camera",
+        description="Put the MMD camera rig's camera in the project",
+        default=True,
+    )
+    export_animation: BoolProperty(
+        name="Export Animation",
+        description="Write the animation Blender already has into the project. Off creates the models and camera at their initial pose",
+        default=True,
+    )
+    export_bones: BoolProperty(name="Bones", default=True)
+    export_morphs: BoolProperty(name="Morphs", default=True)
+    export_camera_motion: BoolProperty(name="Camera", default=True)

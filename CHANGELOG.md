@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Create MMD Project panel above the Syncer: spawn the MMD camera rig, check the mmd_tools models to include (with their original PMX paths), optionally export existing bone, morph and camera animation, and write a PMM that is set as the Syncer's PMM with model and camera mappings kept.
+
 ## 0.2.0
 
 - Split from the combined NineSync. Accessories (.x) and MME effects (.fx) moved to the separate add-on NineSync: FX Importer.

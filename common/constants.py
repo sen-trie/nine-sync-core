@@ -95,3 +95,9 @@ WRAP_MARGIN = 40
 
 
 WRAP_CHAR = 6.2
+
+
+PMM_TEMPLATE_PATH = "assets/kagamine.pmm"
+
+
+PMX_EXTENSIONS = (".pmx", ".pmd")

@@ -114,6 +114,8 @@ class PmmModel:
         "bones",
         "morphs",
         "last_frame",
+        "constraints",
+        "opaque",
     )
 
     def __init__(self):
@@ -126,6 +128,8 @@ class PmmModel:
         self.bones = []
         self.morphs = []
         self.last_frame = 0
+        self.constraints = []
+        self.opaque = None
 
 
 class AccessoryKey(NamedTuple):
@@ -164,9 +168,11 @@ class PmmProject:
         "audio_enabled",
         "audio_path",
         "audio_error",
+        "spans",
     )
 
     def __init__(self):
+        self.spans = None
         self.audio_enabled = False
         self.audio_path = ""
         self.audio_error = ""
@@ -361,37 +367,49 @@ def skip_model_keyframe(reader, constraint_count, outside_count, with_index):
     )
 
 
+# Besides the keys, read_model keeps the bytes the writer cannot derive (editor
+# state it has no data for), so pmm_writer can reuse them from a template project.
 def read_model(reader):
     model = PmmModel()
     model.index = reader.u8()
     model.name = reader.var_string()
     model.name_en = reader.var_string()
     model.path = reader.fixed_string(PATH_LENGTH)
-    reader.u8()
+    after_path = reader.raw(1)
     bone_count = reader.count()
     model.bone_names = [reader.var_string() for _ in range(bone_count)]
     morph_count = reader.count()
     model.morph_names = [reader.var_string() for _ in range(morph_count)]
     constraint_count = reader.count()
-    reader.skip(constraint_count * 4)
+    model.constraints = [reader.i32() for _ in range(constraint_count)]
     outside_count = reader.count()
     reader.skip(outside_count * 4)
+    middle_start = reader.pos
     reader.u8()
     reader.u8()
     reader.skip(4 + 16)
     reader.skip(reader.u8())
     reader.skip(4)
+    middle = bytes(reader.data[middle_start : reader.pos])
     model.last_frame = reader.i32()
     model.bones = read_bone_track(reader, bone_count)
     model.morphs = read_morph_track(reader, morph_count)
     skip_model_keyframe(reader, constraint_count, outside_count, False)
     for _ in range(reader.count()):
         skip_model_keyframe(reader, constraint_count, outside_count, True)
-    reader.skip(bone_count * BONE_STATE_SIZE)
-    reader.skip(morph_count * MORPH_STATE_SIZE)
-    reader.skip(constraint_count)
+    bone_state = reader.raw(bone_count * BONE_STATE_SIZE)
+    morph_state = reader.raw(morph_count * MORPH_STATE_SIZE)
+    constraint_state = reader.raw(constraint_count)
     reader.skip(outside_count * OUTSIDE_PARENT_STATE_SIZE)
-    reader.skip(1 + 4 + 1 + 1)
+    tail = reader.raw(1 + 4 + 1 + 1)
+    model.opaque = {
+        "after_path": bytes(after_path),
+        "middle": middle,
+        "tail": bytes(tail),
+        "bone_state": bytes(bone_state[:BONE_STATE_SIZE]),
+        "morph_state": bytes(morph_state[:MORPH_STATE_SIZE]),
+        "constraint_state": bytes(constraint_state[:1]),
+    }
     return model
 
 
@@ -475,12 +493,15 @@ def parse_pmm(data):
     reader.skip(30 + 12 + 4 + 7)
     project.selected_model = reader.u8()
     model_count = reader.u8()
+    models_start = reader.pos
     for _ in range(model_count):
         project.models.append(read_model(reader))
+    models_end = reader.pos
     try:
         project.camera_keys = read_scene_track(
             reader, CAMERA_INITIAL, CAMERA_ADDITIONAL, build_camera_payload, CameraKey
         )
+        project.spans = (models_start, models_end, reader.pos)
         reader.skip(CAMERA_STATE_SIZE)
         project.light_keys = read_scene_track(
             reader, LIGHT_INITIAL, LIGHT_ADDITIONAL, build_light_payload, LightKey
@@ -597,6 +618,27 @@ def camera_interpolation_to_vmd(source):
     return bytes(out)
 
 
+# Inverse of interpolation_to_vmd for the per-curve layout. Bytes 2 and 3 of the
+# first VMD row carry physics flags (mmd_tools zeroes them), so each value is read
+# from a shifted copy of the row instead, which never overlaps those two bytes.
+def interpolation_from_vmd(source):
+    row = [source[min(k, 3) * 16 + k - min(k, 3)] for k in range(16)]
+    out = bytearray(16)
+    for curve in range(4):
+        for part in range(4):
+            out[curve * 4 + part] = row[part * 4 + curve]
+    return bytes(out)
+
+
+# Inverse of camera_interpolation_to_vmd.
+def camera_interpolation_from_vmd(source):
+    out = bytearray(24)
+    for param in range(6):
+        x1, x2, y1, y2 = source[param * 4 : param * 4 + 4]
+        out[param * 4 : param * 4 + 4] = bytes((x1, y1, x2, y2))
+    return bytes(out)
+
+
 def build_scene_vmd(camera_keys):
     chunks = [
         struct.pack("<30s20s", VMD_SIGNATURE, encode_name("scene", 20)),
@@ -618,3 +660,40 @@ def build_scene_vmd(camera_keys):
     chunks.append(struct.pack("<IIII", 0, 0, 0, 0))
     log.debug("built scene VMD: %d camera frames", len(camera_keys))
     return b"".join(chunks)
+
+
+# Reads the bone, morph and camera frames of a VMD, which is how animation made by
+# mmd_tools' exporter reaches the PMM writer. Bone and morph frames are keyed by
+# their 15-byte VMD name.
+def read_vmd(data):
+    if not data.startswith(b"Vocaloid Motion Data"):
+        raise PmmError("not a VMD file")
+    reader = Reader(data)
+    reader.skip(30 + 20)
+    bones = {}
+    for _ in range(reader.count()):
+        v = reader.unpack(BONE_FRAME)
+        bones.setdefault(v[0], []).append(
+            BoneKey(v[1], tuple(v[2:5]), tuple(v[5:9]), bytes(v[9]))
+        )
+    morphs = {}
+    for _ in range(reader.count()):
+        v = reader.unpack(MORPH_FRAME)
+        morphs.setdefault(v[0], []).append(MorphKey(v[1], v[2]))
+    cameras = []
+    for _ in range(reader.count()):
+        v = reader.unpack(CAMERA_FRAME)
+        cameras.append(
+            CameraKey(
+                v[0],
+                v[1],
+                tuple(v[2:5]),
+                tuple(v[5:8]),
+                -1,
+                -1,
+                camera_interpolation_from_vmd(v[8]),
+                v[10],
+                v[9],
+            )
+        )
+    return bones, morphs, cameras

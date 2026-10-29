@@ -42,6 +42,14 @@ def write_temp_vmd(data, prefix):
     return tmp_path
 
 
+# Reserves a temp VMD path for something that writes the file itself, such as
+# mmd_tools' exporter.
+def temp_vmd_path(prefix):
+    handle, tmp_path = tempfile.mkstemp(suffix=".vmd", prefix=prefix, dir=temp_root())
+    os.close(handle)
+    return tmp_path
+
+
 # Retries briefly because Windows can still hold the file right after the importer
 # read it. A leftover is swept on a later sync.
 def remove_file(path):

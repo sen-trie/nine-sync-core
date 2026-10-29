@@ -1,7 +1,7 @@
 import bpy
 import os
 import time
-from bpy.props import BoolProperty, FloatProperty
+from bpy.props import BoolProperty, FloatProperty, StringProperty
 from bpy.types import Operator
 
 from .. import hooks
@@ -13,6 +13,8 @@ from ..sync.audio import describe_audio
 from ..sync.clean import run_clean
 from ..sync.engine import run_sync
 from ..sync.mmd_tools_link import mmd_tools_available
+from ..sync.project_export import create_pmm, refresh_export_items
+from ..sync.rigs import ensure_camera_rig
 from ..sync.report import build_report
 from ..sync.scale import current_scale
 from ..sync.targets import refresh_targets
@@ -210,5 +212,98 @@ class MMDBRIDGE_OT_dismiss_scale_warning(Operator):
     def execute(self, context):
         settings = context.scene.mmd_bridge
         settings.scale_warning_dismissed_for = current_scale(settings)
+        redraw_all()
+        return {"FINISHED"}
+
+
+class NINESYNC_OT_spawn_camera(Operator):
+    bl_idname = "ninesync.spawn_camera"
+    bl_label = "Spawn MMD Camera"
+    bl_description = "Create the MMD camera rig that the Syncer and Create PMM use, or select the existing one"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return mmd_tools_available()
+
+    def execute(self, context):
+        if refuse_if_outdated(self, context):
+            return {"CANCELLED"}
+        settings = context.scene.mmd_bridge
+        try:
+            root, camera = ensure_camera_rig(context.scene, settings)
+        except Exception as error:
+            self.report({"ERROR"}, "Could not create the MMD camera: %s" % error)
+            log.error("spawn camera failed: %s", error)
+            return {"CANCELLED"}
+        if settings.set_active_camera:
+            context.scene.camera = camera
+        for obj in context.selected_objects:
+            obj.select_set(False)
+        if root.name in context.view_layer.objects:
+            root.select_set(True)
+            context.view_layer.objects.active = root
+        self.report({"INFO"}, "MMD camera rig: %s" % root.name)
+        redraw_all()
+        return {"FINISHED"}
+
+
+class NINESYNC_OT_refresh_export(Operator):
+    bl_idname = "ninesync.refresh_export"
+    bl_label = "Find MMD Armatures"
+    bl_description = "List the mmd_tools models in this file and find the PMX each was loaded from"
+
+    def execute(self, context):
+        if refuse_if_outdated(self, context):
+            return {"CANCELLED"}
+        refresh_export_items(context.scene.mmd_bridge)
+        redraw_all()
+        return {"FINISHED"}
+
+
+class NINESYNC_OT_create_pmm(Operator):
+    bl_idname = "ninesync.create_pmm"
+    bl_label = "Create PMM"
+    bl_description = "Write an MMD project with the checked models, the camera and optionally the existing animation, then set it as the Syncer's PMM so MMD changes can be synced back"
+
+    filepath: StringProperty(subtype="FILE_PATH")
+    filter_glob: StringProperty(default="*.pmm", options={"HIDDEN"})
+
+    @classmethod
+    def poll(cls, context):
+        return mmd_tools_available()
+
+    def invoke(self, context, event):
+        if refuse_if_outdated(self, context):
+            return {"CANCELLED"}
+        settings = context.scene.mmd_bridge
+        self.filepath = bpy.path.abspath(settings.export_path) or (
+            os.path.splitext(bpy.data.filepath)[0] + ".pmm"
+            if bpy.data.filepath
+            else "project.pmm"
+        )
+        context.window_manager.fileselect_add(self)
+        return {"RUNNING_MODAL"}
+
+    def execute(self, context):
+        if refuse_if_outdated(self, context):
+            return {"CANCELLED"}
+        settings = context.scene.mmd_bridge
+        path = bpy.path.abspath(self.filepath)
+        if not path.lower().endswith(".pmm"):
+            path += ".pmm"
+        try:
+            models, camera_keys = create_pmm(context.scene, settings, path)
+        except (OSError, PmmError) as error:
+            self.report({"ERROR"}, str(error))
+            log.error("create PMM failed: %s", error)
+            return {"CANCELLED"}
+        settings.export_path = path
+        settings.status = "Created %s at %s" % (os.path.basename(path), time.strftime("%H:%M:%S"))
+        self.report(
+            {"INFO"},
+            "Created %s with %d model(s), %d camera key(s). The Syncer now points at it"
+            % (os.path.basename(path), models, camera_keys),
+        )
         redraw_all()
         return {"FINISHED"}
