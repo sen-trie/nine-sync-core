@@ -23,11 +23,6 @@ SELECTED_MODEL_OFFSET = 30 + 12 + 4 + 7
 DEFAULT_BONE_INTERPOLATION = bytes((20, 20, 107, 107) * 4)
 
 
-# Used only when the template model has no bone to copy a state from: position 0,
-# identity rotation and three zero flags.
-DEFAULT_BONE_STATE = struct.pack("<3f4f3B", 0, 0, 0, 0, 0, 0, 1, 0, 0, 0)
-
-
 DEFAULT_CAMERA_INTERPOLATION = bytes((20, 20, 107, 107) * 6)
 
 
@@ -43,6 +38,10 @@ def fixed_string(text, length):
     return raw.ljust(length, b"\x00")
 
 
+def bone_state(key):
+    return struct.pack("<3f4f3B", *key.location, *key.rotation, 0, 0, 0)
+
+
 # Every bone and morph needs a first key at frame 0, which MMD treats as the
 # model's initial state.
 def with_initial(keys, default):
@@ -52,10 +51,12 @@ def with_initial(keys, default):
     return keys
 
 
-# A key chain is one 'initial' record plus 'additional' records linked by index.
-# Indexes are unique per track and the first additional key points back to 0.
-def chain_links(count, counter):
-    indexes = [0]
+# Key indices share one sequence per track, as MMD itself saves them: a bone's (or
+# morph's) first key has its own position as index, and the additional keys are
+# numbered from the bone (or morph) count upwards across all of them. The first
+# additional key's 'prev' is therefore the owner's position, not 0.
+def chain_links(owner, count, counter):
+    indexes = [owner]
     for _ in range(count - 1):
         counter[0] += 1
         indexes.append(counter[0])
@@ -63,12 +64,12 @@ def chain_links(count, counter):
 
 
 def write_bone_track(bone_keys, default):
-    counter = [0]
+    counter = [len(bone_keys) - 1]
     initials = []
     additional = []
-    for keys in bone_keys:
+    for owner, keys in enumerate(bone_keys):
         keys = with_initial(keys, default)
-        indexes = chain_links(len(keys), counter)
+        indexes = chain_links(owner, len(keys), counter)
         first = keys[0]
         initials.append(
             BONE_INITIAL.pack(
@@ -101,12 +102,12 @@ def write_bone_track(bone_keys, default):
 
 
 def write_morph_track(morph_keys, default):
-    counter = [0]
+    counter = [len(morph_keys) - 1]
     initials = []
     additional = []
-    for keys in morph_keys:
+    for owner, keys in enumerate(morph_keys):
         keys = with_initial(keys, default)
-        indexes = chain_links(len(keys), counter)
+        indexes = chain_links(owner, len(keys), counter)
         first = keys[0]
         initials.append(
             MORPH_INITIAL.pack(
@@ -131,7 +132,7 @@ def write_morph_track(morph_keys, default):
 def write_camera_track(keys):
     keys = sorted(keys, key=lambda k: k.frame)
     counter = [0]
-    indexes = chain_links(len(keys), counter)
+    indexes = chain_links(0, len(keys), counter)
     first = keys[0]
 
     def payload(key):
@@ -168,6 +169,9 @@ def write_camera_track(keys):
 
 # model.opaque is the template model's editor state, reused for every written model
 # because the writer has no data of its own for those bytes.
+# The per-bone and per-morph state MMD shows on load is written from the key at
+# frame 0, with no selection flag; copying a template bone's state would pose
+# everything at rest and mark every bone selected.
 def write_model(model, opaque, bone_default, morph_default):
     constraint_count = len(model.constraints)
     last_frame = 0
@@ -196,18 +200,40 @@ def write_model(model, opaque, bone_default, morph_default):
         b"\x01" * constraint_count,
         b"\x00",
         struct.pack("<i", 0),
-        opaque["bone_state"] * len(model.bone_names),
-        opaque["morph_state"] * len(model.morph_names),
+        b"".join(
+            bone_state(with_initial(keys, bone_default)[0]) for keys in model.bones
+        ),
+        b"".join(
+            struct.pack("<f", with_initial(keys, morph_default)[0].weight)
+            for keys in model.morphs
+        ),
         opaque["constraint_state"] * constraint_count,
         opaque["tail"],
     ]
     return b"".join(out)
 
 
+# Offset of the 28-byte playback state from the end of the camera track: camera
+# state 37, light track 41, light state 24, accessory header 6. Layout decoded from
+# MMD saves with known ranges: current frame at +12, flag bytes at +16..+19 (repeat,
+# stop frame on, from frame on), play start at +20 and play end at +24. The first
+# 12 bytes are not understood and are left as the template has them.
+PLAYBACK_OFFSET = 37 + 41 + 24 + 6
+
+
+def set_play_range(tail, start, end):
+    state = bytearray(tail[PLAYBACK_OFFSET : PLAYBACK_OFFSET + 28])
+    struct.pack_into("<i", state, 12, 0)
+    state[18] = 1
+    state[19] = 1
+    struct.pack_into("<ii", state, 20, max(0, start), max(0, end))
+    return tail[:PLAYBACK_OFFSET] + bytes(state) + tail[PLAYBACK_OFFSET + 28 :]
+
+
 # Builds a PMM from a template saved by real MMD: header, light, accessories, audio
 # and the other global state are copied untouched; only the model and camera
 # sections are replaced. The result is parsed back as a self-check.
-def build_pmm(template, models, camera_keys):
+def build_pmm(template, models, camera_keys, play_range=None):
     base = parse_pmm(template)
     if not base.models or base.spans is None:
         raise PmmError("the PMM template needs at least one model and a readable camera section")
@@ -216,9 +242,7 @@ def build_pmm(template, models, camera_keys):
     if len(models) > 255:
         raise PmmError("a PMM holds at most 255 models")
     opaque = dict(base.models[0].opaque)
-    opaque["bone_state"] = opaque["bone_state"] or DEFAULT_BONE_STATE
-    opaque["morph_state"] = opaque["morph_state"] or bytes(4)
-    opaque["constraint_state"] = opaque["constraint_state"] or b""
+    opaque["constraint_state"] = opaque["constraint_state"] or bytes((1,))
     models_start, _, camera_end = base.spans
     bone_default = BoneKey(0, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0), DEFAULT_BONE_INTERPOLATION)
     morph_default = MorphKey(0, 0.0)
@@ -233,7 +257,7 @@ def build_pmm(template, models, camera_keys):
             bytes((len(models),)),
             b"".join(write_model(m, opaque, bone_default, morph_default) for m in models),
             write_camera_track(camera),
-            template[camera_end:],
+            set_play_range(template[camera_end:], *play_range) if play_range else template[camera_end:],
         ]
     )
     check = parse_pmm(out)

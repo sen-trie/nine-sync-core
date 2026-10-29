@@ -2,9 +2,9 @@ import bpy
 import os
 import re
 
-from ..common.constants import PMM_TEMPLATE_PATH, PMX_EXTENSIONS, TEMP_PREFIX
+from ..common.constants import PMM_FPS, PMM_TEMPLATE_PATH, PMX_EXTENSIONS, TEMP_PREFIX
 from ..common.logger import log
-from ..common.scene_utils import model_key
+from ..common.scene_utils import fps_differs, model_key, scene_fps
 from ..pmm import (
     PmmError,
     PmmModel,
@@ -15,16 +15,11 @@ from ..pmm import (
 )
 from ..pmm_writer import build_pmm
 from .mmd_tools_link import mmd_module
-from .retime import retime_factor, retime_keys
+from .retime import retime_keys
 from .rigs import ensure_camera_rig
 from .scale import current_scale
 from .targets import refresh_targets, target_usable
 from .tempfiles import remove_file, temp_vmd_path
-
-
-# MMD lists morphs by panel (eyebrow, eye, mouth, other), each in PMX order. System
-# morphs (category 0) are not part of a PMM. Unverified against MMD itself.
-MORPH_CATEGORY_ORDER = (1, 2, 3, 4)
 
 
 def template_path():
@@ -77,7 +72,8 @@ def refresh_export_items(settings):
 
 
 # Bone names, morph names and IK bone indices in the order MMD loads them from the
-# PMX itself, since a PMM refers to both by index.
+# PMX itself, since a PMM refers to both by index. Every morph is listed, system
+# ones included: leaving some out makes MMD report a different model structure.
 # A PMD goes through mmd_tools' own PMD-to-PMX conversion, so its bone list is
 # whatever that conversion produces; unverified against MMD's PMD handling.
 def read_pmx_layout(path):
@@ -86,7 +82,7 @@ def read_pmx_layout(path):
     else:
         pmx = mmd_module("core.pmx").load(path)
     bone_names = [b.name for b in pmx.bones]
-    morphs = [m for c in MORPH_CATEGORY_ORDER for m in pmx.morphs if m.category == c]
+    morphs = pmx.morphs
     constraints = [i for i, b in enumerate(pmx.bones) if b.isIK]
     return bone_names, [m.name for m in morphs], constraints
 
@@ -106,12 +102,18 @@ def export_vmd(settings, **params):
         remove_file(path)
 
 
+# Blender's frame rate is the reference: a PMM is always 30 fps, so frames are
+# converted whatever the Retime option says. Sync then undoes it with the same factor.
+def export_factor(scene):
+    return scene_fps(scene) / PMM_FPS
+
+
 # Maps the exporter's frame numbers to PMM frames: it subtracts min(1, frame_start),
 # and sync multiplies PMM frames by the retime factor.
 def to_pmm_frames(keys, scene, settings, hold_cuts=False):
     offset = min(1, scene.frame_start)
     shifted = [k._replace(frame=k.frame + offset) for k in keys]
-    factor = retime_factor(scene, settings)
+    factor = export_factor(scene)
     if abs(factor - 1.0) < 1e-6:
         return shifted
     return retime_keys(shifted, 1.0 / factor, hold_cuts)
@@ -167,11 +169,14 @@ def collect_model(scene, settings, index, root, path):
     return model
 
 
-# Writes the PMM and links it to the Syncer: the file becomes the Syncer's PMM, and
+# Writes the PMM (playing the scene frame range) and links it to the Syncer: the file becomes the Syncer's PMM, and
 # each exported model is assigned to its Blender root explicitly, so the first sync
 # back after editing in MMD touches the same objects. The camera is the rig the
 # Syncer already uses, so its mapping carries over as well.
 def create_pmm(scene, settings, out_path):
+    if fps_differs(scene) and not settings.retime_fps:
+        settings.retime_fps = True
+        log.info("scene is %g fps; Retime to Scene FPS turned on so sync matches", scene_fps(scene))
     items = [i for i in settings.export_items if i.enabled and i.target is not None]
     if not items:
         raise PmmError("no models are checked")
@@ -194,7 +199,12 @@ def create_pmm(scene, settings, out_path):
         if settings.export_animation and settings.export_camera_motion:
             _, _, cameras = export_vmd(settings, camera=rig_root)
             camera_keys = to_pmm_frames(cameras, scene, settings, True)
-    data = build_pmm(template_data, models, camera_keys)
+    factor = export_factor(scene)
+    play_range = (
+        int(round(scene.frame_start / factor)),
+        int(round(scene.frame_end / factor)),
+    )
+    data = build_pmm(template_data, models, camera_keys, play_range)
     with open(out_path, "wb") as stream:
         stream.write(data)
     log.info("wrote %s (%d bytes)", out_path, len(data))
