@@ -79,6 +79,17 @@ class MMDBridgeExportItem(PropertyGroup):
     )
 
 
+# One row of the Create MMD Project prop list: a mesh object that is written as an
+# .x accessory.
+class MMDBridgeExportProp(PropertyGroup):
+    enabled: BoolProperty(name="Include", default=True)
+    target: PointerProperty(
+        name="Mesh",
+        type=bpy.types.Object,
+        poll=lambda self, obj: obj.type == "MESH",
+    )
+
+
 class MMDBridgeSettings(PropertyGroup):
     filepath: StringProperty(name="PMM File", subtype="FILE_PATH")
     status: StringProperty(default="Idle")
@@ -160,6 +171,7 @@ class MMDBridgeSettings(PropertyGroup):
     )
     targets: CollectionProperty(type=MMDBridgeTarget)
     export_items: CollectionProperty(type=MMDBridgeExportItem)
+    export_props: CollectionProperty(type=MMDBridgeExportProp)
     export_path: StringProperty(
         name="PMM File",
         description="Where Create PMM saves the project",

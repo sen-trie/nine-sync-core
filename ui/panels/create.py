@@ -44,6 +44,18 @@ class NINESYNC_PT_create(Panel):
                 path_row.alert = item.enabled and not item.pmx_path
                 path_row.label(text="", icon="FILE")
                 path_row.prop(item, "pmx_path", text="")
+        header, box = layout.panel("ninesync_export_props", default_closed=False)
+        header.label(text="Props (.x) (%d)" % len(settings.export_props))
+        if box is not None:
+            box.operator("ninesync.add_export_props", icon="ADD")
+            for index, item in enumerate(settings.export_props):
+                row = box.row(align=True)
+                row.prop(item, "enabled", text="")
+                row.label(text=item.target.name if item.target else "(missing)")
+                remove = row.operator("ninesync.remove_export_prop", text="", icon="X", emboss=False)
+                remove.index = index
+            if len(settings.export_props):
+                box.label(text="Written to an accessories folder beside the PMM", icon="INFO")
         header, box = layout.panel("ninesync_export_animation", default_closed=False)
         header.prop(settings, "export_animation", text="Export Animation")
         if box is not None:

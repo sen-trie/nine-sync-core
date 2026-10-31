@@ -1,7 +1,7 @@
 import bpy
 import os
 import time
-from bpy.props import BoolProperty, FloatProperty, StringProperty
+from bpy.props import BoolProperty, FloatProperty, IntProperty, StringProperty
 from bpy.types import Operator
 
 from .. import hooks
@@ -261,6 +261,53 @@ class NINESYNC_OT_refresh_export(Operator):
         return {"FINISHED"}
 
 
+# True for a mesh that belongs to an mmd_tools model; those travel with the PMX.
+def inside_mmd_model(obj):
+    while obj is not None:
+        if getattr(obj, "mmd_type", "") == "ROOT":
+            return True
+        obj = obj.parent
+    return False
+
+
+class NINESYNC_OT_add_export_props(Operator):
+    bl_idname = "ninesync.add_export_props"
+    bl_label = "Add Selected Meshes"
+    bl_description = "List the selected mesh objects to be written as .x accessories (blocking props). Meshes that belong to an mmd_tools model are skipped"
+
+    def execute(self, context):
+        if refuse_if_outdated(self, context):
+            return {"CANCELLED"}
+        settings = context.scene.mmd_bridge
+        listed = {i.target for i in settings.export_props}
+        added = 0
+        for obj in context.selected_objects:
+            if obj.type != "MESH" or obj in listed or inside_mmd_model(obj):
+                continue
+            item = settings.export_props.add()
+            item.target = obj
+            added += 1
+        if not added:
+            self.report({"WARNING"}, "No new mesh objects are selected")
+        redraw_all()
+        return {"FINISHED"}
+
+
+class NINESYNC_OT_remove_export_prop(Operator):
+    bl_idname = "ninesync.remove_export_prop"
+    bl_label = "Remove Prop"
+    bl_description = "Take this mesh off the prop list (the object itself is not touched)"
+
+    index: IntProperty()
+
+    def execute(self, context):
+        settings = context.scene.mmd_bridge
+        if 0 <= self.index < len(settings.export_props):
+            settings.export_props.remove(self.index)
+        redraw_all()
+        return {"FINISHED"}
+
+
 class NINESYNC_OT_create_pmm(Operator):
     bl_idname = "ninesync.create_pmm"
     bl_label = "Create PMM"
@@ -293,7 +340,7 @@ class NINESYNC_OT_create_pmm(Operator):
         if not path.lower().endswith(".pmm"):
             path += ".pmm"
         try:
-            models, camera_keys = create_pmm(context.scene, settings, path)
+            models, camera_keys, props = create_pmm(context.scene, settings, path)
         except (OSError, PmmError) as error:
             self.report({"ERROR"}, str(error))
             log.error("create PMM failed: %s", error)
@@ -302,8 +349,8 @@ class NINESYNC_OT_create_pmm(Operator):
         settings.status = "Created %s at %s" % (os.path.basename(path), time.strftime("%H:%M:%S"))
         self.report(
             {"INFO"},
-            "Created %s with %d model(s), %d camera key(s). The Syncer now points at it"
-            % (os.path.basename(path), models, camera_keys),
+            "Created %s with %d model(s), %d camera key(s), %d prop(s). The Syncer now points at it"
+            % (os.path.basename(path), models, camera_keys, props),
         )
         redraw_all()
         return {"FINISHED"}

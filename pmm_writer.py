@@ -1,6 +1,10 @@
 import struct
 
 from .pmm import (
+    ACCESSORY_ADDITIONAL,
+    ACCESSORY_KEY,
+    ACCESSORY_NAME_LENGTH,
+    ACCESSORY_PATH_LENGTH,
     BONE_ADDITIONAL,
     BONE_INITIAL,
     BoneKey,
@@ -167,6 +171,86 @@ def write_camera_track(keys):
     return b"".join(out)
 
 
+# Visible flag in bit 0, transparency percent (0 = opaque) above it, as MMD stores it.
+def accessory_flags(key):
+    return (1 if key.visible else 0) | ((100 - int(round(key.opacity * 100))) << 1)
+
+
+# Accessory keys have no interpolation curves (MMD moves them linearly). The index
+# chain is per accessory: the first key is 0 and the rest count up from 1.
+def write_accessory_keys(keys):
+    keys = sorted(keys, key=lambda k: k.frame)
+
+    def payload(key):
+        return (
+            accessory_flags(key),
+            key.parent_model,
+            key.parent_bone,
+            *key.position,
+            *key.rotation,
+            key.scale,
+            key.shadow,
+            0,
+        )
+
+    first = keys[0]
+    out = [
+        ACCESSORY_KEY.pack(first.frame, 0, 1 if len(keys) > 1 else 0, *payload(first)),
+        struct.pack("<i", len(keys) - 1),
+    ]
+    for position in range(1, len(keys)):
+        out.append(
+            ACCESSORY_ADDITIONAL.pack(
+                position,
+                keys[position].frame,
+                position - 1,
+                position + 1 if position + 1 < len(keys) else 0,
+                *payload(keys[position]),
+            )
+        )
+    return b"".join(out)
+
+
+# The 39 bytes MMD keeps after each accessory's keys: the current value, which a
+# load shows until the first frame change. Written from the first key.
+def accessory_state(key):
+    return struct.pack(
+        "<Bii3ff3fBB",
+        accessory_flags(key),
+        key.parent_model,
+        key.parent_bone,
+        key.rotation[0],
+        key.rotation[1],
+        key.rotation[2],
+        key.scale,
+        *key.position,
+        key.shadow,
+        0,
+    )
+
+
+# Whole accessory section: header (selected index, an unknown int, count), the name
+# table, then one record per accessory.
+def write_accessories(accessories):
+    if len(accessories) > 255:
+        raise PmmError("a PMM holds at most 255 accessories")
+    out = [struct.pack("<BiB", 0, 0, len(accessories))]
+    out.extend(fixed_string(a.name, ACCESSORY_NAME_LENGTH) for a in accessories)
+    for acc in accessories:
+        keys = sorted(acc.keys, key=lambda k: k.frame)
+        out.extend(
+            [
+                bytes((acc.index,)),
+                fixed_string(acc.name, ACCESSORY_NAME_LENGTH),
+                fixed_string(acc.path, ACCESSORY_PATH_LENGTH),
+                bytes((acc.draw_order,)),
+                write_accessory_keys(keys),
+                accessory_state(keys[0]),
+            ]
+        )
+    return b"".join(out)
+
+
 # model.opaque is the template model's editor state, reused for every written model
 # because the writer has no data of its own for those bytes.
 # The per-bone and per-morph state MMD shows on load is written from the key at
@@ -221,6 +305,11 @@ def write_model(model, opaque, bone_default, morph_default):
 PLAYBACK_OFFSET = 37 + 41 + 24 + 6
 
 
+# The template has no accessories, so its accessory section is just the 6-byte header
+# that sits after the camera state and the light track and state.
+ACCESSORY_OFFSET = 37 + 41 + 24
+
+
 def set_play_range(tail, start, end):
     state = bytearray(tail[PLAYBACK_OFFSET : PLAYBACK_OFFSET + 28])
     struct.pack_into("<i", state, 12, 0)
@@ -233,7 +322,7 @@ def set_play_range(tail, start, end):
 # Builds a PMM from a template saved by real MMD: header, light, accessories, audio
 # and the other global state are copied untouched; only the model and camera
 # sections are replaced. The result is parsed back as a self-check.
-def build_pmm(template, models, camera_keys, play_range=None):
+def build_pmm(template, models, camera_keys, play_range=None, accessories=None):
     base = parse_pmm(template)
     if not base.models or base.spans is None:
         raise PmmError("the PMM template needs at least one model and a readable camera section")
@@ -249,6 +338,11 @@ def build_pmm(template, models, camera_keys, play_range=None):
     camera = camera_keys or [
         CameraKey(0, -45.0, (0.0, 10.0, 0.0), (0.0, 0.0, 0.0), -1, -1, DEFAULT_CAMERA_INTERPOLATION, 0, 30)
     ]
+    tail = set_play_range(template[camera_end:], *play_range) if play_range else template[camera_end:]
+    if accessories:
+        if base.accessories or tail[ACCESSORY_OFFSET + 5] != 0:
+            raise PmmError("the PMM template already has accessories")
+        tail = tail[:ACCESSORY_OFFSET] + write_accessories(accessories) + tail[ACCESSORY_OFFSET + 6 :]
     head = bytearray(template[: models_start - 1])
     head[SELECTED_MODEL_OFFSET] = 0
     out = b"".join(
@@ -257,12 +351,14 @@ def build_pmm(template, models, camera_keys, play_range=None):
             bytes((len(models),)),
             b"".join(write_model(m, opaque, bone_default, morph_default) for m in models),
             write_camera_track(camera),
-            set_play_range(template[camera_end:], *play_range) if play_range else template[camera_end:],
+            tail,
         ]
     )
     check = parse_pmm(out)
     if len(check.models) != len(models) or len(check.camera_keys) != len(camera):
         raise PmmError("the written PMM does not read back correctly")
+    if accessories and (check.accessory_error or len(check.accessories) != len(accessories)):
+        raise PmmError("the written accessories do not read back correctly")
     for wrote, read in zip(models, check.models):
         if read.bone_names != wrote.bone_names or read.morph_names != wrote.morph_names:
             raise PmmError("model '%s' did not read back correctly" % wrote.name)

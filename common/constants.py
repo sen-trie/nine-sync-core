@@ -101,3 +101,12 @@ PMM_TEMPLATE_PATH = "assets/kagamine.pmm"
 
 
 PMX_EXTENSIONS = (".pmx", ".pmd")
+
+
+# MMD draws an .x file ten times larger than its coordinates (FX undoes the same factor
+# on import), so mesh coordinates are written divided by it.
+ACCESSORY_UNIT = 10.0
+
+
+# Folder beside the PMM that receives the .x files written for exported props.
+PROP_FOLDER = "accessories"

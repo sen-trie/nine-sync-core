@@ -4,8 +4,10 @@ from .operators import (
     MMDBRIDGE_OT_dismiss_scale_warning,
     MMDBRIDGE_OT_scan,
     MMDBRIDGE_OT_sync_now,
+    NINESYNC_OT_add_export_props,
     NINESYNC_OT_create_pmm,
     NINESYNC_OT_refresh_export,
+    NINESYNC_OT_remove_export_prop,
     NINESYNC_OT_set_import_scale,
     NINESYNC_OT_spawn_camera,
 )
@@ -17,7 +19,12 @@ from .panels.main import MMDBRIDGE_PT_main
 from .panels.options import MMDBRIDGE_PT_options
 from .panels.readout import MMDBRIDGE_PT_readout
 from .preferences import NineSyncPreferences
-from .properties import MMDBridgeExportItem, MMDBridgeSettings, MMDBridgeTarget
+from .properties import (
+    MMDBridgeExportItem,
+    MMDBridgeExportProp,
+    MMDBridgeSettings,
+    MMDBridgeTarget,
+)
 
 
 # Registration order matters: property groups before what uses them, parent
@@ -25,6 +32,7 @@ from .properties import MMDBridgeExportItem, MMDBridgeSettings, MMDBridgeTarget
 CLASSES = (
     MMDBridgeTarget,
     MMDBridgeExportItem,
+    MMDBridgeExportProp,
     MMDBridgeSettings,
     MMDBRIDGE_OT_sync_now,
     MMDBRIDGE_OT_scan,
@@ -32,6 +40,8 @@ CLASSES = (
     MMDBRIDGE_OT_copy_report,
     NINESYNC_OT_spawn_camera,
     NINESYNC_OT_refresh_export,
+    NINESYNC_OT_add_export_props,
+    NINESYNC_OT_remove_export_prop,
     NINESYNC_OT_create_pmm,
     NineSyncPreferences,
     NINESYNC_OT_set_import_scale,

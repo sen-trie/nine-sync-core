@@ -14,6 +14,7 @@ from ..pmm import (
     read_vmd,
 )
 from ..pmm_writer import build_pmm
+from .accessory_export import collect_accessories
 from .mmd_tools_link import mmd_module
 from .retime import retime_keys
 from .rigs import ensure_camera_rig
@@ -204,7 +205,9 @@ def create_pmm(scene, settings, out_path):
         int(round(scene.frame_start / factor)),
         int(round(scene.frame_end / factor)),
     )
-    data = build_pmm(template_data, models, camera_keys, play_range)
+    props = [i.target for i in settings.export_props if i.enabled and i.target is not None]
+    accessories = collect_accessories(scene, settings, props, out_path) if props else []
+    data = build_pmm(template_data, models, camera_keys, play_range, accessories)
     with open(out_path, "wb") as stream:
         stream.write(data)
     log.info("wrote %s (%d bytes)", out_path, len(data))
@@ -220,4 +223,4 @@ def create_pmm(scene, settings, out_path):
                 item.target = root
         root["ninesync_pmx_path"] = path
     settings.pmm_accessory_count = len(project.accessories)
-    return len(models), len(camera_keys)
+    return len(models), len(camera_keys), len(accessories)

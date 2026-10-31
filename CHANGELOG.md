@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Create MMD Project lists mesh objects as Props (.x): each is written as its own .x file in an `accessories` folder beside the PMM, and its position, rotation, scale and visibility keys over the scene frame range go into the PMM as an accessory, so a placeholder (cube, stand-in, prop) can be blocked in Blender and opened in MMD. The mesh is baked at the first frame with scale applied and the object origin as pivot; modifiers are applied, materials become a flat colour. Needs no FX.
 - Create PMM numbers bone and morph key chains the way MMD does (shared index sequence starting at the bone or morph count), so keys after frame 0 stay on their own bone.
 - Create PMM lists all PMX morphs, writes the frame-0 pose as each bone's initial state (no bone selected), and always converts frames from the scene fps to 30.
 - Create PMM sets the MMD play range (from and stop frame) to the scene frame range.
