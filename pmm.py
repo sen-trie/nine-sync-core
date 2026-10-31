@@ -116,6 +116,8 @@ class PmmModel:
         "last_frame",
         "constraints",
         "opaque",
+        "frame_rows",
+        "morph_panels",
     )
 
     def __init__(self):
@@ -130,6 +132,8 @@ class PmmModel:
         self.last_frame = 0
         self.constraints = []
         self.opaque = None
+        self.frame_rows = 2
+        self.morph_panels = (-1, -1, -1, -1)
 
 
 class AccessoryKey(NamedTuple):
@@ -690,7 +694,7 @@ def read_vmd(data):
                 tuple(v[2:5]),
                 tuple(v[5:8]),
                 -1,
-                -1,
+                0,
                 camera_interpolation_from_vmd(v[8]),
                 v[10],
                 v[9],

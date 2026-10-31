@@ -1,6 +1,8 @@
 import bpy
+import numpy
 import os
 import re
+from mathutils import Color
 
 from ..common.animation import iter_fcurves
 from ..common.constants import ACCESSORY_UNIT, PMM_FPS, PROP_FOLDER
@@ -8,10 +10,10 @@ from ..common.logger import log
 from ..common.scene_utils import scene_fps
 from ..pmm import AccessoryKey, PmmAccessory, PmmError
 from ..x_writer import XMaterial, XMesh, build_x_text
-from .scale import current_scale
+from .scale import export_scale
 
 
-DEFAULT_MATERIAL = XMaterial((0.8, 0.8, 0.8, 1.0), (0.2, 0.2, 0.2))
+DEFAULT_MATERIAL = XMaterial((0.8, 0.8, 0.8, 1.0), (0.0, 0.0, 0.0))
 
 
 # Shadow flag MMD gives a freshly loaded accessory (off).
@@ -24,26 +26,81 @@ def to_mmd(vector, unit):
     return (vector[0] / unit, vector[2] / unit, vector[1] / unit)
 
 
-# Base colour and alpha from the Principled BSDF when the material has one, the
-# viewport colour otherwise. Emissive is a quarter of the colour: MMD adds it to the
-# lit colour, and more washes a prop out against the white background.
-def x_material(material):
+def principled_node(material):
+    tree = material.node_tree
+    return next((n for n in tree.nodes if n.type == "BSDF_PRINCIPLED"), None) if tree else None
+
+
+# Average colour of the first image in the material, as a scene-linear colour. Byte
+# images read back as sRGB values, float ones as linear.
+def image_average(material):
+    tree = material.node_tree
+    nodes = tree.nodes if tree else ()
+    image = next((n.image for n in nodes if n.type == "TEX_IMAGE" and n.image), None)
+    if image is None or not image.has_data and not image.pixels:
+        return None
+    channels = image.channels
+    pixels = numpy.empty(len(image.pixels), dtype=numpy.float32)
+    image.pixels.foreach_get(pixels)
+    if not pixels.size or channels < 3:
+        return None
+    average = pixels.reshape(-1, channels)[:, :3].mean(axis=0)
+    color = Color((float(v) for v in average))
+    return tuple(color if image.is_float else color.from_srgb_to_scene_linear())
+
+
+# The colour a material starts with on the prop palette: its texture when it has one,
+# since a textured Principled node keeps a meaningless default in Base Color.
+def suggested_color(material):
+    if material is None:
+        return DEFAULT_MATERIAL.color[:3]
+    average = image_average(material)
+    if average is not None:
+        return average
+    node = principled_node(material)
+    if node is not None:
+        return tuple(node.inputs["Base Color"].default_value)[:3]
+    return tuple(material.diffuse_color)[:3]
+
+
+# Keeps a prop's palette in step with its material slots: new materials get a
+# suggested colour, picked colours stay, removed materials go.
+def refresh_prop_colors(item):
+    obj = item.target
+    wanted = [slot.material for slot in obj.material_slots if slot.material] if obj else []
+    names = {m.name for m in wanted}
+    for index in reversed(range(len(item.colors))):
+        if item.colors[index].name not in names:
+            item.colors.remove(index)
+    present = {c.name for c in item.colors}
+    for material in wanted:
+        if material.name not in present:
+            row = item.colors.add()
+            row.name = material.name
+            row.color = suggested_color(material)
+
+
+# The palette colour when the user has one, otherwise the Principled or viewport
+# colour; written as sRGB, which is what MMD shows. No emissive: MMD's default light
+# already brightens a colour, and any added on top washes it out.
+def x_material(material, palette):
     if material is None:
         return DEFAULT_MATERIAL
     color = tuple(material.diffuse_color)
-    tree = material.node_tree
-    node = next((n for n in tree.nodes if n.type == "BSDF_PRINCIPLED"), None) if tree else None
+    node = principled_node(material)
     if node is not None:
         base = node.inputs["Base Color"].default_value
         color = (base[0], base[1], base[2], node.inputs["Alpha"].default_value)
-    return XMaterial(color, (color[0] * 0.25, color[1] * 0.25, color[2] * 0.25))
+    rgb = palette.get(material.name, color[:3])
+    rgb = tuple(Color(rgb).from_scene_linear_to_srgb())
+    return XMaterial((*rgb, color[3]), (0.0, 0.0, 0.0))
 
 
 # The evaluated mesh (modifiers applied) at the current frame, with the object's
 # scale baked in and its rotation and position left out: those become the keys, and
 # the object origin is the accessory's pivot. Scale is baked per axis because an
 # accessory only has one uniform scale value.
-def x_mesh(obj, depsgraph, rest_scale, unit):
+def x_mesh(obj, depsgraph, rest_scale, unit, palette):
     evaluated = obj.evaluated_get(depsgraph)
     mesh = evaluated.to_mesh()
     try:
@@ -51,7 +108,7 @@ def x_mesh(obj, depsgraph, rest_scale, unit):
         if not len(mesh.loop_triangles):
             raise PmmError("'%s' has no faces to export" % obj.name)
         normals = mesh.corner_normals
-        materials = [x_material(m) for m in mesh.materials] or [DEFAULT_MATERIAL]
+        materials = [x_material(m, palette) for m in mesh.materials] or [DEFAULT_MATERIAL]
         positions = []
         out_normals = []
         triangles = []
@@ -72,17 +129,19 @@ def x_mesh(obj, depsgraph, rest_scale, unit):
                 out_normals.append(
                     to_mmd((fixed[0] / length, fixed[1] / length, fixed[2] / length), 1.0)
                 )
-            triangles.append((base, base + 1, base + 2))
+            # to_mmd mirrors, so the corners are reversed to keep the front side
+            # facing out; MMD culls back faces, and a wall would turn see-through.
+            triangles.append((base, base + 2, base + 1))
             face_materials.append(min(tri.material_index, len(materials) - 1))
         return XMesh(positions, out_normals, triangles, face_materials, materials)
     finally:
         evaluated.to_mesh_clear()
 
 
-# Frames worth a key. Linear segments need only their end keys; constant and curved
-# ones get extra samples because MMD can only move an accessory linearly. Anything
-# driven by constraints, drivers, NLA or a parent chain MMD cannot see is sampled on
-# every frame of the scene range.
+# Frames worth a key: the keyframes placed in Blender, plus the last frame of a constant
+# hold, which would otherwise turn into a slide. Curves are not sampled, so MMD moves
+# between keys linearly; only motion with no keys of its own to read, from constraints,
+# drivers or NLA, is sampled on every frame of the scene range.
 def sample_frames(obj, scene):
     start, end = scene.frame_start, scene.frame_end
     frames = {start, end}
@@ -98,14 +157,10 @@ def sample_frames(obj, scene):
                     frame = int(round(point.co[0]))
                     if start <= frame <= end:
                         frames.add(frame)
-                    if index + 1 == len(points) or point.interpolation == "LINEAR":
-                        continue
-                    following = int(round(points[index + 1].co[0]))
-                    if point.interpolation == "CONSTANT":
-                        gap = [following - 1]
-                    else:
-                        gap = range(frame + 1, following)
-                    frames.update(f for f in gap if start <= f <= end)
+                    if index + 1 < len(points) and point.interpolation == "CONSTANT":
+                        hold = int(round(points[index + 1].co[0])) - 1
+                        if start <= hold <= end:
+                            frames.add(hold)
         owner = owner.parent
     return frames
 
@@ -156,17 +211,20 @@ def accessory_keys(samples, rest_scale, scene, unit):
             DEFAULT_SHADOW,
             1.0,
         )
-    return [by_frame[f] for f in sorted(by_frame)]
+    keys = [by_frame[f] for f in sorted(by_frame)]
+    if keys and keys[0].frame != 0:
+        keys.insert(0, keys[0]._replace(frame=0))
+    return keys
 
 
 # A file name MMD's cp932 path field and Windows both accept, unique among the files
 # written in this export.
-def prop_file_name(obj, taken):
+def prop_file_name(obj, taken, extension=".x"):
     stem = re.sub(r"[^A-Za-z0-9_\-. ]", "_", obj.name).strip(" .")[:60] or "prop"
-    name = stem + ".x"
+    name = stem + extension
     number = 2
     while name.lower() in taken:
-        name = "%s_%d.x" % (stem, number)
+        name = "%s_%d%s" % (stem, number, extension)
         number += 1
     taken.add(name.lower())
     return name
@@ -178,8 +236,12 @@ def prop_file_name(obj, taken):
 def collect_accessories(scene, settings, objects, pmm_path):
     folder = os.path.join(os.path.dirname(os.path.abspath(pmm_path)), PROP_FOLDER)
     os.makedirs(folder, exist_ok=True)
-    unit = current_scale(settings)
+    unit = export_scale(settings)
     wanted = {obj: sample_frames(obj, scene) for obj in objects}
+    palettes = {
+        item.target: {c.name: tuple(c.color) for c in item.colors}
+        for item in settings.export_props
+    }
     saved = scene.frame_current
     scene.frame_set(scene.frame_start)
     try:
@@ -187,7 +249,9 @@ def collect_accessories(scene, settings, objects, pmm_path):
         rest = {
             obj: tuple(abs(v) or 1.0 for v in obj.matrix_world.to_scale()) for obj in objects
         }
-        meshes = {obj: x_mesh(obj, depsgraph, rest[obj], unit) for obj in objects}
+        meshes = {
+            obj: x_mesh(obj, depsgraph, rest[obj], unit, palettes.get(obj, {})) for obj in objects
+        }
     finally:
         scene.frame_set(saved)
     samples = sample_objects(scene, wanted)

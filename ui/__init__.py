@@ -5,8 +5,10 @@ from .operators import (
     MMDBRIDGE_OT_scan,
     MMDBRIDGE_OT_sync_now,
     NINESYNC_OT_add_export_props,
+    NINESYNC_OT_convert_root_motion,
     NINESYNC_OT_create_pmm,
     NINESYNC_OT_refresh_export,
+    NINESYNC_OT_refresh_prop_colors,
     NINESYNC_OT_remove_export_prop,
     NINESYNC_OT_set_import_scale,
     NINESYNC_OT_spawn_camera,
@@ -22,6 +24,7 @@ from .preferences import NineSyncPreferences
 from .properties import (
     MMDBridgeExportItem,
     MMDBridgeExportProp,
+    MMDBridgePropColor,
     MMDBridgeSettings,
     MMDBridgeTarget,
 )
@@ -32,6 +35,7 @@ from .properties import (
 CLASSES = (
     MMDBridgeTarget,
     MMDBridgeExportItem,
+    MMDBridgePropColor,
     MMDBridgeExportProp,
     MMDBridgeSettings,
     MMDBRIDGE_OT_sync_now,
@@ -43,6 +47,8 @@ CLASSES = (
     NINESYNC_OT_add_export_props,
     NINESYNC_OT_remove_export_prop,
     NINESYNC_OT_create_pmm,
+    NINESYNC_OT_convert_root_motion,
+    NINESYNC_OT_refresh_prop_colors,
     NineSyncPreferences,
     NINESYNC_OT_set_import_scale,
     MMDBRIDGE_OT_dismiss_scale_warning,

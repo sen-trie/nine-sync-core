@@ -3,6 +3,7 @@ from bpy.props import (
     BoolProperty,
     CollectionProperty,
     EnumProperty,
+    FloatVectorProperty,
     FloatProperty,
     IntProperty,
     PointerProperty,
@@ -17,6 +18,12 @@ from ..common.logger import log
 # Poll for the target picker: only mmd_tools model roots.
 def is_mmd_root(self, obj):
     return getattr(obj, "mmd_type", "") == "ROOT"
+
+
+# Poll for the export camera picker: only mmd_tools camera rig roots, the one form
+# mmd_tools' VMD exporter can read.
+def is_mmd_camera(self, obj):
+    return obj.type == "EMPTY" and getattr(obj, "mmd_type", "") == "CAMERA"
 
 
 # Hides scene and light actions from the per-model clip pickers.
@@ -79,6 +86,20 @@ class MMDBridgeExportItem(PropertyGroup):
     )
 
 
+# One colour of a prop's palette; name is the material's. A .x from this add-on has no
+# textures, so this is all a material looks like in MMD.
+class MMDBridgePropColor(PropertyGroup):
+    name: StringProperty()
+    color: FloatVectorProperty(
+        name="Color",
+        subtype="COLOR",
+        size=3,
+        min=0.0,
+        max=1.0,
+        default=(0.8, 0.8, 0.8),
+    )
+
+
 # One row of the Create MMD Project prop list: a mesh object that is written as an
 # .x accessory.
 class MMDBridgeExportProp(PropertyGroup):
@@ -88,6 +109,8 @@ class MMDBridgeExportProp(PropertyGroup):
         type=bpy.types.Object,
         poll=lambda self, obj: obj.type == "MESH",
     )
+    colors: CollectionProperty(type=MMDBridgePropColor)
+    show_colors: BoolProperty(name="Colors", default=False)
 
 
 class MMDBridgeSettings(PropertyGroup):
@@ -179,7 +202,23 @@ class MMDBridgeSettings(PropertyGroup):
     )
     export_camera: BoolProperty(
         name="Include Camera",
-        description="Put the MMD camera rig's camera in the project",
+        description="Put an MMD camera rig's camera in the project",
+        default=True,
+    )
+    export_camera_object: PointerProperty(
+        name="Camera",
+        description="MMD camera rig to write into the project. Leave empty to use the scene camera's rig, then the Syncer's rig",
+        type=bpy.types.Object,
+        poll=is_mmd_camera,
+    )
+    export_link_syncer: BoolProperty(
+        name="Link to Syncer",
+        description="Set the new PMM as the Syncer's PMM and map its models to these objects. Off leaves the .blend exactly as it is",
+        default=False,
+    )
+    export_mmd_labels: BoolProperty(
+        name="Clean MMD Labels",
+        description="Write a copy of each PMX to a models folder beside the PMM with English names, so MMD shows no Null_xx or garbled rows, and with keyed hidden bones unhidden so they play. The original PMX is not touched",
         default=True,
     )
     export_animation: BoolProperty(

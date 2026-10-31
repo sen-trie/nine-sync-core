@@ -251,8 +251,22 @@ def write_accessories(accessories):
     return b"".join(out)
 
 
+# Per-model editor state that a template cannot supply. Draw order is 1-based and must
+# be unique: MMD 9.32 only brings up one model when every record claims the same slot.
+# The bytes are the draw order, display flag, selected bone, the morph chosen in each
+# of the four panels, then one open/closed flag per timeline row and the scroll.
+def model_editor_state(model):
+    rows = model.frame_rows
+    return (
+        struct.pack("<BBi4iB", model.index + 1, 1, 0, *model.morph_panels, rows)
+        + bytes(rows)
+        + struct.pack("<i", 0)
+    )
+
+
 # model.opaque is the template model's editor state, reused for every written model
-# because the writer has no data of its own for those bytes.
+# because the writer has no data of its own for those bytes. Its last tail byte is the
+# compute order, 1-based and unique like the draw order.
 # The per-bone and per-morph state MMD shows on load is written from the key at
 # frame 0, with no selection flag; copying a template bone's state would pose
 # everything at rest and mark every bone selected.
@@ -267,7 +281,7 @@ def write_model(model, opaque, bone_default, morph_default):
         var_string(model.name),
         var_string(model.name_en),
         fixed_string(model.path, PATH_LENGTH),
-        opaque["after_path"],
+        bytes((model.frame_rows,)),
         struct.pack("<i", len(model.bone_names)),
         b"".join(var_string(n) for n in model.bone_names),
         struct.pack("<i", len(model.morph_names)),
@@ -275,7 +289,7 @@ def write_model(model, opaque, bone_default, morph_default):
         struct.pack("<i", constraint_count),
         b"".join(struct.pack("<i", i) for i in model.constraints),
         struct.pack("<i", 0),
-        opaque["middle"],
+        model_editor_state(model),
         struct.pack("<i", last_frame),
         write_bone_track(model.bones, bone_default),
         write_morph_track(model.morphs, morph_default),
@@ -292,7 +306,7 @@ def write_model(model, opaque, bone_default, morph_default):
             for keys in model.morphs
         ),
         opaque["constraint_state"] * constraint_count,
-        opaque["tail"],
+        opaque["tail"][:-1] + bytes((model.index + 1,)),
     ]
     return b"".join(out)
 
@@ -308,6 +322,14 @@ PLAYBACK_OFFSET = 37 + 41 + 24 + 6
 # The template has no accessories, so its accessory section is just the 6-byte header
 # that sits after the camera state and the light track and state.
 ACCESSORY_OFFSET = 37 + 41 + 24
+
+
+# The camera state MMD shows on load, before any frame change: look-at, offset from
+# it, rotation. Kept from the template, it would show the template's view instead of
+# the first key.
+def set_camera_state(tail, key):
+    state = struct.pack("<3f3f3f", *key.look_at, 0.0, 0.0, key.distance, *key.angle)
+    return state + tail[len(state) :]
 
 
 def set_play_range(tail, start, end):
@@ -336,9 +358,11 @@ def build_pmm(template, models, camera_keys, play_range=None, accessories=None):
     bone_default = BoneKey(0, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0), DEFAULT_BONE_INTERPOLATION)
     morph_default = MorphKey(0, 0.0)
     camera = camera_keys or [
-        CameraKey(0, -45.0, (0.0, 10.0, 0.0), (0.0, 0.0, 0.0), -1, -1, DEFAULT_CAMERA_INTERPOLATION, 0, 30)
+        CameraKey(0, -45.0, (0.0, 10.0, 0.0), (0.0, 0.0, 0.0), -1, 0, DEFAULT_CAMERA_INTERPOLATION, 0, 30)
     ]
-    tail = set_play_range(template[camera_end:], *play_range) if play_range else template[camera_end:]
+    tail = set_camera_state(template[camera_end:], min(camera, key=lambda k: k.frame))
+    if play_range:
+        tail = set_play_range(tail, *play_range)
     if accessories:
         if base.accessories or tail[ACCESSORY_OFFSET + 5] != 0:
             raise PmmError("the PMM template already has accessories")

@@ -110,3 +110,6 @@ ACCESSORY_UNIT = 10.0
 
 # Folder beside the PMM that receives the .x files written for exported props.
 PROP_FOLDER = "accessories"
+
+
+MODEL_FOLDER = "models"

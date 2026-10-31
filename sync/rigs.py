@@ -34,12 +34,13 @@ def rig_needs_rebuild(root, scale):
 
 
 # Finds or creates the mmd_tools camera rig in the bridge's collection, rebuilding
-# it when the scale changed.
-def ensure_camera_rig(scene, settings):
+# it when the scale changed. Rebuilding deletes the rig and its keys, so only a sync,
+# which rewrites them anyway, should ask for it.
+def ensure_camera_rig(scene, settings, rebuild=True):
     collection = ensure_collection(scene, CAMERA_COLLECTION)
     root = find_rig_root(collection, "CAMERA")
     scale = current_scale(settings)
-    if root is not None and rig_needs_rebuild(root, scale):
+    if rebuild and root is not None and rig_needs_rebuild(root, scale):
         log.info(
             "MMD camera rig '%s' was built for a different scale; rebuilding for %.4f",
             root.name,

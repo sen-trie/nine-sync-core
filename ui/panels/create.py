@@ -5,6 +5,7 @@ from bpy.types import Panel
 from ...common.constants import NINESYNC_CATEGORY
 from ...sync.mmd_tools_link import mmd_tools_available
 from ...sync.project_export import template_path
+from ...sync.root_motion import has_root_motion
 from ..helpers import draw_wrapped
 from ..relink import settings_outdated
 
@@ -30,16 +31,23 @@ class NINESYNC_PT_create(Panel):
             draw_wrapped(box, "assets/kagamine.pmm is missing, so Create PMM cannot run.")
         layout.operator("ninesync.spawn_camera", icon="CAMERA_DATA")
         layout.prop(settings, "export_camera")
+        row = layout.row()
+        row.enabled = settings.export_camera
+        row.prop(settings, "export_camera_object")
         header, box = layout.panel("ninesync_export_models", default_closed=False)
         header.label(text="MMD Armatures (%d)" % len(settings.export_items))
         header.operator("ninesync.refresh_export", text="", icon="FILE_REFRESH", emboss=False)
         if box is not None:
             if not len(settings.export_items):
                 box.label(text="Press the refresh icon to find models")
-            for item in settings.export_items:
+            for index, item in enumerate(settings.export_items):
                 row = box.row(align=True)
                 row.prop(item, "enabled", text="")
                 row.label(text=item.target.name if item.target else "(missing)")
+                button = row.row(align=True)
+                button.enabled = item.target is not None and has_root_motion(item.target)
+                convert = button.operator("ninesync.convert_root_motion", text="Convert")
+                convert.index = index
                 path_row = box.row(align=True)
                 path_row.alert = item.enabled and not item.pmx_path
                 path_row.label(text="", icon="FILE")
@@ -52,8 +60,17 @@ class NINESYNC_PT_create(Panel):
                 row = box.row(align=True)
                 row.prop(item, "enabled", text="")
                 row.label(text=item.target.name if item.target else "(missing)")
+                row.prop(item, "show_colors", text="", icon="COLOR", toggle=True)
                 remove = row.operator("ninesync.remove_export_prop", text="", icon="X", emboss=False)
                 remove.index = index
+                if item.show_colors:
+                    colors = box.column(align=True)
+                    refresh = colors.operator("ninesync.refresh_prop_colors", icon="FILE_REFRESH")
+                    refresh.index = index
+                    for entry in item.colors:
+                        split = colors.split(factor=0.7)
+                        split.label(text=entry.name)
+                        split.prop(entry, "color", text="")
             if len(settings.export_props):
                 box.label(text="Written to an accessories folder beside the PMM", icon="INFO")
         header, box = layout.panel("ninesync_export_animation", default_closed=False)
@@ -69,4 +86,5 @@ class NINESYNC_PT_create(Panel):
         row = layout.row()
         row.scale_y = 1.5
         row.operator("ninesync.create_pmm", icon="EXPORT")
-        layout.label(text="Becomes the PMM of the Syncer below", icon="LINKED")
+        layout.prop(settings, "export_mmd_labels")
+        layout.prop(settings, "export_link_syncer")

@@ -9,6 +9,7 @@ from ..common.constants import REPORT_TEXT_NAME
 from ..common.logger import log
 from ..common.scene_utils import redraw_all
 from ..pmm import PmmError, parse_pmm_file
+from ..sync.accessory_export import refresh_prop_colors
 from ..sync.audio import describe_audio
 from ..sync.clean import run_clean
 from ..sync.engine import run_sync
@@ -16,6 +17,7 @@ from ..sync.mmd_tools_link import mmd_tools_available
 from ..sync.project_export import create_pmm, refresh_export_items
 from ..sync.rigs import ensure_camera_rig
 from ..sync.report import build_report
+from ..sync.root_motion import convert_root_motion
 from ..sync.scale import current_scale
 from ..sync.targets import refresh_targets
 from .helpers import draw_wrapped
@@ -231,7 +233,7 @@ class NINESYNC_OT_spawn_camera(Operator):
             return {"CANCELLED"}
         settings = context.scene.mmd_bridge
         try:
-            root, camera = ensure_camera_rig(context.scene, settings)
+            root, camera = ensure_camera_rig(context.scene, settings, rebuild=False)
         except Exception as error:
             self.report({"ERROR"}, "Could not create the MMD camera: %s" % error)
             log.error("spawn camera failed: %s", error)
@@ -286,6 +288,7 @@ class NINESYNC_OT_add_export_props(Operator):
                 continue
             item = settings.export_props.add()
             item.target = obj
+            refresh_prop_colors(item)
             added += 1
         if not added:
             self.report({"WARNING"}, "No new mesh objects are selected")
@@ -308,10 +311,56 @@ class NINESYNC_OT_remove_export_prop(Operator):
         return {"FINISHED"}
 
 
+class NINESYNC_OT_refresh_prop_colors(Operator):
+    bl_idname = "ninesync.refresh_prop_colors"
+    bl_label = "Read Materials"
+    bl_description = "List this mesh's materials. New ones start from their texture's average colour; colours already picked are kept"
+
+    index: IntProperty()
+
+    def execute(self, context):
+        settings = context.scene.mmd_bridge
+        if 0 <= self.index < len(settings.export_props):
+            refresh_prop_colors(settings.export_props[self.index])
+        redraw_all()
+        return {"FINISHED"}
+
+
+class NINESYNC_OT_convert_root_motion(Operator):
+    bl_idname = "ninesync.convert_root_motion"
+    bl_label = "Convert Root Motion"
+    bl_description = "Move this model's root empty motion onto its parent bone and reset the root. Changes the .blend. Keys already on the bone are kept, and new keys are made only on existing keyframes"
+    bl_options = {"REGISTER", "UNDO"}
+
+    index: IntProperty(options={"HIDDEN"})
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_confirm(self, event)
+
+    def execute(self, context):
+        settings = context.scene.mmd_bridge
+        if not 0 <= self.index < len(settings.export_items):
+            return {"CANCELLED"}
+        root = settings.export_items[self.index].target
+        if root is None:
+            return {"CANCELLED"}
+        try:
+            keys, stretched = convert_root_motion(context.scene, root)
+        except RuntimeError as error:
+            self.report({"ERROR"}, str(error))
+            log.error("convert root motion failed: %s", error)
+            return {"CANCELLED"}
+        self.report({"INFO"}, "'%s': root motion moved onto the parent bone, %d key(s)" % (root.name, keys))
+        if stretched:
+            self.report({"WARNING"}, "'%s' is scaled; the scale stays in Blender but MMD bones cannot hold it" % root.name)
+        redraw_all()
+        return {"FINISHED"}
+
+
 class NINESYNC_OT_create_pmm(Operator):
     bl_idname = "ninesync.create_pmm"
     bl_label = "Create PMM"
-    bl_description = "Write an MMD project with the checked models, the camera and optionally the existing animation, then set it as the Syncer's PMM so MMD changes can be synced back"
+    bl_description = "Write an MMD project with the checked models, the chosen camera and optionally the existing animation. Reads the scene only; Link to Syncer also sets it as the Syncer's PMM so MMD changes can be synced back"
 
     filepath: StringProperty(subtype="FILE_PATH")
     filter_glob: StringProperty(default="*.pmm", options={"HIDDEN"})
@@ -340,7 +389,7 @@ class NINESYNC_OT_create_pmm(Operator):
         if not path.lower().endswith(".pmm"):
             path += ".pmm"
         try:
-            models, camera_keys, props = create_pmm(context.scene, settings, path)
+            models, camera_keys, props, warnings = create_pmm(context.scene, settings, path)
         except (OSError, PmmError) as error:
             self.report({"ERROR"}, str(error))
             log.error("create PMM failed: %s", error)
@@ -349,8 +398,10 @@ class NINESYNC_OT_create_pmm(Operator):
         settings.status = "Created %s at %s" % (os.path.basename(path), time.strftime("%H:%M:%S"))
         self.report(
             {"INFO"},
-            "Created %s with %d model(s), %d camera key(s), %d prop(s). The Syncer now points at it"
+            "Created %s with %d model(s), %d camera key(s), %d prop(s)"
             % (os.path.basename(path), models, camera_keys, props),
         )
+        for warning in warnings:
+            self.report({"WARNING"}, warning)
         redraw_all()
         return {"FINISHED"}
