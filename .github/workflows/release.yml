@@ -7,6 +7,8 @@ on:
   push:
     branches: [master]
     paths: [blender_manifest.toml]
+  # Run by hand from the Actions tab: releases the current version if it has no tag yet.
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -24,7 +26,10 @@ jobs:
         run: |
           read_version() { grep -m1 '^version' | cut -d'"' -f2; }
           new=$(read_version < blender_manifest.toml)
-          old=$(git show "${{ github.event.before }}:blender_manifest.toml" 2>/dev/null | read_version || true)
+          old=""
+          if [ "${{ github.event_name }}" = "push" ]; then
+            old=$(git show "${{ github.event.before }}:blender_manifest.toml" 2>/dev/null | read_version || true)
+          fi
           echo "old=${old:-none} new=$new"
           if [ "$new" != "$old" ]; then
             if git rev-parse -q --verify "refs/tags/v$new" > /dev/null; then
