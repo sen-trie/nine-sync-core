@@ -1,0 +1,76 @@
+name: Release
+
+# Runs when a push to master changes blender_manifest.toml. If the version number
+# changed (any part, so 0.3.1 counts), it tags v<version> and publishes a release
+# with the extension zip.
+on:
+  push:
+    branches: [master]
+    paths: [blender_manifest.toml]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Did the version change?
+        id: version
+        run: |
+          read_version() { grep -m1 '^version' | cut -d'"' -f2; }
+          new=$(read_version < blender_manifest.toml)
+          old=$(git show "${{ github.event.before }}:blender_manifest.toml" 2>/dev/null | read_version || true)
+          echo "old=${old:-none} new=$new"
+          if [ "$new" != "$old" ]; then
+            if git rev-parse -q --verify "refs/tags/v$new" > /dev/null; then
+              echo "tag v$new already exists; nothing to do"
+              echo "release=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "release=true" >> "$GITHUB_OUTPUT"
+              echo "version=$new" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "version unchanged; nothing to do"
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-python@v5
+        if: steps.version.outputs.release == 'true'
+        with:
+          python-version: "3.13"
+
+      - name: Static checks
+        if: steps.version.outputs.release == 'true'
+        run: python tests/check_static.py
+
+      # Used only to run `extension build`; the add-on itself targets 5.3+.
+      - name: Download Blender
+        if: steps.version.outputs.release == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxi6 libxxf86vm1 libxfixes3 libxrender1 libxkbcommon0 libgl1 libegl1 libsm6
+          curl -sSL https://download.blender.org/release/Blender5.2/blender-5.2.3-linux-x64.tar.xz | tar -xJ
+          echo "BLENDER=$PWD/blender-5.2.3-linux-x64/blender" >> "$GITHUB_ENV"
+
+      - name: Validate and build
+        if: steps.version.outputs.release == 'true'
+        run: |
+          "$BLENDER" --background --factory-startup --command extension validate .
+          mkdir out
+          "$BLENDER" --background --factory-startup --command extension build --source-dir . --output-dir out
+          ls -l out
+
+      - name: Tag and publish release
+        if: steps.version.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ steps.version.outputs.version }}" out/*.zip \
+            --target "$GITHUB_SHA" \
+            --title "NineSync: PMM Bridge v${{ steps.version.outputs.version }}" \
+            --generate-notes
