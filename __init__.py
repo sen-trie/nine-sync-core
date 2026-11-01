@@ -2,11 +2,13 @@ ADDON_VERSION = (0, 3, 0)
 
 bl_info = {
     "name": "NineSync: PMM Bridge",
-    "author": "",
+    "author": "sentrie",
     "version": ADDON_VERSION,
     "blender": (5, 3, 0),
     "location": "View3D > Sidebar > NineSync",
     "description": "⑨-Sync: live-sync MikuMikuDance .pmm projects (models, camera, light, audio) through mmd_tools",
+    "doc_url": "https://github.com/sen-trie/nine-sync-core",
+    "tracker_url": "https://github.com/sen-trie/nine-sync-core/issues",
     "category": "Import-Export",
 }
 

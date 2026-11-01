@@ -4,10 +4,12 @@ version = "0.3.0"
 name = "NineSync: PMM Bridge"
 tagline = "Live-sync MikuMikuDance .pmm projects through mmd_tools"
 maintainer = "sentrie"
+website = "https://github.com/sen-trie/nine-sync-core"
 type = "add-on"
 tags = ["Import-Export", "Animation"]
 blender_version_min = "5.3.0"
 license = ["SPDX:GPL-3.0-or-later"]
+copyright = ["2026 sentrie"]
 
 [permissions]
 files = "Read PMM, PMX and audio; write PMM, PMX, .x and temporary VMD"

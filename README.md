@@ -7,7 +7,7 @@ Accessories (`.x`) and MME effects (`.fx`) are handled by the separate add-on **
 ## Requirements
 
 - Blender 5.3 or newer
-- mmd_tools (enabled)
+- mmd_tools, installed and enabled separately (Core does not bundle it). Validated with mmd_tools 4.5.5 on Blender 5.3; other versions are untested, and no minimum version is claimed
 - Optional: NineSync: FX Importer for accessories and effects
 
 ## Install
@@ -58,7 +58,15 @@ tests/         see tests/README.md
 
 ## Compatibility
 
+Only the combinations listed here are documented; others are untested.
+
 | core  | FX    | hook API |
 | ----- | ----- | -------- |
-| 0.3.x | 0.2.x | 1        |
+| 0.3.x | 0.3.x | 1        |
 | 0.2.x | 0.2.x | 1        |
+
+## License
+
+Copyright (C) 2026 sentrie
+
+GPL-3.0-or-later; see `LICENSE`.
