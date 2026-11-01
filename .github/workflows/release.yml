@@ -147,3 +147,57 @@ jobs:
             --target "$GITHUB_SHA" \
             --title "NineSync: PMM Bridge v${{ needs.build.outputs.version }}" \
             --notes-file notes.md
+
+  # Runs only after build validation and a successful publish in this same run (a release
+  # created with GITHUB_TOKEN does not trigger other workflows, so this cannot be a
+  # separate "release: published" workflow). It only sends a repository_dispatch; Bundled
+  # decides what to do with it. It never touches Bundled's branches, releases or PRs.
+  # Needs the repository variable BUNDLED_APP_ID and the secret BUNDLED_APP_PRIVATE_KEY of
+  # a GitHub App installed only on sen-trie/nine-sync-release with the single permission
+  # "Contents: write" (required for repository_dispatch).
+  notify-bundled:
+    needs: [build, publish]
+    if: needs.publish.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+      BUNDLED_REPO: sen-trie/nine-sync-release
+    steps:
+      - name: Confirm a stable, published release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "not a stable version: $VERSION"; exit 1; }
+          tag="v$VERSION"
+          state=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease,targetCommitish,tagName \
+            --jq '"\(.isDraft) \(.isPrerelease) \(.tagName)"')
+          [ "$state" = "false false $tag" ] || { echo "release is draft/prerelease/missing: $state"; exit 1; }
+          sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq .sha)
+          [ "$sha" = "$GITHUB_SHA" ] || { echo "tag $tag is at $sha, expected $GITHUB_SHA"; exit 1; }
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Token limited to the Bundled repository
+        id: app
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.BUNDLED_APP_ID }}
+          private-key: ${{ secrets.BUNDLED_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: nine-sync-release
+          permission-contents: write
+
+      - name: Dispatch to Bundled
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+          SHA: ${{ steps.release.outputs.sha }}
+        run: |
+          jq -n --arg version "$VERSION" --arg tag "$TAG" --arg sha "$SHA" --arg repo "$GITHUB_REPOSITORY" '{
+            event_type: "component-release",
+            client_payload: {component: "core", version: $version, tag: $tag, sha: $sha, source_repository: $repo}
+          }' | tee payload.json
+          gh api "repos/$BUNDLED_REPO/dispatches" --input payload.json
