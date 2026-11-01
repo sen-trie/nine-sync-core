@@ -151,7 +151,7 @@ def sample_frames(obj, scene):
         if owner.constraints or (anim and (anim.drivers or anim.nla_tracks)):
             return set(range(start, end + 1))
         if anim is not None and anim.action is not None:
-            for fcurve in iter_fcurves(anim.action):
+            for fcurve in iter_fcurves(anim.action, anim.action_slot):
                 points = fcurve.keyframe_points
                 for index, point in enumerate(points):
                     frame = int(round(point.co[0]))

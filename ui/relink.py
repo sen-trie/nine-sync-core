@@ -6,14 +6,14 @@ from ..common.logger import log
 from ..common.scene_utils import redraw_all
 
 
-STALE_SETTINGS_MESSAGE = "An older copy of NineSync (MMD PMM Bridge) replaced this add-on's settings. They were re-linked; press the button again, and remove the old copy in Preferences > Add-ons"
+STALE_SETTINGS_MESSAGE = "Another copy of NineSync: PMM Bridge replaced this add-on's settings. They were re-linked; press the button again, and remove the other copy in Preferences > Add-ons"
 
 
 _relink = {"pending": False}
 
 
-# True when scene.mmd_bridge comes from an older copy of the add-on that registered
-# first and lacks newer properties.
+# True when scene.mmd_bridge comes from another copy of the add-on (say a second
+# install in a different folder) that registered first and lacks newer properties.
 def settings_outdated(scene):
     settings = getattr(scene, "mmd_bridge", None)
     return settings is None or not hasattr(settings, "sync_audio")
@@ -30,7 +30,7 @@ def relink_settings():
         return None
     importlib.import_module(ADDON_PACKAGE).reload_in_place()
     log.warning(
-        "settings were registered by an older copy of the add-on; re-linked to this version. Remove the old copy in Preferences > Add-ons"
+        "settings were registered by another copy of the add-on; re-linked to this version. Remove the other copy in Preferences > Add-ons"
     )
     redraw_all()
     return None

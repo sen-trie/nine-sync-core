@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# Runs on the bpy wheel, which is not Blender 5.3 and has no mmd_tools. Real sync
+# results come from tests/manual and are recorded in docs/VALIDATION.md.
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: core
+      # Set the FX_REPO_TOKEN secret if nine-sync-fx is private.
+      - uses: actions/checkout@v4
+        with:
+          repository: sen-trie/nine-sync-fx
+          path: fx
+          token: ${{ secrets.FX_REPO_TOKEN || github.token }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install bpy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxi6 libxxf86vm1 libxfixes3 libxrender1 libxkbcommon0 libgl1 libegl1 libsm6
+          pip install bpy==5.2.3
+      - name: Static checks and hooks.py identity
+        working-directory: core
+        env:
+          NINESYNC_FX: ${{ github.workspace }}/fx
+        run: python tests/check_static.py --require-fx
+      - name: Hook contract and animation helpers
+        working-directory: core
+        run: |
+          python tests/t_hook_contract.py
+          python tests/t_animation.py
+      - name: Core registers alone
+        working-directory: core
+        run: python tests/t_registration.py
+      - name: Core and FX in every order
+        working-directory: core
+        env:
+          NINESYNC_FX: ${{ github.workspace }}/fx
+        run: python tests/t_registration.py

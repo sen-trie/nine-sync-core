@@ -16,7 +16,6 @@ from .operators import (
 from .panels.audio import MMDBRIDGE_PT_audio
 from .panels.camera import MMDBRIDGE_PT_camera
 from .panels.create import NINESYNC_PT_create
-from .panels.legacy import NINESYNC_PT_legacy
 from .panels.main import MMDBRIDGE_PT_main
 from .panels.options import MMDBRIDGE_PT_options
 from .panels.readout import MMDBRIDGE_PT_readout
@@ -59,6 +58,3 @@ CLASSES = (
     MMDBRIDGE_PT_readout,
     MMDBRIDGE_PT_options,
 )
-
-
-LEGACY_CLASSES = (NINESYNC_PT_legacy,)

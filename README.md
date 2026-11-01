@@ -10,6 +10,20 @@ Accessories (`.x`) and MME effects (`.fx`) are handled by the separate add-on **
 - mmd_tools (enabled)
 - Optional: NineSync: FX Importer for accessories and effects
 
+## Install
+
+1. Install and enable mmd_tools.
+2. In Blender, open Edit > Preferences > Get Extensions, choose Install from Disk in the top-right menu, and pick the `ninesync` zip.
+3. Open the 3D Viewport sidebar (N) and find the `NineSync` tab.
+
+To build the zip from this folder:
+
+```
+blender --command extension build --source-dir . --output-dir <folder>
+```
+
+The add-on runs on its own. NineSync: FX Importer is a separate zip, installed the same way, in either order.
+
 ## Using it with NineSync: FX
 
 Both add-ons put their panels in the sidebar tab `NineSync`. They never import each other. They meet in a small registry stored in `bpy.app.driver_namespace["ninesync_hooks"]` (see `hooks.py`, identical in both repos):
@@ -29,18 +43,22 @@ Both add-ons put their panels in the sidebar tab `NineSync`. They never import e
 ## Layout
 
 ```
-__init__.py   register, load handler, hook registration
-hooks.py      hook registry client (identical in ninesync-fx)
-pmm.py        PMM parser (core only; FX reads PMM data through ctx.project)
-common/       constants, logging, scene and animation helpers (no sync logic)
-sync/         everything that touches mmd_tools or writes animation:
-              engine, models, morphs, UV morphs, clips, camera, light,
-              audio, clean, report
-ui/           properties, operators, preferences, panels/
+__init__.py    register, load handler, hook registration
+hooks.py       hook registry client (byte-identical in ninesync-fx)
+pmm.py         PMM parser (core only; FX reads PMM data through ctx.project)
+pmm_writer.py  writes a PMM for Create MMD Project
+x_writer.py    writes .x props for Create MMD Project
+common/        constants, logging, scene and animation helpers (no sync logic)
+sync/          everything that touches mmd_tools or writes animation:
+               engine, models, morphs, UV morphs, clips, camera, light,
+               audio, clean, report, project export
+ui/            properties, operators, preferences, panels/
+tests/         see tests/README.md
 ```
 
 ## Compatibility
 
 | core  | FX    | hook API |
 | ----- | ----- | -------- |
+| 0.3.x | 0.2.x | 1        |
 | 0.2.x | 0.2.x | 1        |

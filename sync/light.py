@@ -1,3 +1,4 @@
+import bpy
 from mathutils import Vector
 
 from ..common.animation import iter_fcurves
@@ -12,6 +13,11 @@ def import_light(scene, project, settings):
     root, light = ensure_light_rig(scene, settings)
     ordered = sorted(project.light_keys, key=lambda k: k.frame)
     data = light.data
+    # Keying both IDs with no action makes Blender share one between them. Separate
+    # actions match what mmd_tools builds for a light.
+    for owner, label in ((data, "Light_color"), (light, "Light_loc")):
+        anim = owner.animation_data or owner.animation_data_create()
+        anim.action = bpy.data.actions.new(ACTION_PREFIX + label)
     for key in ordered:
         data.color = key.color
         data.keyframe_insert("color", frame=key.frame)
@@ -24,7 +30,7 @@ def import_light(scene, project, settings):
             log.warning("light: '%s' has no action after keying", owner.name)
             continue
         action.name = ACTION_PREFIX + label
-        for fcurve in iter_fcurves(action):
+        for fcurve in iter_fcurves(action, anim.action_slot):
             points = sorted(fcurve.keyframe_points, key=lambda p: p.co[0])
             for index, point in enumerate(points):
                 point.interpolation = "LINEAR"

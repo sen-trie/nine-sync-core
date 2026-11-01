@@ -1,6 +1,6 @@
 schema_version = "1.0.0"
 id = "ninesync"
-version = "0.2.0"
+version = "0.3.0"
 name = "NineSync: PMM Bridge"
 tagline = "Live-sync MikuMikuDance .pmm projects through mmd_tools"
 maintainer = "NineSync maintainers <noreply@example.invalid>"
@@ -10,7 +10,7 @@ blender_version_min = "5.3.0"
 license = ["SPDX:GPL-3.0-or-later"]
 
 [permissions]
-files = "Read PMM and audio files; write temporary VMD files"
+files = "Read PMM, PMX and audio; write PMM, PMX, .x and temporary VMD"
 
 [build]
-paths_exclude_pattern = ["__pycache__/", "/tests/", "/tools/", "*.pyc"]
+paths_exclude_pattern = ["__pycache__/", "/tests/", "/tools/", "/docs/", "/debug-src/", "/src/", "/.github/", "/.git/", ".gitignore", "CLAUDE.md", "*.pyc"]

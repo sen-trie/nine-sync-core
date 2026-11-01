@@ -29,7 +29,7 @@ def explicit_keys(animated, prefixes=None):
     anim = animated.animation_data
     if anim is None or anim.action is None:
         return found
-    for fcurve in iter_fcurves(anim.action):
+    for fcurve in iter_fcurves(anim.action, anim.action_slot):
         if prefixes is not None and not fcurve.data_path.startswith(prefixes):
             continue
         for point in fcurve.keyframe_points:
@@ -82,7 +82,8 @@ def write_bone_keys(bone, samples, interpolation):
 # root's own handles do not map onto several bone channels at once.
 def match_interpolation(armature, bones, interpolation):
     prefixes = tuple('pose.bones["%s"]' % b.name for b in bones)
-    for fcurve in iter_fcurves(armature.animation_data.action):
+    anim = armature.animation_data
+    for fcurve in iter_fcurves(anim.action, anim.action_slot):
         if not fcurve.data_path.startswith(prefixes):
             continue
         for point in fcurve.keyframe_points:

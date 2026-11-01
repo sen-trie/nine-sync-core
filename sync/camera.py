@@ -73,11 +73,12 @@ def resolve_follow(project, settings):
 # Constant interpolation, so a follow constraint switches on or off instantly
 # instead of blending.
 def make_constant(obj, path):
-    action = obj.animation_data.action if obj.animation_data else None
+    anim = obj.animation_data
+    action = anim.action if anim else None
     if action is None:
         log.warning("no action on '%s' to set constant interpolation", obj.name)
         return
-    for fcurve in iter_fcurves(action):
+    for fcurve in iter_fcurves(action, anim.action_slot):
         if fcurve.data_path == path:
             for point in fcurve.keyframe_points:
                 point.interpolation = "CONSTANT"

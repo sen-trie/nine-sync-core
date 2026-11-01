@@ -5,17 +5,16 @@ from .constants import ACTION_PREFIX, FRAME_EPSILON
 from .logger import log
 
 
-# Blender 5 moved fcurves into layered actions (layers, strips, channelbags). This
-# reads both layouts so callers do not care.
-def iter_fcurves(action):
-    fcurves = getattr(action, "fcurves", None)
-    if fcurves is not None:
-        return list(fcurves)
+# Fcurves live in layers, strips and channelbags, one bag per slot. Always walks those:
+# mmd_tools patches an Action.fcurves that only returns the first slot's curves. Give
+# a slot to read just that ID's curves from an action shared between IDs.
+def iter_fcurves(action, slot=None):
     found = []
     for layer in action.layers:
         for strip in layer.strips:
             for bag in getattr(strip, "channelbags", []):
-                found.extend(bag.fcurves)
+                if slot is None or bag.slot_handle == slot.handle:
+                    found.extend(bag.fcurves)
     return found
 
 
@@ -25,7 +24,7 @@ def find_fcurve(owner, data_path, index):
     action = data.action if data else None
     if action is None:
         return None
-    for fcurve in iter_fcurves(action):
+    for fcurve in iter_fcurves(action, data.action_slot):
         if fcurve.data_path == data_path and fcurve.array_index == index:
             return fcurve
     return None
@@ -74,14 +73,16 @@ def snapshot_outside(owners, low, high, sources=None, keep_all=None):
     saved = []
     for owner in owners:
         key = owner.as_pointer()
+        slot = None
         if sources is not None and key in sources:
             action = sources[key]
         else:
             data = owner.animation_data
             action = data.action if data else None
+            slot = data.action_slot if data else None
         if action is None:
             continue
-        for fcurve in iter_fcurves(action):
+        for fcurve in iter_fcurves(action, slot):
             if fcurve.data_path.startswith("constraints["):
                 continue
             points = []
@@ -251,10 +252,9 @@ def clear_bridge_nla(owners):
             for strip in stale:
                 track.strips.remove(strip)
             if stale and len(track.strips) == 0:
+                name = track.name
                 data.nla_tracks.remove(track)
-                log.info(
-                    "removed empty NLA track '%s' from '%s'", track.name, owner.name
-                )
+                log.info("removed empty NLA track '%s' from '%s'", name, owner.name)
 
 
 # Gives actions created by the importer the bridge prefix so later syncs and Clean

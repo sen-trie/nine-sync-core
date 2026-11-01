@@ -1,4 +1,4 @@
-ADDON_VERSION = (0, 2, 0)
+ADDON_VERSION = (0, 3, 0)
 
 bl_info = {
     "name": "NineSync: PMM Bridge",
@@ -19,23 +19,17 @@ import bpy
 from bpy.props import PointerProperty
 
 from . import hooks
-from .common.addon import legacy_monolith_active
 from .common.constants import MIN_BLENDER, NINESYNC_NAME
 from .common.logger import log, setup_logging
 from .sync.tempfiles import sweep_stale_temp
-from .ui import CLASSES, LEGACY_CLASSES
+from .ui import CLASSES
 from .ui.preferences import addon_preferences, apply_import_scale
 from .ui.properties import MMDBridgeSettings
 from .ui.relink import schedule_relink, settings_outdated
 
 
-_state = {"legacy": False}
-
-
 @bpy.app.handlers.persistent
 def ninesync_load_handler(*_args):
-    if _state["legacy"]:
-        return
     hooks.register_core(ADDON_VERSION)
     try:
         if settings_outdated(bpy.context.scene):
@@ -60,15 +54,6 @@ def register():
             % (MIN_BLENDER[0], MIN_BLENDER[1], bpy.app.version_string)
         )
     setup_logging()
-    if legacy_monolith_active():
-        _state["legacy"] = True
-        for cls in LEGACY_CLASSES:
-            bpy.utils.register_class(cls)
-        log.error(
-            "the old combined NineSync is enabled; disable it before using NineSync: PMM Bridge"
-        )
-        return
-    _state["legacy"] = False
     for cls in CLASSES:
         bpy.utils.register_class(cls)
     bpy.types.Scene.mmd_bridge = PointerProperty(type=MMDBridgeSettings)
@@ -86,8 +71,6 @@ def startup_check():
         scene = bpy.context.scene
     except AttributeError:
         return None
-    if _state["legacy"]:
-        return None
     try:
         prefs = addon_preferences()
         if prefs is not None and prefs.use_import_scale:
@@ -102,14 +85,6 @@ def startup_check():
 def unregister():
     remove_handlers()
     hooks.unregister_core()
-    if _state["legacy"]:
-        for cls in reversed(LEGACY_CLASSES):
-            try:
-                bpy.utils.unregister_class(cls)
-            except (RuntimeError, ValueError):
-                pass
-        _state["legacy"] = False
-        return
     if hasattr(bpy.types.Scene, "mmd_bridge"):
         del bpy.types.Scene.mmd_bridge
     for cls in reversed(CLASSES):

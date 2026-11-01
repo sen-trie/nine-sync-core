@@ -64,7 +64,7 @@ def ensure_morph_keys(hosts, model, resolved, root):
         anim = keys.animation_data
         action = anim.action if anim else None
         existing = (
-            {fc.data_path for fc in iter_fcurves(action)}
+            {fc.data_path for fc in iter_fcurves(action, anim.action_slot)}
             if action is not None
             else set()
         )
@@ -96,7 +96,14 @@ def ensure_morph_keys(hosts, model, resolved, root):
             anim = keys.animation_data
             action = anim.action if anim else None
             fcurve = (
-                next((fc for fc in iter_fcurves(action) if fc.data_path == path), None)
+                next(
+                    (
+                        fc
+                        for fc in iter_fcurves(action, anim.action_slot)
+                        if fc.data_path == path
+                    ),
+                    None,
+                )
                 if action
                 else None
             )
