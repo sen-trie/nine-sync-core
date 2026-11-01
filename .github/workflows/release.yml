@@ -70,6 +70,21 @@ jobs:
           "$BLENDER" --background --factory-startup --command extension build --source-dir . --output-dir out
           ls -l out
 
+      # The notes are this version's section of CHANGELOG.md, from its "## x.y.z"
+      # heading to the next "## " heading.
+      - name: Release notes from the changelog
+        if: steps.version.outputs.release == 'true'
+        run: |
+          awk -v v="${{ steps.version.outputs.version }}" '
+            $0 ~ "^## " { if (on) exit; on = ($2 == v); next }
+            on { print }
+          ' CHANGELOG.md | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' | sed '/./,$!d' > notes.md
+          if [ ! -s notes.md ]; then
+            echo "CHANGELOG.md has no entry for ${{ steps.version.outputs.version }}"
+            exit 1
+          fi
+          cat notes.md
+
       - name: Tag and publish release
         if: steps.version.outputs.release == 'true'
         env:
@@ -78,4 +93,4 @@ jobs:
           gh release create "v${{ steps.version.outputs.version }}" out/*.zip \
             --target "$GITHUB_SHA" \
             --title "NineSync: PMM Bridge v${{ steps.version.outputs.version }}" \
-            --generate-notes
+            --notes-file notes.md
