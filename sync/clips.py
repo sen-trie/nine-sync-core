@@ -2,7 +2,19 @@ import bpy
 import math
 
 from ..common.animation import bind_slot, fit_strip, is_bridge_action, strips_using
+from ..common.constants import CLIP_TRACK_NAME
 from ..common.logger import log
+
+
+# The name a model's actions and tracks are built from.
+def model_label(model):
+    return model.name or model.name_en or "model"
+
+
+# (motion, shapekey, legacy shapekey, legacy motion) NLA track names of a model.
+def clip_track_names(label):
+    legacy = CLIP_TRACK_NAME + "_" + label
+    return (legacy + "_motion", legacy + "_shapekey", legacy + "_shapes", legacy)
 
 
 # The bridge action on the named NLA track, if any.

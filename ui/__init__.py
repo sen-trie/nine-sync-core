@@ -10,6 +10,7 @@ from .operators import (
     NINESYNC_OT_refresh_export,
     NINESYNC_OT_refresh_prop_colors,
     NINESYNC_OT_remove_export_prop,
+    NINESYNC_OT_preview,
     NINESYNC_OT_set_import_scale,
     NINESYNC_OT_spawn_camera,
 )
@@ -18,6 +19,7 @@ from .panels.camera import MMDBRIDGE_PT_camera
 from .panels.create import NINESYNC_PT_create
 from .panels.main import MMDBRIDGE_PT_main
 from .panels.options import MMDBRIDGE_PT_options
+from .panels.preview import NINESYNC_PT_inspector
 from .panels.readout import MMDBRIDGE_PT_readout
 from .preferences import NineSyncPreferences
 from .properties import (
@@ -38,6 +40,7 @@ CLASSES = (
     MMDBridgeExportProp,
     MMDBridgeSettings,
     MMDBRIDGE_OT_sync_now,
+    NINESYNC_OT_preview,
     MMDBRIDGE_OT_scan,
     MMDBRIDGE_OT_clean,
     MMDBRIDGE_OT_copy_report,
@@ -57,4 +60,5 @@ CLASSES = (
     MMDBRIDGE_PT_camera,
     MMDBRIDGE_PT_readout,
     MMDBRIDGE_PT_options,
+    NINESYNC_PT_inspector,
 )

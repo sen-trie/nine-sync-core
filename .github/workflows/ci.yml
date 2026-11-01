@@ -37,6 +37,7 @@ jobs:
         run: |
           python tests/t_hook_contract.py
           python tests/t_animation.py
+          python tests/t_sync_plan.py
       - name: Core registers alone
         working-directory: core
         run: python tests/t_registration.py

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0
+
+- Change detection: Sync Now imports only what changed. Each model's bone and morph keys are checked separately, so a morph edit leaves the Motion Clip alone and an edit to another model imports nothing here. Clips edited in Blender are kept while the PMM is unchanged.
+- Preview: a window listing the PMX models that changed, before and after, with the changed bones and morphs named and unchanged models at the bottom.
+  - PMM Motion Inspector, below Options: source counts and frame ranges, target mapping, motion that cannot reach the rig, and Force Resync.
+
 ## 0.3.0
 
 - Create MMD Project panel: build a PMM from Blender, with the chosen mmd_tools models, their bone, morph and camera animation, and the scene frame range. Spawn MMD Camera adds the camera rig to export, and Link to Syncer optionally sets the new PMM as the Syncer's.

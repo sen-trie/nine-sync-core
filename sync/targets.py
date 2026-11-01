@@ -13,34 +13,36 @@ def target_usable(obj):
     )
 
 
-# Auto-matches a PMM model to an mmd_tools root, most reliable first: exact name,
-# English name, object name, then partial name.
-def find_root_for(model):
+# Candidate mmd_tools roots for a PMM model, in the first matching tier, most reliable
+# tier first: exact name, English name, object name, then partial name. More than one
+# is an ambiguous match. Writes nothing, not even a log line, so previews can use it.
+def match_roots(model):
     roots = [
         o
         for o in bpy.data.objects
         if getattr(o, "mmd_type", "") == "ROOT" and target_usable(o)
     ]
-    log.debug(
-        "auto-match for PMM model '%s' / '%s' among roots: %s",
-        model.name,
-        model.name_en,
-        [(o.name, o.mmd_root.name, o.mmd_root.name_e) for o in roots],
+    tiers = (
+        lambda o: model.name and o.mmd_root.name == model.name,
+        lambda o: model.name_en and o.mmd_root.name_e == model.name_en,
+        lambda o: o.name in (model.name, model.name_en),
+        lambda o: any(
+            name and model.name and (name in model.name or model.name in name)
+            for name in (o.mmd_root.name, o.mmd_root.name_e, o.name)
+        ),
     )
-    for obj in roots:
-        if model.name and obj.mmd_root.name == model.name:
-            return obj
-    for obj in roots:
-        if model.name_en and obj.mmd_root.name_e == model.name_en:
-            return obj
-    for obj in roots:
-        if obj.name in (model.name, model.name_en):
-            return obj
-    for obj in roots:
-        for name in (obj.mmd_root.name, obj.mmd_root.name_e, obj.name):
-            if name and model.name and (name in model.name or model.name in name):
-                return obj
-    return None
+    for tier in tiers:
+        found = [o for o in roots if tier(o)]
+        if found:
+            return found
+    return []
+
+
+# Auto-matches a PMM model to an mmd_tools root.
+def find_root_for(model):
+    found = match_roots(model)
+    log.debug("auto-match for PMM model '%s': %s", model.name, [o.name for o in found])
+    return found[0] if found else None
 
 
 # Syncs the target list with the PMM's models: drops slots for models that are gone,

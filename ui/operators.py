@@ -12,7 +12,8 @@ from ..pmm import PmmError, parse_pmm_file
 from ..sync.accessory_export import refresh_prop_colors
 from ..sync.audio import describe_audio
 from ..sync.clean import run_clean
-from ..sync.engine import run_sync
+from ..sync.analysis import analyze, clear_analysis
+from ..sync.engine import SyncDriver, run_sync, sync_running
 from ..sync.mmd_tools_link import mmd_tools_available, mmd_tools_status
 from ..sync.project_export import create_pmm, refresh_export_items
 from ..sync.rigs import ensure_camera_rig
@@ -21,6 +22,7 @@ from ..sync.root_motion import convert_root_motion
 from ..sync.scale import current_scale
 from ..sync.targets import refresh_targets
 from .helpers import draw_wrapped
+from .panels.preview import draw_preview
 from .preferences import addon_preferences, apply_import_scale
 from .relink import refuse_if_outdated
 
@@ -28,27 +30,118 @@ from .relink import refuse_if_outdated
 class MMDBRIDGE_OT_sync_now(Operator):
     bl_idname = "ninesync.sync_now"
     bl_label = "Sync Now"
+    bl_description = "Sync the selected models from the PMM. Unchanged models are skipped. Esc cancels between models"
 
-    def execute(self, context):
+    force: BoolProperty(
+        name="Force Resync",
+        description="Import every selected model even when nothing changed",
+        default=False,
+        options={"SKIP_SAVE"},
+    )
+    force_key: StringProperty(options={"HIDDEN", "SKIP_SAVE"})
+
+    @classmethod
+    def description(cls, context, properties):
+        if properties.force or properties.force_key:
+            return "Import again even though nothing changed. Inside the PMM frame span this replaces any edits made in Blender; keys outside it are kept"
+        return cls.bl_description
+
+    def ready(self, context):
         if refuse_if_outdated(self, context):
-            return {"CANCELLED"}
-        settings = context.scene.mmd_bridge
-        path = bpy.path.abspath(settings.filepath)
+            return False
+        if sync_running():
+            self.report({"WARNING"}, "A sync is already running")
+            return False
+        path = bpy.path.abspath(context.scene.mmd_bridge.filepath)
         log.info("Sync Now pressed")
         if not mmd_tools_available():
             detail = mmd_tools_status()[1]
             self.report({"ERROR"}, detail)
             log.error("mmd_tools unusable: %s", detail)
-            return {"CANCELLED"}
+            return False
         if not os.path.isfile(path):
             self.report({"ERROR"}, "PMM file not found")
             log.error("PMM file not found: %s", path)
+            return False
+        return True
+
+    def force_keys(self):
+        return (self.force_key,) if self.force_key else ()
+
+    def conclude(self, context, ok):
+        status = context.scene.mmd_bridge.status
+        self.report({"INFO"} if ok else {"ERROR"}, status)
+        return {"FINISHED"} if ok else {"CANCELLED"}
+
+    # Blocking path for scripts and background mode, where no event loop can tick.
+    def execute(self, context):
+        if not self.ready(context):
             return {"CANCELLED"}
-        if not run_sync(context.scene):
-            self.report({"ERROR"}, settings.status)
+        return self.conclude(context, run_sync(context.scene, self.force, self.force_keys()))
+
+    # One work unit per timer tick, so Blender redraws the progress between models and
+    # Esc is heard. Everything stays on the main thread.
+    def invoke(self, context, event):
+        if not self.ready(context):
             return {"CANCELLED"}
-        self.report({"INFO"}, settings.status)
+        self._driver = SyncDriver(context.scene, self.force, self.force_keys())
+        manager = context.window_manager
+        self._timer = manager.event_timer_add(0.01, window=context.window)
+        manager.modal_handler_add(self)
+        return {"RUNNING_MODAL"}
+
+    def modal(self, context, event):
+        if event.type == "ESC" and event.value == "PRESS":
+            self._driver.cancel()
+        elif event.type == "TIMER":
+            if not self._driver.step():
+                self.release(context)
+                if self._driver.outcome == "cancelled":
+                    self.report({"WARNING"}, context.scene.mmd_bridge.status)
+                    return {"CANCELLED"}
+                return self.conclude(context, self._driver.ok)
+        return {"RUNNING_MODAL"}
+
+    def cancel(self, context):
+        self.release(context)
+        self._driver.close()
+
+    def release(self, context):
+        context.window_manager.event_timer_remove(self._timer)
+
+
+class NINESYNC_OT_preview(Operator):
+    bl_idname = "ninesync.preview"
+    bl_label = "Preview"
+    bl_description = "Read the PMM and show which PMX models changed since the last sync. Changes nothing in the scene"
+
+    confirmed: BoolProperty(options={"HIDDEN", "SKIP_SAVE"})
+
+    # Preview itself never syncs: only the dialog's own button sets confirmed. A plain
+    # execute just reads the PMM, which is how the Inspector refreshes.
+    def execute(self, context):
+        if refuse_if_outdated(self, context):
+            return {"CANCELLED"}
+        if self.confirmed:
+            bpy.ops.ninesync.sync_now("INVOKE_DEFAULT")
+            return {"FINISHED"}
+        result = analyze(context.scene)
+        if result.error:
+            self.report({"WARNING"}, result.error)
+        redraw_all()
         return {"FINISHED"}
+
+    def invoke(self, context, event):
+        if refuse_if_outdated(self, context):
+            return {"CANCELLED"}
+        analyze(context.scene)
+        self.confirmed = True
+        return context.window_manager.invoke_props_dialog(
+            self, width=640, title="Sync Preview", confirm_text="Sync Now"
+        )
+
+    def draw(self, context):
+        draw_preview(self.layout, context.scene)
 
 
 class MMDBRIDGE_OT_scan(Operator):
@@ -151,6 +244,7 @@ class MMDBRIDGE_OT_clean(Operator):
         }
         counts = run_clean(context.scene, settings, options)
         settings.status = "Cleaned at %s" % time.strftime("%H:%M:%S")
+        clear_analysis()
         self.report(
             {"INFO"},
             "Removed %d clip(s), %d UV key(s), %d rig(s), %d accessory(ies), %d audio strip(s); reset %d channel(s)"

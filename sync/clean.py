@@ -167,6 +167,9 @@ def run_clean(scene, settings, options):
         "audio": 0,
     }
     for item in settings.targets:
+        # What the record describes is about to go, so the next sync must not skip.
+        if options["animation"] or options["uv"]:
+            item.sync_record = ""
         root = item.target
         if root is None:
             continue

@@ -13,12 +13,15 @@ from ..common.animation import (
     snapshot_outside,
     tag_actions,
 )
-from ..common.constants import ACTION_PREFIX, CLIP_TRACK_NAME, TEMP_PREFIX
+from ..common.constants import ACTION_PREFIX, TEMP_PREFIX
 from ..common.logger import log
 from ..common.scene_utils import find_armature, short_text
+from ..common.timing import phase
 from ..pmm import build_vmd
 from .clips import (
+    clip_track_names,
     find_bridge_clip_any,
+    model_label,
     place_clip,
     primary_key_owner,
     release_stash,
@@ -28,9 +31,13 @@ from .morph_keys import ensure_morph_keys
 from .morphs import report_morphs, resolve_morph_names
 from .physics import import_physics_clip
 from .scale import current_scale
+from .sync_state import forget_parts, rig_layout, write_parts
 from .targets import target_usable
 from .tempfiles import remove_file, write_temp_vmd
 from .uv_morphs import prepare_uv_channels
+
+
+ALL_PARTS = ("motion", "shape")
 
 
 # Logs how many PMM bones match the armature's original bone names. The first thing
@@ -75,8 +82,9 @@ def model_frames(model):
 # Imports one PMM model onto its mmd_tools rig. The PMM keys go through a temp VMD
 # that mmd_tools applies, then the parts it skips (shape keys, UV morphs) are filled
 # in, the user's keys outside the PMM span are restored and, with clips on, results
-# are moved into reusable NLA clips.
-def import_model(root, model, settings, item):
+# are moved into reusable NLA clips. parts limits the import to "motion" or "shape":
+# the other part's IDs are left out of the targets, so its actions stay as they are.
+def import_model(root, model, settings, item, parts=ALL_PARTS):
     if not target_usable(root):
         raise RuntimeError(
             "target '%s' has no armature or is not in the scene; reassign the model"
@@ -87,8 +95,10 @@ def import_model(root, model, settings, item):
     armature = rig.armature()
     placeholder = rig.morph_slider.placeholder()
     meshes = list(rig.meshes())
-    targets = [root]
-    for extra in [armature, placeholder] + meshes:
+    motion = "motion" in parts
+    shape = "shape" in parts
+    targets = [root] if motion else []
+    for extra in ([armature] if motion else []) + ([placeholder] + meshes if shape else []):
         if extra is not None and extra not in targets:
             targets.append(extra)
     log.info(
@@ -97,28 +107,32 @@ def import_model(root, model, settings, item):
         root.name,
         [(o.name, o.type) for o in targets],
     )
-    diagnose_bones(root, model)
+    label = model_label(model)
+    if motion:
+        diagnose_bones(root, model)
     morph_map, morph_available = resolve_morph_names(root, meshes, model)
-    report_morphs(model, morph_map, morph_available)
-    data = build_vmd(model, settings.interpolation_layout, morph_map)
-    try:
-        prepare_uv_channels(root, meshes, model, morph_map, settings.uv_morphs)
-    except Exception as error:
-        log.error("UV morph setup failed: %s\n%s", error, traceback.format_exc())
+    if shape:
+        report_morphs(model, morph_map, morph_available)
+    with phase("vmd_build", label):
+        data = build_vmd(
+            model, settings.interpolation_layout, morph_map, bones=motion, morphs=shape
+        )
+    if shape:
+        try:
+            with phase("uv_morphs", label):
+                prepare_uv_channels(root, meshes, model, morph_map, settings.uv_morphs)
+        except Exception as error:
+            log.error("UV morph setup failed: %s\n%s", error, traceback.format_exc())
     owners = collect_owners(targets)
-    label = model.name or model.name_en or "model"
     use_clips = bool(settings.use_clips) and armature is not None
-    arm_track = CLIP_TRACK_NAME + "_" + label + "_motion"
-    shape_track = CLIP_TRACK_NAME + "_" + label + "_shapekey"
-    legacy_arm_track = CLIP_TRACK_NAME + "_" + label
-    legacy_shape_track = legacy_arm_track + "_shapes"
+    arm_track, shape_track, legacy_shape_track, _legacy_arm = clip_track_names(label)
     key_owners = [o for o in owners if hasattr(o, "key_blocks")] if use_clips else []
     primary_keys = primary_key_owner(key_owners, placeholder)
-    arm_clip = item.clip if use_clips else None
+    arm_clip = item.clip if use_clips and motion else None
     stash = {}
     sources = {}
     if use_clips:
-        for owner in [armature] + key_owners:
+        for owner in ([armature] if motion else []) + key_owners:
             anim = owner.animation_data or owner.animation_data_create()
             action = anim.action
             stash[owner.as_pointer()] = (
@@ -128,7 +142,8 @@ def import_model(root, model, settings, item):
             )
             if action is not None:
                 action.use_fake_user = True
-        sources[armature.as_pointer()] = arm_clip
+        if motion:
+            sources[armature.as_pointer()] = arm_clip
         for owner in key_owners:
             found = find_bridge_clip_any(owner, (shape_track, legacy_shape_track))
             if (
@@ -157,40 +172,46 @@ def import_model(root, model, settings, item):
     for owner in key_owners:
         owner.animation_data.action = None
     purge_actions(ACTION_PREFIX)
-    tmp_path = write_temp_vmd(data, TEMP_PREFIX)
+    with phase("vmd_write", label):
+        tmp_path = write_temp_vmd(data, TEMP_PREFIX)
     placed = False
     try:
         try:
-            run_importer(
-                tmp_path,
-                current_scale(settings),
-                targets,
-                ACTION_PREFIX + label,
-                False,
-            )
+            with phase("importer", label):
+                run_importer(
+                    tmp_path,
+                    current_scale(settings),
+                    targets,
+                    ACTION_PREFIX + label,
+                    False,
+                )
         finally:
             remove_file(tmp_path)
-        ensure_morph_keys(meshes, model, morph_map, root)
+        if shape:
+            with phase("morph_keys", label):
+                ensure_morph_keys(meshes, model, morph_map, root)
         restored = restore_points(kept)
         tag_actions(plain_owners, label)
         log.info("restored %d preserved key(s) for '%s'", restored, model.name)
-        describe_action("armature", armature)
+        if motion:
+            describe_action("armature", armature)
         if use_clips:
-            arm_ptr = armature.as_pointer()
-            active_arm = stash[arm_ptr][1]
-            keep_active = (
-                arm_clip is not None
-                and active_arm is not None
-                and active_arm == arm_clip
-            )
-            item.clip = place_clip(
-                armature,
-                arm_clip,
-                arm_track,
-                ACTION_PREFIX + label + "_motion_clip",
-                active_arm,
-                keep_active,
-            )
+            if motion:
+                arm_ptr = armature.as_pointer()
+                active_arm = stash[arm_ptr][1]
+                keep_active = (
+                    arm_clip is not None
+                    and active_arm is not None
+                    and active_arm == arm_clip
+                )
+                item.clip = place_clip(
+                    armature,
+                    arm_clip,
+                    arm_track,
+                    ACTION_PREFIX + label + "_motion_clip",
+                    active_arm,
+                    keep_active,
+                )
             for owner in key_owners:
                 ptr = owner.as_pointer()
                 is_primary = primary_keys is not None and owner == primary_keys
@@ -207,7 +228,7 @@ def import_model(root, model, settings, item):
             placed = True
     finally:
         release_stash(stash, restore=not placed)
-    if settings.use_physics_vmd and armature is not None:
+    if motion and settings.use_physics_vmd and armature is not None:
         try:
             import_physics_clip(item, armature, settings, label)
         except Exception as error:
@@ -240,16 +261,23 @@ class WarningCapture(logging.Handler):
 
 
 # Syncs one model row and records OK, WARN or ERROR on it. A failure is contained so
-# the other models still sync.
-def sync_target(target, model, settings):
+# the other models still sync. With a plan entry only its running parts import, and the
+# row's record moves forward only once they all succeeded.
+def sync_target(target, model, settings, entry=None):
     capture = WarningCapture()
     log.addHandler(capture)
+    parts = entry.run_parts if entry is not None else ALL_PARTS
     try:
-        import_model(target.target, model, settings, target)
+        with phase("model", model_label(model)):
+            import_model(target.target, model, settings, target, parts)
+        if entry is not None:
+            layout = rig_layout(target.target)
+            write_parts(target, entry, layout, settings, model_label(model))
     except Exception as error:
         log.error(
             "model '%s' failed: %s\n%s", target.pmm_name, error, traceback.format_exc()
         )
+        forget_parts(target, parts)
         target.state = "ERROR"
         target.status_text = short_text(error)
         return False

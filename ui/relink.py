@@ -16,7 +16,10 @@ _relink = {"pending": False}
 # install in a different folder) that registered first and lacks newer properties.
 def settings_outdated(scene):
     settings = getattr(scene, "mmd_bridge", None)
-    return settings is None or not hasattr(settings, "sync_audio")
+    if settings is None or not hasattr(settings, "sync_audio"):
+        return True
+    row_type = settings.bl_rna.properties["targets"].fixed_type
+    return "sync_record" not in row_type.bl_rna.properties
 
 
 # Re-registers this add-on so its properties replace the stale ones.

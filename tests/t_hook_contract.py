@@ -73,6 +73,13 @@ engine.import_audio = lambda *a: order.append("audio") or False
 engine.describe_audio = lambda *a: ""
 engine.sync_target = lambda *a: order.append("model") or True
 engine.refresh_targets = lambda *a: None
+plan_mod = importlib.import_module("ninesync.sync.plan")
+entry = plan_mod.PlanItem(model_key(model), model.name)
+entry.parts["motion"] = plan_mod.PartPlan("motion")
+entry.parts["motion"].operation = plan_mod.UPDATE
+plan = plan_mod.SyncPlan()
+plan.items = [entry]
+engine.build_plan = lambda *a: plan
 
 
 def post_sync(ctx):

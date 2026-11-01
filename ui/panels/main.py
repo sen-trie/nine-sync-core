@@ -8,7 +8,9 @@ from ...common.constants import (
     UNIT_SCALE,
 )
 from ...common.scene_utils import fps_differs, scene_fps
+from ...sync.engine import sync_running
 from ...sync.mmd_tools_link import mmd_tools_available
+from ...sync.progress import progress_state
 from ...sync.scale import current_scale, scale_warning_active
 from ...sync.targets import item_state, item_status_text
 from ..helpers import (
@@ -41,10 +43,18 @@ class MMDBRIDGE_PT_main(Panel):
         if not mmd_tools_available():
             return
         layout.prop(settings, "filepath", text="")
-        row = layout.row()
+        running = sync_running()
+        row = layout.row(align=True)
+        row.enabled = not running
         row.scale_y = 1.5
         row.operator("ninesync.sync_now", icon="FILE_REFRESH")
-        layout.label(text=settings.status, icon="INFO")
+        row.operator("ninesync.preview", icon="VIEWZOOM")
+        if running:
+            state = progress_state()
+            layout.progress(factor=state["fraction"], type="BAR", text=state["text"])
+            layout.label(text="Esc cancels after the current step")
+        else:
+            draw_wrapped(layout, settings.status)
         if fps_differs(context.scene):
             fps_box = layout.box()
             fps_box.label(
@@ -76,7 +86,7 @@ class MMDBRIDGE_PT_main(Panel):
             fix = box.operator("ninesync.set_import_scale", text="Import at Scale 1.0 From Now On", icon="IMPORT")
             fix.scale = UNIT_SCALE
         header, box = layout.panel("ninesync_models", default_closed=False)
-        header.label(text="Models (%d)" % len(settings.targets))
+        header.label(text="PMX Models (%d)" % len(settings.targets))
         header.operator("ninesync.scan", text="", icon="FILE_REFRESH", emboss=False)
         if box is not None and not len(settings.targets):
             box.label(text="Press the refresh icon to read the PMM")

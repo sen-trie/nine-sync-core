@@ -44,6 +44,7 @@ def on_target_changed(self, context):
         self.shape_clip = None
     self.state = "NEW"
     self.status_text = ""
+    self.sync_record = ""
 
 
 class MMDBridgeTarget(PropertyGroup):
@@ -67,6 +68,9 @@ class MMDBridgeTarget(PropertyGroup):
     )
     state: StringProperty(default="NEW")
     status_text: StringProperty()
+    # JSON state of the last successful sync per part. It lives on the row so it is
+    # saved, undone and copied with the .blend and cannot leak into another file.
+    sync_record: StringProperty(options={"HIDDEN"})
     physics_vmd: StringProperty(
         name="Baked Physics VMD",
         description="Experimental: VMD baked from MMD with MMDBridge. Applied as a clip above the PMM clip",

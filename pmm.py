@@ -577,10 +577,10 @@ def interpolation_to_vmd(source, layout="CURVE"):
     return bytes(out)
 
 
-def build_vmd(model, layout="CURVE", morph_map=None):
+def build_vmd(model, layout="CURVE", morph_map=None, bones=True, morphs=True):
     chunks = [struct.pack("<30s20s", VMD_SIGNATURE, encode_name(model.name, 20))]
     bone_frames = []
-    for name, keys in zip(model.bone_names, model.bones):
+    for name, keys in zip(model.bone_names, model.bones) if bones else ():
         packed_name = encode_name(name)
         for key in keys:
             bone_frames.append(
@@ -595,7 +595,7 @@ def build_vmd(model, layout="CURVE", morph_map=None):
     chunks.append(struct.pack("<I", len(bone_frames)))
     chunks.extend(bone_frames)
     morph_frames = []
-    for name, keys in zip(model.morph_names, model.morphs):
+    for name, keys in zip(model.morph_names, model.morphs) if morphs else ():
         packed_name = encode_name(morph_map.get(name, name) if morph_map else name)
         for key in keys:
             morph_frames.append(MORPH_FRAME.pack(packed_name, key.frame, key.weight))

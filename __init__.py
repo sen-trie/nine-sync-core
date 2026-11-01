@@ -1,4 +1,4 @@
-ADDON_VERSION = (0, 3, 0)
+ADDON_VERSION = (0, 4, 0)
 
 bl_info = {
     "name": "NineSync: PMM Bridge",
@@ -23,6 +23,8 @@ from bpy.props import PointerProperty
 from . import hooks
 from .common.constants import MIN_BLENDER, NINESYNC_NAME
 from .common.logger import log, setup_logging
+from .sync.analysis import clear_analysis
+from .sync.engine import abandon_sync
 from .sync.tempfiles import sweep_stale_temp
 from .ui import CLASSES
 from .ui.preferences import addon_preferences, apply_import_scale
@@ -33,6 +35,8 @@ from .ui.relink import schedule_relink, settings_outdated
 @bpy.app.handlers.persistent
 def ninesync_load_handler(*_args):
     hooks.register_core(ADDON_VERSION)
+    abandon_sync()
+    clear_analysis()
     try:
         if settings_outdated(bpy.context.scene):
             schedule_relink()
@@ -85,6 +89,8 @@ def startup_check():
 
 
 def unregister():
+    abandon_sync()
+    clear_analysis()
     remove_handlers()
     hooks.unregister_core()
     if hasattr(bpy.types.Scene, "mmd_bridge"):
