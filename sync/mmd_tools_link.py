@@ -8,20 +8,33 @@ from ..common.constants import MMD_TOOLS_URL
 from ..common.logger import log
 
 
+# Oldest mmd_tools this bridge is tested against. mmd_tools is a separate extension that the user installs
+# and updates; this add-on never installs, replaces or unregisters it. There is no upper bound: the API check
+# below decides, so a newer release that keeps these names keeps working.
+MMD_TOOLS_MIN_VERSION = (4, 5, 5)
+
+# (submodule, names) this add-on calls directly. A release that drops one is reported as incompatible
+# instead of failing in the middle of a sync.
+REQUIRED_API = (
+    ("core.vmd.importer", ("VMDImporter",)),
+    ("core.vmd.exporter", ()),
+    ("core.model", ("Model",)),
+    ("core.camera", ("MMDCamera",)),
+    ("core.light", ("MMDLight",)),
+    ("core.pmx", ("load",)),
+    ("core.pmd.importer", ("import_pmd_to_pmx",)),
+    ("translations", ("translateFromJp",)),
+    ("auto_scene_setup", ()),
+    ("utils", ("makePmxBoneMap",)),
+)
+
+_status_cache = {}
+
+
 # The VMD import operator is the one hard dependency; its presence means mmd_tools
 # is enabled.
-def mmd_tools_available():
+def mmd_tools_installed():
     return hasattr(bpy.types, "MMD_TOOLS_OT_import_vmd")
-
-
-# (name, message, url) for each missing dependency, shown as notices in the panel.
-def missing_dependencies():
-    missing = []
-    if not mmd_tools_available():
-        missing.append(
-            ("mmd_tools", "mmd_tools is not installed or enabled", MMD_TOOLS_URL)
-        )
-    return missing
 
 
 # mmd_tools is installed under different package names (extension or legacy add-on),
@@ -35,6 +48,70 @@ def mmd_module(name):
     return importlib.import_module(mmd_tools_base() + "." + name)
 
 
+# The version as a tuple, from the attribute mmd_tools' own __init__ sets (extension), else bl_info (legacy
+# add-on); None when it cannot be read.
+def mmd_tools_version_tuple():
+    try:
+        base = mmd_tools_base()
+        module = sys.modules.get(base) or importlib.import_module(base)
+        raw = getattr(module, "MMD_TOOLS_VERSION", None)
+        if raw is None:
+            info = getattr(module, "bl_info", None)
+            raw = info.get("version") if info else None
+        if raw is None:
+            return None
+        if isinstance(raw, str):
+            raw = raw.split(".")
+        return tuple(int("".join(c for c in str(part) if c.isdigit()) or 0) for part in raw)
+    except Exception:
+        return None
+
+
+# Returns (state, detail). State is "ok", "missing" (not installed or not enabled) or "incompatible"
+# (too old, or an API this add-on calls is gone). Read-only: nothing of mmd_tools is touched. The result is
+# cached per registered operator class, so a re-enable or update re-checks.
+def mmd_tools_status():
+    operator = getattr(bpy.types, "MMD_TOOLS_OT_import_vmd", None)
+    if operator is None:
+        _status_cache.clear()
+        return "missing", "mmd_tools is not installed or enabled"
+    key = (operator.__module__, id(operator))
+    if key in _status_cache:
+        return _status_cache[key]
+    result = ("ok", "")
+    version = mmd_tools_version_tuple()
+    wanted = ".".join(str(v) for v in MMD_TOOLS_MIN_VERSION)
+    if version is not None and version < MMD_TOOLS_MIN_VERSION:
+        result = ("incompatible", "mmd_tools %s is too old; update it to %s or newer" % (".".join(map(str, version)), wanted))
+    else:
+        for name, attributes in REQUIRED_API:
+            try:
+                module = mmd_module(name)
+            except Exception as error:
+                result = ("incompatible", "mmd_tools has no usable module '%s' (%s); this version is not supported, use %s or newer" % (name, error, wanted))
+                break
+            absent = [a for a in attributes if not hasattr(module, a)]
+            if absent:
+                result = ("incompatible", "mmd_tools '%s' lacks %s; this version is not supported, use %s or newer" % (name, ", ".join(absent), wanted))
+                break
+    _status_cache.clear()
+    _status_cache[key] = result
+    return result
+
+
+# True only when mmd_tools is enabled and passes the version and API checks.
+def mmd_tools_available():
+    return mmd_tools_status()[0] == "ok"
+
+
+# (name, message, url) for each missing or unusable dependency, shown as notices in the panel.
+def missing_dependencies():
+    state, detail = mmd_tools_status()
+    if state == "ok":
+        return []
+    return [("mmd_tools", detail, MMD_TOOLS_URL)]
+
+
 # The importer, model and utils modules the bridge drives directly.
 def mmd_tools_modules():
     return (
@@ -46,15 +123,8 @@ def mmd_tools_modules():
 
 # For the support report; 'unknown' when it cannot be read.
 def mmd_tools_version():
-    try:
-        base = mmd_tools_base()
-        module = sys.modules.get(base) or importlib.import_module(base)
-        info = getattr(module, "bl_info", None)
-        if info and "version" in info:
-            return ".".join(str(v) for v in info["version"])
-    except Exception:
-        pass
-    return "unknown"
+    version = mmd_tools_version_tuple() if mmd_tools_installed() else None
+    return ".".join(str(v) for v in version) if version else "unknown"
 
 
 # Captures mmd_tools' log output during an import so its summary and warnings are

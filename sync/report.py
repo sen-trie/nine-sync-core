@@ -12,7 +12,7 @@ from ..common.constants import (
     REPORT_LOG_LINES,
 )
 from ..common.scene_utils import scene_fps
-from .mmd_tools_link import mmd_tools_available, mmd_tools_version
+from .mmd_tools_link import MMD_TOOLS_MIN_VERSION, mmd_tools_status, mmd_tools_version
 from .retime import retime_factor
 from .scale import current_scale
 from .targets import item_state, item_status_text
@@ -41,8 +41,8 @@ def build_report(context):
         )
     )
     lines.append(
-        "mmd_tools %s (available: %s) | NineSync FX installed: %s"
-        % (mmd_tools_version(), mmd_tools_available(), hooks.fx_installed())
+        "mmd_tools %s (%s, supported from %s) | NineSync FX installed: %s"
+        % (mmd_tools_version(), mmd_tools_status()[0], ".".join(map(str, MMD_TOOLS_MIN_VERSION)), hooks.fx_installed())
     )
     lines.append(
         "scene fps %.3f (PMM is %d) | retime factor %.4f"

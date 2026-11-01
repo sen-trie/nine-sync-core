@@ -13,7 +13,7 @@ from ..sync.accessory_export import refresh_prop_colors
 from ..sync.audio import describe_audio
 from ..sync.clean import run_clean
 from ..sync.engine import run_sync
-from ..sync.mmd_tools_link import mmd_tools_available
+from ..sync.mmd_tools_link import mmd_tools_available, mmd_tools_status
 from ..sync.project_export import create_pmm, refresh_export_items
 from ..sync.rigs import ensure_camera_rig
 from ..sync.report import build_report
@@ -36,8 +36,9 @@ class MMDBRIDGE_OT_sync_now(Operator):
         path = bpy.path.abspath(settings.filepath)
         log.info("Sync Now pressed")
         if not mmd_tools_available():
-            self.report({"ERROR"}, "mmd_tools is not enabled")
-            log.error("mmd_tools operator MMD_TOOLS_OT_import_vmd not found")
+            detail = mmd_tools_status()[1]
+            self.report({"ERROR"}, detail)
+            log.error("mmd_tools unusable: %s", detail)
             return {"CANCELLED"}
         if not os.path.isfile(path):
             self.report({"ERROR"}, "PMM file not found")
