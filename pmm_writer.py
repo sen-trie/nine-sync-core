@@ -16,6 +16,7 @@ from .pmm import (
     MORPH_INITIAL,
     PATH_LENGTH,
     PmmError,
+    VisibilityKey,
     parse_pmm,
 )
 
@@ -30,8 +31,21 @@ DEFAULT_BONE_INTERPOLATION = bytes((20, 20, 107, 107) * 4)
 DEFAULT_CAMERA_INTERPOLATION = bytes((20, 20, 107, 107) * 6)
 
 
-def var_string(text):
-    raw = text.encode("cp932", errors="replace")[:255]
+# Longest names MMD 9.32 keeps, in Shift-JIS bytes: it cuts longer ones when it saves,
+# and a PMM holding the full name no longer matches the model, so MMD reports "model
+# structure is different" on load. Measured on every MMD-saved PMM available.
+MODEL_NAME_BYTES = 49
+BONE_NAME_BYTES = 19
+
+
+# A length-prefixed Shift-JIS string, cut at a character boundary to fit `limit`.
+def var_string(text, limit=255):
+    raw = b""
+    for char in text:
+        piece = char.encode("cp932", errors="replace")
+        if len(raw) + len(piece) > limit:
+            break
+        raw += piece
     return bytes((len(raw),)) + raw
 
 
@@ -251,6 +265,38 @@ def write_accessories(accessories):
     return b"".join(out)
 
 
+# What MMD saves for an outside parent that is not set: in each display key (model -1,
+# bone 0), and in the model state after the keys.
+NO_OUTSIDE_PARENT_KEY = struct.pack("<ii", -1, 0)
+NO_OUTSIDE_PARENT_STATE = struct.pack("<iiii", 0, 0, -1, 0)
+
+
+# The model's display track, as MMD saves it: the first key carries no index, the rest
+# are numbered from 1 and chained by prev/next. Every key repeats the IK switches and
+# the outside parents; all IK stays on and no outside parent is set, since the exporter
+# has neither to write.
+def write_visibility_track(keys, constraint_count, outside_count=0):
+    keys = with_initial(keys, VisibilityKey(0, 1))
+    flags = b"\x01" * constraint_count + NO_OUTSIDE_PARENT_KEY * outside_count
+
+    def record(position):
+        key = keys[position]
+        return (
+            struct.pack(
+                "<iii",
+                key.frame,
+                position - 1 if position > 1 else 0,
+                position + 1 if position + 1 < len(keys) else 0,
+            )
+            + bytes((1 if key.visible else 0,))
+            + flags
+            + b"\x00"
+        )
+
+    rest = [struct.pack("<i", p) + record(p) for p in range(1, len(keys))]
+    return record(0) + struct.pack("<i", len(rest)) + b"".join(rest)
+
+
 # Per-model editor state that a template cannot supply. Draw order is 1-based and must
 # be unique: MMD 9.32 only brings up one model when every record claims the same slot.
 # The bytes are the draw order, display flag, selected bone, the morph chosen in each
@@ -272,32 +318,30 @@ def model_editor_state(model):
 # everything at rest and mark every bone selected.
 def write_model(model, opaque, bone_default, morph_default):
     constraint_count = len(model.constraints)
+    outside_count = len(model.outside_parents)
     last_frame = 0
-    for keys in list(model.bones) + list(model.morphs):
+    for keys in list(model.bones) + list(model.morphs) + [model.visibility]:
         if keys:
             last_frame = max(last_frame, keys[-1].frame)
     out = [
         bytes((model.index,)),
-        var_string(model.name),
-        var_string(model.name_en),
+        var_string(model.name, MODEL_NAME_BYTES),
+        var_string(model.name_en, MODEL_NAME_BYTES),
         fixed_string(model.path, PATH_LENGTH),
         bytes((model.frame_rows,)),
         struct.pack("<i", len(model.bone_names)),
-        b"".join(var_string(n) for n in model.bone_names),
+        b"".join(var_string(n, BONE_NAME_BYTES) for n in model.bone_names),
         struct.pack("<i", len(model.morph_names)),
-        b"".join(var_string(n) for n in model.morph_names),
+        b"".join(var_string(n, BONE_NAME_BYTES) for n in model.morph_names),
         struct.pack("<i", constraint_count),
         b"".join(struct.pack("<i", i) for i in model.constraints),
-        struct.pack("<i", 0),
+        struct.pack("<i", outside_count),
+        b"".join(struct.pack("<i", i) for i in model.outside_parents),
         model_editor_state(model),
         struct.pack("<i", last_frame),
         write_bone_track(model.bones, bone_default),
         write_morph_track(model.morphs, morph_default),
-        struct.pack("<iii", 0, 0, 0),
-        b"\x01",
-        b"\x01" * constraint_count,
-        b"\x00",
-        struct.pack("<i", 0),
+        write_visibility_track(model.visibility, constraint_count, outside_count),
         b"".join(
             bone_state(with_initial(keys, bone_default)[0]) for keys in model.bones
         ),
@@ -306,6 +350,7 @@ def write_model(model, opaque, bone_default, morph_default):
             for keys in model.morphs
         ),
         opaque["constraint_state"] * constraint_count,
+        NO_OUTSIDE_PARENT_STATE * outside_count,
         opaque["tail"][:-1] + bytes((model.index + 1,)),
     ]
     return b"".join(out)
@@ -348,8 +393,6 @@ def build_pmm(template, models, camera_keys, play_range=None, accessories=None):
     base = parse_pmm(template)
     if not base.models or base.spans is None:
         raise PmmError("the PMM template needs at least one model and a readable camera section")
-    if not models:
-        raise PmmError("no models to write")
     if len(models) > 255:
         raise PmmError("a PMM holds at most 255 models")
     opaque = dict(base.models[0].opaque)
@@ -384,6 +427,11 @@ def build_pmm(template, models, camera_keys, play_range=None, accessories=None):
     if accessories and (check.accessory_error or len(check.accessories) != len(accessories)):
         raise PmmError("the written accessories do not read back correctly")
     for wrote, read in zip(models, check.models):
-        if read.bone_names != wrote.bone_names or read.morph_names != wrote.morph_names:
+        stored = lambda names: [var_string(n, BONE_NAME_BYTES)[1:] for n in names]
+        if stored(read.bone_names) != stored(wrote.bone_names) or stored(read.morph_names) != stored(wrote.morph_names):
             raise PmmError("model '%s' did not read back correctly" % wrote.name)
+        if read.outside_parents != list(wrote.outside_parents):
+            raise PmmError("model '%s' outside parents did not read back correctly" % wrote.name)
+        if list(read.visibility) != with_initial(wrote.visibility, VisibilityKey(0, 1)):
+            raise PmmError("model '%s' visibility did not read back correctly" % wrote.name)
     return out

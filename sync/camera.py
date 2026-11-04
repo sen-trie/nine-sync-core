@@ -11,63 +11,68 @@ from .scale import current_scale
 from .tempfiles import remove_file, write_temp_vmd
 
 
-# Maps each (model, bone) that camera keys follow to an armature and pose bone.
-# Unresolvable pairs map to None with a warning, so the camera still imports.
-def resolve_follow(project, settings):
-    plan = {}
+# Maps each (model, bone) that camera keys follow to an armature and pose bone, with
+# a message per pair that cannot be resolved (mapped to None, so the camera still
+# imports). Read-only, so the plan can use it too.
+def follow_table(project, settings):
+    table = {}
+    problems = []
     if not settings.follow_camera:
-        return plan
+        return table, problems
     items = {t.key: t for t in settings.targets}
     by_index = {m.index: m for m in project.models}
     for key in project.camera_keys:
         if key.parent_model < 0 or key.parent_bone < 0:
             continue
         pair = (key.parent_model, key.parent_bone)
-        if pair in plan:
+        if pair in table:
             continue
-        plan[pair] = None
+        table[pair] = None
         model = by_index.get(key.parent_model)
         if model is None:
-            log.warning(
-                "camera follows model %d which is not in the PMM", key.parent_model
-            )
+            problems.append("camera follows model %d which is not in the PMM" % key.parent_model)
             continue
         item = items.get(model_key(model))
         if item is None or item.target is None:
-            log.warning(
-                "camera follows '%s' but that model has no Blender target assigned",
-                model.name,
+            problems.append(
+                "camera follows '%s' but that model has no Blender target assigned" % model.name
             )
             continue
         armature = find_armature(item.target)
         if armature is None:
-            log.warning("camera follow: root '%s' has no armature", item.target.name)
+            problems.append("camera follow: root '%s' has no armature" % item.target.name)
             continue
         if key.parent_bone >= len(model.bone_names):
-            log.warning(
-                "camera follow: bone index %d out of range for '%s'",
-                key.parent_bone,
-                model.name,
+            problems.append(
+                "camera follow: bone index %d out of range for '%s'" % (key.parent_bone, model.name)
             )
             continue
         mmd_name = model.bone_names[key.parent_bone]
         bone = pose_bone_name(armature, mmd_name)
         if bone is None:
-            log.warning(
-                "camera follow: bone '%s' not found on armature '%s'",
-                mmd_name,
-                armature.name,
+            problems.append(
+                "camera follow: bone '%s' not found on armature '%s'" % (mmd_name, armature.name)
             )
             continue
-        plan[pair] = (armature, bone)
-        log.info(
-            "camera follow resolved: model %d bone %d -> %s / %s",
-            pair[0],
-            pair[1],
-            armature.name,
-            bone,
-        )
-    return plan
+        table[pair] = (armature, bone)
+    return table, problems
+
+
+# follow_table with its outcome logged, for the import.
+def resolve_follow(project, settings):
+    table, problems = follow_table(project, settings)
+    for problem in problems:
+        log.warning("%s", problem)
+    for pair, resolved in table.items():
+        if resolved is not None:
+            log.info(
+                "camera follow resolved: model %d bone %d -> %s / %s",
+                pair[0],
+                pair[1],
+                resolved[0].name,
+                resolved[1],
+            )
+    return table
 
 
 # Constant interpolation, so a follow constraint switches on or off instantly

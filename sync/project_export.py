@@ -16,9 +16,11 @@ from ..pmm import (
     PmmModel,
     encode_name,
     interpolation_from_vmd,
+    VisibilityKey,
     parse_pmm_file,
     read_vmd,
 )
+from ..common.animation import iter_fcurves
 from ..pmm_writer import build_pmm
 from .accessory_export import collect_accessories
 from .mmd_tools_link import mmd_module
@@ -26,6 +28,7 @@ from .pmx_labels import write_labelled_pmx
 from .retime import retime_keys
 from .root_motion import has_root_motion
 from .scale import export_scale
+from .sync_state import rig_layout
 from .targets import refresh_targets, target_usable
 from .tempfiles import remove_file, temp_vmd_path
 
@@ -102,7 +105,19 @@ def read_pmx_layout(path):
         categories.index(panel) if panel in categories else -1 for panel in (1, 2, 3, 4)
     )
     hidden = {i for i, b in enumerate(pmx.bones) if not b.visible}
-    return bone_names, [m.name for m in morphs], constraints, frame_rows, panels, hidden
+    return bone_names, [m.name for m in morphs], constraints, frame_rows, panels, hidden, outside_parents(pmx)
+
+
+# The outside parent slots MMD keeps for a model: -1 for the whole model, then every IK
+# bone and every bone the user can move (movable, visible, operable). MMD rebuilds this
+# list from the PMX on load and reports "model structure is different" when the PMM's
+# list does not match. Checked against 15 models saved by MMD 9.32.
+def outside_parents(pmx):
+    return [-1] + [
+        i
+        for i, b in enumerate(pmx.bones)
+        if b.isIK or (b.isMovable and b.visible and b.isControllable)
+    ]
 
 
 # Runs mmd_tools' own VMD exporter into a temp file and reads it back. Its scale is
@@ -145,8 +160,70 @@ def to_pmm_frames(keys, scene, settings, hold_cuts=False):
     return retime_keys(shifted, 1.0 / factor, hold_cuts)
 
 
+VISIBILITY_PATHS = ("hide_viewport", "hide_render")
+
+
+# Scene frames where a mesh's hide_viewport or hide_render is keyed, from the active
+# action and from unmuted NLA strips (Sync Model Visibility plays from one). Boolean
+# curves only change value on a key, so these are the only frames to look at.
+def visibility_key_frames(meshes):
+    frames = set()
+    for mesh in meshes:
+        anim = mesh.animation_data
+        if anim is None:
+            continue
+        sources = []
+        if anim.action is not None:
+            sources.append((anim.action, anim.action_slot, 0.0, 1.0))
+        for track in anim.nla_tracks:
+            if track.mute:
+                continue
+            for strip in track.strips:
+                if strip.action is not None and not strip.mute:
+                    offset = strip.frame_start - strip.action_frame_start * strip.scale
+                    sources.append((strip.action, strip.action_slot, offset, strip.scale))
+        for action, slot, offset, scale in sources:
+            for fcurve in iter_fcurves(action, slot):
+                if fcurve.data_path in VISIBILITY_PATHS:
+                    for point in fcurve.keyframe_points:
+                        frames.add(int(round(offset + point.co.x * scale)))
+    return frames
+
+
+# MMD shows or hides a whole model, so the model counts as hidden at a frame only when
+# every mesh is hidden there, in the viewport or in renders. The timeline is stepped to
+# each keyed frame so NLA and the active action combine as Blender plays them, then put
+# back. Unkeyed meshes give one key: their current state.
+def collect_visibility(scene, settings, root):
+    layout = rig_layout(root)
+    meshes = list(layout.meshes) if layout is not None else []
+    if not meshes:
+        return []
+    frames = sorted(visibility_key_frames(meshes) | {scene.frame_start})
+    current, subframe = scene.frame_current, scene.frame_subframe
+    keys = []
+    try:
+        for frame in frames:
+            scene.frame_set(frame)
+            hidden = all(any(getattr(m, p) for p in VISIBILITY_PATHS) for m in meshes)
+            keys.append(VisibilityKey(frame, 0 if hidden else 1))
+    finally:
+        scene.frame_set(current, subframe=subframe)
+    factor = export_factor(scene)
+    if abs(factor - 1.0) > 1e-6:
+        keys = retime_keys(keys, 1.0 / factor, True)
+    start = [k for k in keys if k.frame <= 0]
+    folded = [(start[-1] if start else keys[0])._replace(frame=0)]
+    for key in keys:
+        if key.frame > 0 and folded[-1].visible != key.visible:
+            folded.append(key)
+    if len(folded) == 1 and folded[0].visible:
+        return []
+    return folded
+
+
 def collect_model(scene, settings, index, root, path):
-    bone_names, morph_names, constraints, frame_rows, panels, hidden = read_pmx_layout(path)
+    bone_names, morph_names, constraints, frame_rows, panels, hidden, outside = read_pmx_layout(path)
     model = PmmModel()
     model.index = index
     model.name = root.mmd_root.name or root.name
@@ -155,6 +232,7 @@ def collect_model(scene, settings, index, root, path):
     model.bone_names = bone_names
     model.morph_names = morph_names
     model.constraints = constraints
+    model.outside_parents = outside
     model.bones = [[] for _ in bone_names]
     model.morphs = [[] for _ in morph_names]
     model.frame_rows = frame_rows
@@ -185,14 +263,17 @@ def collect_model(scene, settings, index, root, path):
                 slot = by_morph.get(name)
                 if slot is not None:
                     model.morphs[slot] = anchored(to_pmm_frames(keys, scene, settings))
+    if settings.export_animation and settings.export_visibility:
+        model.visibility = collect_visibility(scene, settings, root)
     log.info(
-        "export model %d '%s': %d bones, %d morphs, %d bone keys, %d morph keys",
+        "export model %d '%s': %d bones, %d morphs, %d bone keys, %d morph keys, visibility %s",
         index,
         model.name,
         len(bone_names),
         len(morph_names),
         sum(len(k) for k in model.bones),
         sum(len(k) for k in model.morphs),
+        [(k.frame, k.visible) for k in model.visibility][:10] or "always shown",
     )
     return model, {slot for slot in hidden if len(model.bones[slot]) > 1}
 
@@ -209,7 +290,7 @@ def hidden_bone_warning(model, root, stuck):
 
 
 # The rig to write: the one picked in the panel, else the rig of the scene camera,
-# else the Syncer's. Only reads; a rig is never made or rebuilt on export, because
+# else the Syncer's, else None. Only reads; a rig is never made or rebuilt on export, because
 # rebuilding deletes the rig the user's scene camera points at.
 def export_camera_rig(scene, settings):
     if settings.export_camera_object is not None:
@@ -218,10 +299,7 @@ def export_camera_rig(scene, settings):
     if parent is not None and getattr(parent, "mmd_type", "") == "CAMERA":
         return parent
     collection = bpy.data.collections.get(CAMERA_COLLECTION)
-    root = find_rig_root(collection, "CAMERA") if collection else None
-    if root is None:
-        raise PmmError("no MMD camera rig: pick one, or turn off Include Camera")
-    return root
+    return find_rig_root(collection, "CAMERA") if collection else None
 
 
 # Points the Syncer at the new file and assigns each exported model to its Blender
@@ -247,10 +325,9 @@ def link_to_syncer(scene, settings, out_path, roots):
 
 # Writes the PMM, playing the scene frame range. Nothing in the scene changes: the
 # timeline is stepped to read motion and put back. See link_to_syncer for the exception.
+# With no model checked it still writes a project holding the camera, light and props.
 def create_pmm(scene, settings, out_path):
     items = [i for i in settings.export_items if i.enabled and i.target is not None]
-    if not items:
-        raise PmmError("no models are checked")
     template = template_path()
     if not os.path.isfile(template):
         raise PmmError("PMM template missing: %s" % template)
@@ -276,18 +353,23 @@ def create_pmm(scene, settings, out_path):
         elif stuck:
             warnings.append(hidden_bone_warning(model, root, stuck))
         if has_root_motion(root):
-            warnings.append("'%s' has root motion, which a PMM cannot hold. Press Convert on its row" % root.name)
+            warnings.append("'%s' has root motion, which a PMM cannot hold. Press Bake Root Motion on its row" % root.name)
         models.append(model)
         roots.append((root, path))
     for warning in warnings:
         log.warning(warning)
     camera_keys = []
-    if settings.export_camera:
+    rig_root = None
+    if settings.export_animation and settings.export_camera_motion:
         rig_root = export_camera_rig(scene, settings)
-        if settings.export_animation and settings.export_camera_motion:
-            _, _, cameras = export_vmd(settings, camera=rig_root)
-            camera_keys = anchored(to_pmm_frames(cameras, scene, settings, True))
-            log.info("export camera '%s': %d key(s)", rig_root.name, len(camera_keys))
+        if rig_root is None:
+            warning = "No MMD camera rig, so the project has MMD's default camera. Press Spawn MMD Camera or pick one as MMD Camera"
+            log.warning(warning)
+            warnings.append(warning)
+    if rig_root is not None:
+        _, _, cameras = export_vmd(settings, camera=rig_root)
+        camera_keys = anchored(to_pmm_frames(cameras, scene, settings, True))
+        log.info("export camera '%s': %d key(s)", rig_root.name, len(camera_keys))
     factor = export_factor(scene)
     play_range = (
         int(round(scene.frame_start / factor)),

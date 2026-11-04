@@ -50,6 +50,10 @@ def input_token(scene):
         settings.physics_disable_rigid_body,
         settings.sync_camera,
         settings.sync_light,
+        settings.follow_camera,
+        settings.follow_rotation,
+        settings.sync_visibility,
+        settings.scene_record,
         len(bpy.data.actions),
     )
 

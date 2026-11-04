@@ -94,6 +94,14 @@ def check_copy(checks):
     checks.check("no references to the pre-split add-on in current copy", not stale, stale or "")
 
 
+# Create PMM copies the template's bytes into every exported file, so a drive or user
+# folder left in it would ship to whoever the user sends their PMM to.
+def check_template(checks):
+    data = open(os.path.join(REPO, "assets", "kagamine.pmm"), "rb").read()
+    found = [m.group().decode("cp932", "replace") for m in re.finditer(rb"[A-Za-z]?:\\[^\0]*|\\Users\\[^\0]*", data)]
+    checks.check("PMM template holds no absolute paths", not found, found or "")
+
+
 # FX is optional locally; --require-fx (used by CI) turns its absence into a failure.
 def check_hooks(checks):
     folder = fx_folder()
@@ -113,5 +121,6 @@ if __name__ == "__main__":
     check_imports(checks)
     check_versions(checks)
     check_copy(checks)
+    check_template(checks)
     check_hooks(checks)
     checks.finish()

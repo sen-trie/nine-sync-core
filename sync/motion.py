@@ -8,6 +8,10 @@ from ..pmm import encode_name
 REST_EPSILON = 1e-6
 BONE_KEY = struct.Struct("<i3d4d")
 MORPH_KEY = struct.Struct("<id")
+VISIBILITY_KEY = struct.Struct("<iB")
+CAMERA_KEY = struct.Struct("<id3d3diiii")
+LIGHT_KEY = struct.Struct("<i3d3d")
+VISIBILITY_TRACK = "visibility"
 
 
 # Hash of canonical parsed tracks, not raw file bytes: re-saving a PMM or changing an
@@ -32,12 +36,44 @@ def pack_morph_key(key):
     return MORPH_KEY.pack(key.frame, key.weight)
 
 
+def pack_visibility_key(key):
+    return VISIBILITY_KEY.pack(key.frame, 1 if key.visible else 0)
+
+
+# Every camera field that reaches the rig or the follow constraints.
+def pack_camera_key(key):
+    head = CAMERA_KEY.pack(
+        key.frame,
+        key.distance,
+        *key.look_at,
+        *key.angle,
+        key.parent_model,
+        key.parent_bone,
+        key.perspective,
+        key.fov,
+    )
+    return head + bytes(key.interpolation or b"")
+
+
+def pack_light_key(key):
+    return LIGHT_KEY.pack(key.frame, *key.color, *key.direction)
+
+
+# One unnamed track, for camera and light.
+def keys_fingerprint(keys, pack_key):
+    return digest_tracks([""], [keys], pack_key)
+
+
 def motion_fingerprint(model):
     return digest_tracks(model.bone_names, model.bones, pack_bone_key)
 
 
 def shape_fingerprint(model):
     return digest_tracks(model.morph_names, model.morphs, pack_morph_key)
+
+
+def visibility_fingerprint(model):
+    return digest_tracks([VISIBILITY_TRACK], [model.visibility], pack_visibility_key)
 
 
 # Per-track hashes, saved with a sync so the next preview can name what changed. Eight
@@ -74,6 +110,12 @@ def morph_track_moves(keys):
     return any(abs(k.weight) > REST_EPSILON for k in keys)
 
 
+# A display track only matters once it hides the model; PMM always stores a shown key at
+# frame 0, which a Blender model already is.
+def visibility_hides(keys):
+    return any(not key.visible for key in keys)
+
+
 # (low, high) over the keys of some tracks, or None when there are none.
 def track_range(tracks):
     frames = [key.frame for keys in tracks for key in keys]
@@ -97,6 +139,8 @@ def summarize_model(model):
         animated_morphs=len(animated_morphs),
         morph_keys=sum(len(k) for k in model.morphs),
         morph_range=track_range(model.morphs),
+        visibility_keys=len(model.visibility),
+        hidden_keys=sum(1 for k in model.visibility if not k.visible),
     )
 
 

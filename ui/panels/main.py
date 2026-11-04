@@ -42,6 +42,7 @@ class MMDBRIDGE_PT_main(Panel):
         draw_dependency_notices(layout)
         if not mmd_tools_available():
             return
+        layout.label(text="Source PMM:")
         layout.prop(settings, "filepath", text="")
         running = sync_running()
         row = layout.row(align=True)
@@ -85,6 +86,7 @@ class MMDBRIDGE_PT_main(Panel):
             )
             fix = box.operator("ninesync.set_import_scale", text="Import at Scale 1.0 From Now On", icon="IMPORT")
             fix.scale = UNIT_SCALE
+            fix.dismiss = True
         header, box = layout.panel("ninesync_models", default_closed=False)
         header.label(text="PMX Models (%d)" % len(settings.targets))
         header.operator("ninesync.scan", text="", icon="FILE_REFRESH", emboss=False)

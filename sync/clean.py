@@ -24,6 +24,7 @@ from .audio import sequence_strips
 from .mmd_tools_link import mmd_tools_modules
 from .rigs import remove_rig
 from .uv_morphs import clear_uv_channels
+from .visibility import VISIBILITY_PATHS
 
 
 BONE_PATH = re.compile(
@@ -60,6 +61,7 @@ def clean_model_animation(root, counts):
     bones = set()
     shape_values = []
     doomed = []
+    hidden = []
     for owner in owners:
         anim = owner.animation_data
         if anim is None:
@@ -81,8 +83,15 @@ def clean_model_animation(root, counts):
                 matched = KEY_PATH.match(fcurve.data_path)
                 if matched and hasattr(owner, "key_blocks"):
                     shape_values.append((owner, unescape_name(matched.group(1))))
+                if fcurve.data_path in VISIBILITY_PATHS and owner not in hidden:
+                    hidden.append(owner)
         doomed.extend(actions)
     clear_bridge_nla(owners)
+    # Without its keys a mesh keeps the hide state of the current frame, and nothing
+    # would show it again, so models the bridge hid are shown whatever the pose option.
+    for owner in hidden:
+        for path in VISIBILITY_PATHS:
+            setattr(owner, path, False)
     return armature, bones, shape_values, doomed
 
 
@@ -210,6 +219,7 @@ def run_clean(scene, settings, options):
     if options["animation"]:
         purge_actions(ACTION_PREFIX)
     if options["scene"]:
+        settings.scene_record = ""
         clean_camera_light(counts)
     if options.get("fx"):
         for result in hooks.run("clean", scene, options):

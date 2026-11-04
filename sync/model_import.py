@@ -35,6 +35,7 @@ from .sync_state import forget_parts, rig_layout, write_parts
 from .targets import target_usable
 from .tempfiles import remove_file, write_temp_vmd
 from .uv_morphs import prepare_uv_channels
+from .visibility import apply_visibility, visibility_track_name
 
 
 ALL_PARTS = ("motion", "shape")
@@ -167,7 +168,7 @@ def import_model(root, model, settings, item, parts=ALL_PARTS):
     plain_owners = [
         o for o in owners if not (use_clips and (o == armature or o in key_owners))
     ]
-    clear_bridge_nla(plain_owners)
+    clear_bridge_nla(plain_owners, keep=(visibility_track_name(label),))
     reset_animation(targets, keep_keys=use_clips)
     for owner in key_owners:
         owner.animation_data.action = None
@@ -260,6 +261,22 @@ class WarningCapture(logging.Handler):
             self.messages.append(text)
 
 
+# Show/hide keys for one model. Kept apart from the import so a failure here costs only
+# the visibility record, and the motion that already imported keeps its own.
+def sync_visibility(target, model, settings, entry):
+    label = model_label(model)
+    try:
+        with phase("visibility", label):
+            layout = rig_layout(target.target)
+            apply_visibility(layout.meshes, model, label)
+        write_parts(target, entry, layout, settings, label, ("visible",))
+    except Exception as error:
+        log.error(
+            "visibility for '%s' failed: %s\n%s", target.pmm_name, error, traceback.format_exc()
+        )
+        forget_parts(target, ("visible",))
+
+
 # Syncs one model row and records OK, WARN or ERROR on it. A failure is contained so
 # the other models still sync. With a plan entry only its running parts import, and the
 # row's record moves forward only once they all succeeded.
@@ -267,17 +284,21 @@ def sync_target(target, model, settings, entry=None):
     capture = WarningCapture()
     log.addHandler(capture)
     parts = entry.run_parts if entry is not None else ALL_PARTS
+    imported = tuple(p for p in parts if p in ALL_PARTS)
     try:
-        with phase("model", model_label(model)):
-            import_model(target.target, model, settings, target, parts)
-        if entry is not None:
-            layout = rig_layout(target.target)
-            write_parts(target, entry, layout, settings, model_label(model))
+        if imported:
+            with phase("model", model_label(model)):
+                import_model(target.target, model, settings, target, imported)
+            if entry is not None:
+                layout = rig_layout(target.target)
+                write_parts(target, entry, layout, settings, model_label(model), imported)
+        if "visible" in parts:
+            sync_visibility(target, model, settings, entry)
     except Exception as error:
         log.error(
             "model '%s' failed: %s\n%s", target.pmm_name, error, traceback.format_exc()
         )
-        forget_parts(target, parts)
+        forget_parts(target, imported)
         target.state = "ERROR"
         target.status_text = short_text(error)
         return False

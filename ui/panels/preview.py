@@ -3,7 +3,7 @@ from bpy.types import Panel
 from ...common.constants import NINESYNC_CATEGORY
 from ...sync.analysis import current_analysis
 from ...sync.engine import sync_running
-from ...sync.plan import BLOCKED, CREATE, PART_LABELS, SKIP
+from ...sync.plan import BLOCKED, CREATE, PART_LABELS, SKIP, UPDATE
 from ..helpers import draw_wrapped
 
 
@@ -17,6 +17,7 @@ MAPPING_TEXT = {
     "unassigned": "unassigned",
 }
 TRACK_WORD = {"motion": "bone(s)", "shape": "morph(s)"}
+OPERATION_ICON = {CREATE: "ADD", UPDATE: "FILE_REFRESH", SKIP: "CHECKMARK", BLOCKED: "ERROR"}
 
 
 def range_text(span):
@@ -42,7 +43,7 @@ def before_text(part):
 
 
 def change_text(part):
-    if part.changed:
+    if part.changed and part.part in TRACK_WORD:
         return "%d %s changed: %s" % (len(part.changed), TRACK_WORD[part.part], names_text(part.changed))
     return part.reason
 
@@ -123,9 +124,30 @@ def draw_preview(layout, scene):
     left_out = len(result.plan.items) - len(selected)
     if left_out:
         layout.label(text="%d PMX model(s) not selected" % left_out)
-    if result.plan.notes:
+    if result.plan.scene:
         layout.separator()
-        layout.label(text="Camera and light update on every sync")
+        draw_scene(layout, result.plan.scene)
+
+
+# Camera and light, each with its own decision; a running one shows before and after
+# like a model part.
+def draw_scene(layout, scene_plan):
+    layout.label(text="Camera and Light")
+    for part in scene_plan.values():
+        if part.runs:
+            box = layout.box()
+            draw_part_change(box, part)
+            continue
+        row = layout.row()
+        row.alert = part.operation == BLOCKED
+        row.label(text="%s: %s" % (PART_LABELS[part.part], part.operation), icon=OPERATION_ICON[part.operation])
+        note = layout.column()
+        note.scale_y = 0.85
+        draw_wrapped(note, part.reason, PREVIEW_WRAP)
+        for warning in part.warnings:
+            alert = layout.column()
+            alert.alert = True
+            draw_wrapped(alert, warning, PREVIEW_WRAP)
 
 
 class NINESYNC_PT_inspector(Panel):
@@ -135,6 +157,7 @@ class NINESYNC_PT_inspector(Panel):
     bl_region_type = "UI"
     bl_category = NINESYNC_CATEGORY
     bl_parent_id = "NINESYNC_PT_main"
+    bl_order = 4
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw(self, context):
@@ -183,6 +206,8 @@ class NINESYNC_PT_inspector(Panel):
         column.label(text="%d key(s), %s" % (summary.bone_keys, range_text(summary.bone_range)))
         column.label(text="Source morphs: %d animated of %d" % (summary.animated_morphs, summary.morph_tracks))
         column.label(text="%d key(s), %s" % (summary.morph_keys, range_text(summary.morph_range)))
+        if summary.hidden_keys:
+            column.label(text="Visibility: hidden on %d of %d key(s)" % (summary.hidden_keys, summary.visibility_keys))
         if item is None:
             return
         text = MAPPING_TEXT[item.mapping]

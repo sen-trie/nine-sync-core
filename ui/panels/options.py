@@ -11,6 +11,7 @@ class MMDBRIDGE_PT_options(Panel):
     bl_region_type = "UI"
     bl_category = NINESYNC_CATEGORY
     bl_parent_id = "NINESYNC_PT_main"
+    bl_order = 1
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw(self, context):
@@ -27,6 +28,7 @@ class MMDBRIDGE_PT_options(Panel):
                 layout,
                 "UV morphs are shader based: view them in Material Preview or Rendered, not Solid. The weights live on MMDUV_ shape keys inside the Shapekey Clip.",
             )
+        layout.prop(settings, "sync_visibility")
         layout.prop(settings, "update_scene_settings")
         layout.prop(settings, "interpolation_layout")
         layout.separator()

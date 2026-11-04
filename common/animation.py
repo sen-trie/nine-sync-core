@@ -241,13 +241,15 @@ def remove_action(action):
 
 
 # Removes bridge strips from NLA tracks and deletes tracks left empty. User strips
-# and tracks are untouched.
-def clear_bridge_nla(owners):
+# and tracks are untouched, and so are tracks named in keep, which another part owns.
+def clear_bridge_nla(owners, keep=()):
     for owner in owners:
         data = owner.animation_data
         if data is None:
             continue
         for track in list(data.nla_tracks):
+            if track.name in keep:
+                continue
             stale = [strip for strip in track.strips if is_bridge_action(strip.action)]
             for strip in stale:
                 track.strips.remove(strip)

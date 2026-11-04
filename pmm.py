@@ -69,6 +69,9 @@ ACCESSORY_ADDITIONAL = struct.Struct("<iiiiBii3f3ffBB")
 ACCESSORY_STATE_SIZE = 39
 
 
+MODEL_KEY_HEAD = struct.Struct("<iii")
+
+
 class PmmError(Exception):
     pass
 
@@ -103,6 +106,13 @@ class LightKey(NamedTuple):
     direction: Tuple[float, float, float]
 
 
+# One key of a model's display track. MMD stores it with the IK switches and outside
+# parents of that frame; only the show/hide flag is read.
+class VisibilityKey(NamedTuple):
+    frame: int
+    visible: int
+
+
 class PmmModel:
     __slots__ = (
         "index",
@@ -113,8 +123,10 @@ class PmmModel:
         "morph_names",
         "bones",
         "morphs",
+        "visibility",
         "last_frame",
         "constraints",
+        "outside_parents",
         "opaque",
         "frame_rows",
         "morph_panels",
@@ -129,8 +141,10 @@ class PmmModel:
         self.morph_names = []
         self.bones = []
         self.morphs = []
+        self.visibility = []
         self.last_frame = 0
         self.constraints = []
+        self.outside_parents = []
         self.opaque = None
         self.frame_rows = 2
         self.morph_panels = (-1, -1, -1, -1)
@@ -365,10 +379,39 @@ def read_morph_track(reader, morph_count):
     return [collect_morph_chain(initials[i], additional) for i in range(morph_count)]
 
 
-def skip_model_keyframe(reader, constraint_count, outside_count, with_index):
-    reader.skip(
-        (4 if with_index else 0) + 12 + 1 + constraint_count + outside_count * 8 + 1
+# A display keyframe: [index], frame, previous, next, visible, one IK switch per
+# constraint, (model, bone) per outside parent, selected. Returns (index, frame, next,
+# visible).
+def read_model_keyframe(reader, constraint_count, outside_count, with_index):
+    index = reader.i32() if with_index else 0
+    frame, _previous, next_index = reader.unpack(MODEL_KEY_HEAD)
+    visible = reader.u8()
+    reader.skip(constraint_count + outside_count * 8 + 1)
+    return index, frame, next_index, 1 if visible else 0
+
+
+# The display track as a frame-ordered chain, walked like the bone tracks: the chain
+# order, not the record order, is what MMD plays.
+def read_visibility_track(reader, constraint_count, outside_count):
+    _index, frame, next_index, visible = read_model_keyframe(
+        reader, constraint_count, outside_count, False
     )
+    additional = {}
+    for _ in range(reader.count()):
+        entry = read_model_keyframe(reader, constraint_count, outside_count, True)
+        additional[entry[0]] = entry[1:]
+    keys = [VisibilityKey(frame, visible)]
+    seen = set()
+    cursor = next_index
+    while cursor != 0 and cursor not in seen:
+        entry = additional.get(cursor)
+        if entry is None:
+            break
+        seen.add(cursor)
+        frame, next_index, visible = entry
+        keys.append(VisibilityKey(frame, visible))
+        cursor = next_index
+    return normalize_keys(keys)
 
 
 # Besides the keys, read_model keeps the bytes the writer cannot derive (editor
@@ -387,7 +430,7 @@ def read_model(reader):
     constraint_count = reader.count()
     model.constraints = [reader.i32() for _ in range(constraint_count)]
     outside_count = reader.count()
-    reader.skip(outside_count * 4)
+    model.outside_parents = [reader.i32() for _ in range(outside_count)]
     middle_start = reader.pos
     reader.u8()
     reader.u8()
@@ -398,9 +441,7 @@ def read_model(reader):
     model.last_frame = reader.i32()
     model.bones = read_bone_track(reader, bone_count)
     model.morphs = read_morph_track(reader, morph_count)
-    skip_model_keyframe(reader, constraint_count, outside_count, False)
-    for _ in range(reader.count()):
-        skip_model_keyframe(reader, constraint_count, outside_count, True)
+    model.visibility = read_visibility_track(reader, constraint_count, outside_count)
     bone_state = reader.raw(bone_count * BONE_STATE_SIZE)
     morph_state = reader.raw(morph_count * MORPH_STATE_SIZE)
     constraint_state = reader.raw(constraint_count)

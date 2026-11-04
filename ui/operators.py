@@ -288,8 +288,13 @@ class NINESYNC_OT_set_import_scale(Operator):
     bl_description = "Import new MMD models and motions at this scale from now on (presets mmd_tools' importers, remembers it in the add-on preferences and shares it with NineSync: FX when installed). Models already in the scene keep their scale; re-import them to clear the camera warning"
 
     scale: FloatProperty(default=1.0, options={"HIDDEN", "SKIP_SAVE"})
+    dismiss: BoolProperty(default=False, options={"HIDDEN", "SKIP_SAVE"})
 
     def execute(self, context):
+        if self.dismiss and context.scene is not None:
+            settings = context.scene.mmd_bridge
+            settings.scale_warning_dismissed_for = current_scale(settings)
+            redraw_all()
         prefs = addon_preferences()
         if prefs is not None:
             prefs.use_import_scale = True
@@ -423,7 +428,7 @@ class NINESYNC_OT_refresh_prop_colors(Operator):
 
 class NINESYNC_OT_convert_root_motion(Operator):
     bl_idname = "ninesync.convert_root_motion"
-    bl_label = "Convert Root Motion"
+    bl_label = "Bake Root Motion"
     bl_description = "Move this model's root empty motion onto its parent bone and reset the root. Changes the .blend. Keys already on the bone are kept, and new keys are made only on existing keyframes"
     bl_options = {"REGISTER", "UNDO"}
 

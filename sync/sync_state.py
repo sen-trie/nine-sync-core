@@ -1,12 +1,16 @@
+import bpy
 import hashlib
 import json
 import types
 from array import array
 
-from ..common.animation import iter_fcurves, strips_using
+from ..common.animation import collect_owners, iter_fcurves, strips_using
+from ..common.constants import CAMERA_COLLECTION, LIGHT_COLLECTION
 from ..common.logger import log
+from ..common.scene_utils import child_of_type, find_rig_root
 from .clips import clip_track_names, find_bridge_clip_any, primary_key_owner
 from .mmd_tools_link import mmd_tools_installed, mmd_tools_modules
+from .visibility import find_visibility_action
 
 
 RECORD_VERSION = 1
@@ -89,6 +93,9 @@ def active_action(owner):
 # The actions a part writes to, found the way import_model finds them.
 def part_outputs(row, layout, settings, part, label):
     use_clips = bool(settings.use_clips)
+    if part == "visible":
+        found = [(m, find_visibility_action(m, label)) for m in layout.meshes]
+        return [output_entry(m, action) for m, action in found if action is not None]
     if part == "motion":
         clip = row.clip if use_clips else active_action(layout.armature)
         return [output_entry(layout.armature, clip)]
@@ -136,14 +143,14 @@ def read_record(row):
     return record
 
 
-# Saves the state a part reached. Only called after that part imported successfully.
-def write_parts(row, entry, layout, settings, label):
+# Saves the state the named parts reached. Only called after they imported successfully.
+def write_parts(row, entry, layout, settings, label, names):
     record = read_record(row) or {}
     if record.get("source") != entry.source or record.get("target") != entry.target_name:
         record = {}
     record.update(version=RECORD_VERSION, source=entry.source, target=entry.target_name)
     parts = record.setdefault("parts", {})
-    for name in entry.run_parts:
+    for name in names:
         planned = entry.parts[name]
         parts[name] = {
             "fingerprint": planned.fingerprint,
@@ -167,3 +174,68 @@ def forget_parts(row, names):
     row.sync_record = json.dumps(record, sort_keys=True, ensure_ascii=False)
     log.info("sync record cleared for '%s': %s", row.pmm_name, list(names))
 
+
+
+SCENE_RIGS = {"camera": (CAMERA_COLLECTION, "CAMERA"), "light": (LIGHT_COLLECTION, "LIGHT")}
+
+
+# (root, child) of the camera or light rig, or None. Looks only: ensure_*_rig would
+# create the collection and the rig.
+def find_scene_rig(kind):
+    collection_name, mmd_type = SCENE_RIGS[kind]
+    collection = bpy.data.collections.get(collection_name)
+    root = find_rig_root(collection, mmd_type) if collection is not None else None
+    if root is None:
+        return None
+    child = child_of_type(root, mmd_type)
+    return (root, child) if child is not None else None
+
+
+# What a camera or light import writes: the active action of each rig ID that has one.
+def scene_outputs(kind):
+    rig = find_scene_rig(kind)
+    if rig is None:
+        return []
+    owners = collect_owners(list(rig))
+    return [output_entry(o, active_action(o)) for o in owners if active_action(o) is not None]
+
+
+# The camera and light record. It sits on the scene settings, like the model records sit
+# on their rows, and is keyed by PMM like them.
+def read_scene_record(settings, source):
+    try:
+        record = json.loads(settings.scene_record) if settings.scene_record else None
+    except ValueError:
+        record = None
+    if not isinstance(record, dict) or record.get("version") != RECORD_VERSION:
+        return None
+    return record if record.get("source") == source else None
+
+
+# Saves one scene part after it imported successfully. A record of another PMM is
+# replaced, not merged.
+def write_scene_part(settings, source, kind, planned):
+    record = read_scene_record(settings, source) or {}
+    record.update(version=RECORD_VERSION, source=source)
+    record.setdefault("parts", {})[kind] = {
+        "fingerprint": planned.fingerprint,
+        "settings": planned.settings,
+        "keys": planned.keys,
+        "range": planned.frame_range,
+        "outputs": scene_outputs(kind),
+    }
+    settings.scene_record = json.dumps(record, sort_keys=True, ensure_ascii=False)
+
+
+# A failed camera or light import may have half-rebuilt its rig, so its record goes.
+def forget_scene_part(settings, kind):
+    try:
+        record = json.loads(settings.scene_record) if settings.scene_record else None
+    except ValueError:
+        record = None
+    if not isinstance(record, dict):
+        settings.scene_record = ""
+        return
+    record.get("parts", {}).pop(kind, None)
+    settings.scene_record = json.dumps(record, sort_keys=True, ensure_ascii=False)
+    log.info("sync record cleared for %s", kind)

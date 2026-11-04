@@ -30,10 +30,10 @@ class NINESYNC_PT_create(Panel):
             box.alert = True
             draw_wrapped(box, "assets/kagamine.pmm is missing, so Create PMM cannot run.")
         layout.operator("ninesync.spawn_camera", icon="CAMERA_DATA")
-        layout.prop(settings, "export_camera")
-        row = layout.row()
-        row.enabled = settings.export_camera
-        row.prop(settings, "export_camera_object")
+        split = layout.split(factor=0.55)
+        split.enabled = settings.export_animation and settings.export_camera_motion
+        split.label(text="MMD Camera")
+        split.prop(settings, "export_camera_object", text="")
         header, box = layout.panel("ninesync_export_models", default_closed=False)
         header.label(text="MMD Armatures (%d)" % len(settings.export_items))
         header.operator("ninesync.refresh_export", text="", icon="FILE_REFRESH", emboss=False)
@@ -46,7 +46,7 @@ class NINESYNC_PT_create(Panel):
                 row.label(text=item.target.name if item.target else "(missing)")
                 button = row.row(align=True)
                 button.enabled = item.target is not None and has_root_motion(item.target)
-                convert = button.operator("ninesync.convert_root_motion", text="Convert")
+                convert = button.operator("ninesync.convert_root_motion", text="Bake Root Motion")
                 convert.index = index
                 path_row = box.row(align=True)
                 path_row.alert = item.enabled and not item.pmx_path
@@ -73,16 +73,13 @@ class NINESYNC_PT_create(Panel):
                         split.prop(entry, "color", text="")
             if len(settings.export_props):
                 box.label(text="Written to an accessories folder beside the PMM", icon="INFO")
-        header, box = layout.panel("ninesync_export_animation", default_closed=False)
-        header.prop(settings, "export_animation", text="Export Animation")
-        if box is not None:
-            box.enabled = settings.export_animation
-            row = box.row(align=True)
-            row.prop(settings, "export_bones", toggle=True)
-            row.prop(settings, "export_morphs", toggle=True)
-            camera = row.row(align=True)
-            camera.enabled = settings.export_camera
-            camera.prop(settings, "export_camera_motion", toggle=True)
+        layout.prop(settings, "export_animation", text="Export Animation")
+        row = layout.row(align=True)
+        row.enabled = settings.export_animation
+        row.prop(settings, "export_bones", toggle=True)
+        row.prop(settings, "export_morphs", toggle=True)
+        row.prop(settings, "export_visibility", toggle=True)
+        row.prop(settings, "export_camera_motion", toggle=True)
         row = layout.row()
         row.scale_y = 1.5
         row.operator("ninesync.create_pmm", icon="EXPORT")

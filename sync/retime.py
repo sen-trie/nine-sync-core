@@ -33,6 +33,7 @@ def retime_project(project, factor):
     for model in project.models:
         model.bones = [retime_keys(keys, factor) for keys in model.bones]
         model.morphs = [retime_keys(keys, factor) for keys in model.morphs]
+        model.visibility = retime_keys(model.visibility, factor, True)
         model.last_frame = int(round(model.last_frame * factor))
     project.camera_keys = retime_keys(project.camera_keys, factor, True)
     project.light_keys = retime_keys(project.light_keys, factor, True)

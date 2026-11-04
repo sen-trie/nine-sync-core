@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.0
+
+- Camera and light are change-aware.
+- Keyframes for model visibility are synced in Blender.
+- Rearrange UI elements in the N-panel
+
 ## 0.4.0
 
 - Change detection: Sync Now imports only what changed. Each model's bone and morph keys are checked separately, so a morph edit leaves the Motion Clip alone and an edit to another model imports nothing here. Clips edited in Blender are kept while the PMM is unchanged.

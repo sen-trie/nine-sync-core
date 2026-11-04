@@ -56,9 +56,9 @@ CLASSES = (
     MMDBRIDGE_OT_dismiss_scale_warning,
     NINESYNC_PT_create,
     MMDBRIDGE_PT_main,
-    MMDBRIDGE_PT_audio,
+    MMDBRIDGE_PT_options,
     MMDBRIDGE_PT_camera,
     MMDBRIDGE_PT_readout,
-    MMDBRIDGE_PT_options,
+    MMDBRIDGE_PT_audio,
     NINESYNC_PT_inspector,
 )

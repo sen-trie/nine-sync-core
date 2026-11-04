@@ -54,7 +54,7 @@ def build_report(context):
     )
     lines.append("status: %s" % settings.status)
     lines.append(
-        "options: auto_scale=%s scale=%.4f clips=%s uv_morphs=%s retime=%s audio=%s physics=%s frame_range=%s layout=%s camera=%s light=%s accessories_in_pmm=%d"
+        "options: auto_scale=%s scale=%.4f clips=%s uv_morphs=%s retime=%s audio=%s physics=%s frame_range=%s layout=%s camera=%s light=%s visibility=%s accessories_in_pmm=%d"
         % (
             settings.auto_scale,
             current_scale(settings),
@@ -67,6 +67,7 @@ def build_report(context):
             settings.interpolation_layout,
             settings.sync_camera,
             settings.sync_light,
+            settings.sync_visibility,
             settings.pmm_accessory_count,
         )
     )

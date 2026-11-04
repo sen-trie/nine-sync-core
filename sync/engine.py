@@ -233,7 +233,7 @@ def sync_steps(scene, run):
     _last_sync["failed"] = run.failed
     yield from run.tick(0.82, "Updating camera and light")
     with phase("camera_light"):
-        run.imported += import_scene_elements(scene, project, settings)
+        run.imported += import_scene_elements(scene, project, settings, plan)
     if project.accessories and not hooks.fx_installed():
         log.info(
             "PMM has %d accessory(ies); install NineSync: FX to import them",

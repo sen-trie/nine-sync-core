@@ -155,8 +155,8 @@ class MMDBridgeSettings(PropertyGroup):
     )
     sync_audio: BoolProperty(
         name="Sync Audio",
-        description="Add the audio file stored in the PMM to the video sequencer, starting at frame 0",
-        default=True,
+        description="Add the audio file stored in the PMM to the video sequencer, starting at frame 0, as MMD plays it",
+        default=False,
     )
     audio_path: StringProperty(
         name="Audio File",
@@ -185,6 +185,13 @@ class MMDBridgeSettings(PropertyGroup):
     )
     sync_camera: BoolProperty(name="Sync Camera", default=True)
     sync_light: BoolProperty(name="Sync Light", default=True)
+    # Camera and light counterpart of MMDBridgeTarget.sync_record.
+    scene_record: StringProperty(options={"HIDDEN"})
+    sync_visibility: BoolProperty(
+        name="Sync Model Visibility",
+        description="Hide and show each model's meshes where the PMM hides and shows the model, in the viewport and in renders. The keys play from their own NLA track, so your own visibility keys stay on top",
+        default=False,
+    )
     set_active_camera: BoolProperty(name="Make Scene Camera", default=True)
     follow_camera: BoolProperty(
         name="Follow Bone",
@@ -204,13 +211,8 @@ class MMDBridgeSettings(PropertyGroup):
         description="Where Create PMM saves the project",
         subtype="FILE_PATH",
     )
-    export_camera: BoolProperty(
-        name="Include Camera",
-        description="Put an MMD camera rig's camera in the project",
-        default=True,
-    )
     export_camera_object: PointerProperty(
-        name="Camera",
+        name="MMD Camera",
         description="MMD camera rig to write into the project. Leave empty to use the scene camera's rig, then the Syncer's rig",
         type=bpy.types.Object,
         poll=is_mmd_camera,
@@ -232,4 +234,13 @@ class MMDBridgeSettings(PropertyGroup):
     )
     export_bones: BoolProperty(name="Bones", default=True)
     export_morphs: BoolProperty(name="Morphs", default=True)
-    export_camera_motion: BoolProperty(name="Camera", default=True)
+    export_visibility: BoolProperty(
+        name="Visibility",
+        description="Hide the model in MMD where all of its meshes are hidden in Blender (Disable in Viewports or in Renders), keyed or not",
+        default=True,
+    )
+    export_camera_motion: BoolProperty(
+        name="Camera",
+        description="Write the MMD Camera rig's motion. Off leaves MMD's default camera",
+        default=True,
+    )

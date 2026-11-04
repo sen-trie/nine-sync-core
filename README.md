@@ -7,7 +7,7 @@ Accessories (`.x`) and MME effects (`.fx`) are handled by the separate add-on **
 ## Requirements
 
 - Blender 5.3 or newer
-- mmd_tools, installed and enabled separately (Core does not bundle it). Validated with mmd_tools 4.5.5 on Blender 5.3; other versions are untested, and no minimum version is claimed
+- mmd_tools 4.5.5+
 - Optional: NineSync: FX Importer for accessories and effects
 
 ## Install
@@ -26,18 +26,20 @@ The add-on runs on its own. NineSync: FX Importer is a separate zip, installed t
 
 ## What a sync updates
 
-Sync Now works from a plan. **Preview** opens a window listing the PMX models that changed since the last sync, before and after, with unchanged models at the bottom. **PMM Motion Inspector**, at the bottom of the sidebar, shows the source motion and how it maps to each target. Neither changes the scene, and a sync always plans afresh, so what runs matches what the file says at that moment. Each enabled model has up to two destinations, its Motion Clip and its Shapekey Clip, and each gets one of:
+Sync Now works from a plan. **Preview** opens a window listing the PMX models that changed since the last sync, before and after, with unchanged models at the bottom. **PMM Motion Inspector**, at the bottom of the sidebar, shows the source motion and how it maps to each target. Neither changes the scene, and a sync always plans afresh, so what runs matches what the file says at that moment. Each enabled model has up to three destinations, its Motion Clip, its Shapekey Clip and, with Sync Model Visibility on, its visibility keys, and each gets one of:
 
-| Operation | When |
-| --- | --- |
-| Create | The destination does not exist yet, or was deleted |
-| Update | The PMM keys for it changed, you selected a different clip, its settings changed, or it was never synced |
-| Skip (Unchanged) | Nothing relevant changed |
-| Blocked | No target, or settings changed on a clip you edited in Blender |
+| Operation        | When                                                                                                     |
+| ---------------- | -------------------------------------------------------------------------------------------------------- |
+| Create           | The destination does not exist yet, or was deleted                                                       |
+| Update           | The PMM keys for it changed, you selected a different clip, its settings changed, or it was never synced |
+| Skip (Unchanged) | Nothing relevant changed                                                                                 |
+| Blocked          | No target, or settings changed on a clip you edited in Blender                                           |
 
 **Your edits.** If you edit a synced clip in Blender and the PMM has not changed, the clip is skipped and the edit stays. A settings change alone will not replace it: the clip shows Blocked until you press Force Resync. New keys in the PMM do update it, with a warning in the preview; as always, only keys inside the PMM frame span are replaced. Sync Now is the normal choice. Force Resync, at the top of the Inspector, imports everything regardless, and each model in the Inspector has its own.
 
-Camera, light, audio and FX hooks run on every sync; only model motion is skipped.
+Camera and light are two more destinations, planned the same way but each on its own, so an edit to one never rebuilds the other. Their record lives on the scene settings (`scene_record`). The camera's settings include the model and bone each followed key resolves to. Audio and FX hooks still run on every sync.
+
+**Model visibility** (Options > Sync Model Visibility, off by default). MMD keys a model's show/hide in its display keyframes, which also hold the IK switches and outside parents; NineSync reads only the show/hide flag. A hidden model hides every mesh of its mmd*tools rig, with constant `hide_viewport` and `hide_render` keys at the PMM frames and no fade. The keys sit in one action, `MMDBridge*<model>\_visibility`, played from an NLA track of the same name on each mesh, so the mesh's active action is never replaced and your own visibility keys win. It is a third destination of the model row, beside Motion and Shapekey, and is skipped while unchanged. When the PMM stops hiding a model, the next sync removes these keys and shows the meshes. Turning the option off leaves existing keys as they are; Clean removes them. The armature and the rig's other objects are not hidden. Create MMD Project writes it back (Export Animation > Visibility): a model is hidden in MMD where every one of its meshes is hidden in the viewport or in renders, read at each frame those properties are keyed, from the active action or NLA.
 
 **How change detection works.** A model is identified by its PMM slot and name (`model_key`, for example `0:Miku`), so two models with the same name stay separate. Renaming a model or moving it to another slot in MMD makes it a new row, which syncs as new. Bone and morph tracks are hashed separately from their parsed keys, including interpolation, so re-saving a PMM without changing its motion causes no import.
 

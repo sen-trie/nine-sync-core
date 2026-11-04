@@ -9,6 +9,7 @@ Run from the repo root. Each file is a standalone script that prints `ok` or `FA
 | `t_hook_contract.py` | Blender or `bpy` | registry behaviour, `sync()` order, `ctx` fields, retimed keys |
 | `t_animation.py` | Blender or `bpy` | slotted actions, user-key snapshots, light keys, NLA cleanup |
 | `t_sync_plan.py` | Blender or `bpy` | fingerprints, summaries, the plan decision table, records, preview errors, progress and driver exit paths, timings |
+| `t_selective_sync.py` | Blender or `bpy` | display-track parsing, camera and light planned and imported independently (with stand-in importers), model visibility keys, NLA ownership and removal |
 | `manual/check_install.py` | Blender | extension zip: install, enable, restart, preferences id, uninstall |
 | `manual/validate_real.py` | Blender, mmd_tools, PMX files | a real sync checked against values from the PMM, resync, 60 fps retime, Clean |
 | `manual/check_blend.py` | Blender, mmd_tools | a saved `.blend` opens and re-syncs in memory |
@@ -24,6 +25,7 @@ blender --background --factory-startup --python tests/t_registration.py
 blender --background --factory-startup --python tests/t_hook_contract.py
 blender --background --factory-startup --python tests/t_animation.py
 blender --background --factory-startup --python tests/t_sync_plan.py
+blender --background --factory-startup --python tests/t_selective_sync.py
 ```
 
 With the wheel (`pip install bpy==5.2.3`, Python 3.13) use `python tests/t_registration.py` and so on. `tests/support.py` lowers `MIN_BLENDER` for older wheels. CI (`.github/workflows/ci.yml`) runs these on the wheel, which is not Blender 5.3.
@@ -37,7 +39,7 @@ export BLENDER_USER_RESOURCES=/path/to/empty/folder
 mkdir -p "$BLENDER_USER_RESOURCES/extensions/blender_org"
 cp -r <your 5.3 config>/extensions/blender_org/mmd_tools "$BLENDER_USER_RESOURCES/extensions/blender_org/"
 blender --background --factory-startup --command extension build --source-dir . --output-dir out
-blender --background --factory-startup --command extension install-file -r user_default out/ninesync-0.4.0.zip
+blender --background --factory-startup --command extension install-file -r user_default out/ninesync-0.5.0.zip
 
 blender --background --python tests/manual/validate_real.py -- /path/to/project.pmm
 blender --background --python tests/manual/validate_sync_plan.py -- /path/to/project.pmm
