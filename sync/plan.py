@@ -35,7 +35,6 @@ from .motion import (
 from .retime import retime_factor
 from .scale import current_scale
 from .sync_state import (
-    active_action,
     compare_outputs,
     part_outputs,
     read_record,
@@ -155,8 +154,15 @@ def bone_name_table(armature):
     return table
 
 
+# mmd_tools hides the bones the PMX marks not visible; Blender 5 keeps that flag on the
+# pose bone, older builds on the bone. MMD never plays keys on such bones.
+def bone_hidden(pose_bone):
+    return bool(getattr(pose_bone, "hide", False) or pose_bone.bone.hide)
+
+
 # Which source tracks reach the rig. 'cut' are names longer than a VMD can carry: they
-# exist on the rig but the importer cannot find them.
+# exist on the rig but the importer cannot find them. 'hidden' are moving tracks on bones
+# hidden in the PMX: they are still imported, so Blender plays motion MMD ignores.
 def map_bones(model, table):
     report = types.SimpleNamespace(
         tracks=len(model.bones),
@@ -165,6 +171,7 @@ def map_bones(model, table):
         missing=[],
         cut=[],
         losing=[],
+        hidden=[],
         animated=0,
         animated_matched=0,
         mappable_keys=0,
@@ -179,6 +186,8 @@ def map_bones(model, table):
             report.renamed += 1 if lookup != name else 0
             report.animated_matched += 1 if moves else 0
             report.mappable_keys += len(keys)
+            if moves and bone_hidden(table[lookup]):
+                report.hidden.append(name)
             continue
         (report.cut if name in table else report.missing).append(name)
         moving = sum(1 for k in keys if bone_key_moves(k))
@@ -225,7 +234,7 @@ def physics_state(row, settings):
         stat = os.stat(path)
     except OSError:
         return (row.physics_vmd, "missing")
-    return (row.physics_vmd, stat.st_size, stat.st_mtime_ns, settings.physics_disable_rigid_body)
+    return (row.physics_vmd, stat.st_size, stat.st_mtime_ns)
 
 
 # Everything besides the PMM keys that shapes a part's action. A change here means the
@@ -236,13 +245,14 @@ def part_settings(part, scene, settings, root, signature, row):
         mmd_tools_version(),
         round(retime_factor(scene, settings), 6),
         round(current_scale(settings), 6),
-        bool(settings.use_clips),
+        True,  # the removed NLA Clips option, always on; kept so saved records still match
         bool(settings.update_scene_settings),
         root.name,
     )
     if part == "motion":
         return digest_values(
-            common, settings.interpolation_layout, physics_state(row, settings), signature
+            # "CURVE" was the removed Interpolation Layout option; kept so saved records match
+            common, "CURVE", physics_state(row, settings), signature
         )
     if part == "visible":
         return digest_values(
@@ -252,17 +262,14 @@ def part_settings(part, scene, settings, root, signature, row):
 
 
 # Action name shown in the preview, and whether it already exists.
-def describe_destination(part, entries, label, use_clips):
+def describe_destination(part, entries, label):
     names = list(dict.fromkeys(e["action"] for e in entries if e["action"]))
     if names:
         extra = " (+%d)" % (len(names) - 1) if len(names) > 1 else ""
         return names[0] + extra, True
     if part == "visible":
         return visibility_action_name(label), False
-    if use_clips:
-        suffix = "_motion_clip" if part == "motion" else "_shapekey_clip"
-    else:
-        suffix = "_bone" if part == "motion" else "_facial"
+    suffix = "_motion_clip" if part == "motion" else "_shapekey_clip"
     return ACTION_PREFIX + label + suffix, False
 
 
@@ -330,10 +337,9 @@ CHANGED_TEXT = {
 }
 
 
-# Plans one part of a mapped model. Visibility always lives on NLA tracks, so it is
-# compared like a clip whatever the NLA Clips option says.
+# Plans one part of a mapped model. Every part lives on NLA tracks, so outputs are
+# compared as clips.
 def plan_part(part, item, model, row, root, layout, scene, settings, signature, record, force):
-    use_clips = bool(settings.use_clips) or part == "visible"
     label = model_label(model)
     plan = PartPlan(part)
     names, tracks, pack, fingerprint = part_source(part, model)
@@ -344,15 +350,7 @@ def plan_part(part, item, model, row, root, layout, scene, settings, signature, 
     plan.keys = sum(len(k) for k in tracks)
     plan.settings = part_settings(part, scene, settings, root, signature, row)
     current = part_outputs(row, layout, settings, part, label) if row is not None else []
-    plan.destination, plan.exists = describe_destination(part, current, label, use_clips)
-    if not use_clips:
-        replaced = [
-            active.name
-            for active in (active_action(o) for o in owners_of(part, layout))
-            if active is not None and not active.name.startswith(ACTION_PREFIX)
-        ]
-        if replaced:
-            plan.warnings.append("Active action '%s' will be replaced" % replaced[0])
+    plan.destination, plan.exists = describe_destination(part, current, label)
     saved = None
     note = "Not synced yet"
     if record is not None:
@@ -370,14 +368,10 @@ def plan_part(part, item, model, row, root, layout, scene, settings, signature, 
         plan.reason = "Force Resync"
         return plan
     changed = saved is not None and saved.get("fingerprint") != plan.fingerprint
-    decide(plan, saved, note, current, changed, use_clips, CHANGED_TEXT[part])
+    decide(plan, saved, note, current, changed, True, CHANGED_TEXT[part])
     if part == "visible" and plan.runs and not visibility_hides(model.visibility):
         plan.reason = "PMM no longer hides the model; its NineSync visibility keys will be removed"
     return plan
-
-
-def owners_of(part, layout):
-    return [layout.armature] if part == "motion" else layout.key_owners
 
 
 # Plans one PMM model into an item. Reads the rig and the record; writes nothing.
@@ -406,6 +400,11 @@ def plan_model(model, row, scene, settings, source, force):
     if item.bones.lost_keys:
         item.warnings.append(
             "%d moving key(s) on bones the target lacks will be omitted" % item.bones.lost_keys
+        )
+    if item.bones.hidden:
+        item.warnings.append(
+            "%d keyed bone(s) are hidden in the PMX (%s...). MMD does not play them, but Blender will"
+            % (len(item.bones.hidden), item.bones.hidden[0])
         )
     if item.morphs.missing:
         item.warnings.append(

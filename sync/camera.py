@@ -146,6 +146,6 @@ def import_camera(scene, project, settings):
     describe_action("camera root", root)
     describe_action("camera distance", camera)
     apply_follow(root, project, resolve_follow(project, settings), settings)
-    if settings.set_active_camera and scene.camera != camera:
+    if scene.camera != camera:
         scene.camera = camera
         log.info("scene camera set to '%s'", camera.name)

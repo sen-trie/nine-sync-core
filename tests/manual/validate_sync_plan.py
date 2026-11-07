@@ -133,6 +133,13 @@ def row_record(row):
     return state.read_record(row)
 
 
+# A motion-only setting change: a baked physics VMD path on one row. The file need not
+# exist; a missing file still changes the motion settings digest.
+def set_physics_lever(settings, row, on):
+    settings.use_physics_vmd = on
+    row.physics_vmd = "//ninesync_test_missing_physics.vmd" if on else ""
+
+
 def main():
     with open(PMM_PATH, "rb") as handle:
         source = real_parse(handle.read())
@@ -253,10 +260,10 @@ def main():
     planned = operations()[first_row.pmm_name]
     check("UV option invalidates shape only", planned.get("motion") == plan_mod.SKIP and planned.get("shape") == plan_mod.UPDATE, planned)
     settings.uv_morphs = not settings.uv_morphs
-    settings.interpolation_layout = "VMD_ROW"
+    set_physics_lever(settings, first_row, True)
     planned = operations()[first_row.pmm_name]
-    check("layout option invalidates motion", planned["motion"] == plan_mod.UPDATE, planned)
-    settings.interpolation_layout = "CURVE"
+    check("physics VMD invalidates motion only", planned["motion"] == plan_mod.UPDATE and planned.get("shape") in (None, plan_mod.SKIP), planned)
+    set_physics_lever(settings, first_row, False)
     scene.render.fps = 60
     planned = operations()[first_row.pmm_name]
     check("fps change invalidates both", set(planned.values()) == {plan_mod.UPDATE}, planned)
@@ -308,14 +315,14 @@ def main():
         abs(p.co[0] - 100000.0) < 0.5 for c in animation.iter_fcurves(first_row.clip) for p in c.keyframe_points
     )
     check("edit survived a sync", has_edit)
-    settings.interpolation_layout = "VMD_ROW"
+    set_physics_lever(settings, first_row, True)
     item = next(i for i in preview().items if i.key == first_row.key)
     check("settings change on edited action blocks", item.parts["motion"].operation == plan_mod.BLOCKED, item.parts["motion"].reason)
     edited = state.action_digest(first_row.clip)
     sync()
     check("blocked action not written", state.action_digest(first_row.clip) == edited)
     check("blocked row reports it", first_row.state == "WARN", first_row.status_text)
-    settings.interpolation_layout = "CURVE"
+    set_physics_lever(settings, first_row, False)
     mutations["apply"] = nudge_bone(first_index)
     item = next(i for i in preview().items if i.key == first_row.key)
     motion = item.parts["motion"]
@@ -406,13 +413,6 @@ def main():
     check("clean invalidates", not any(o == plan_mod.SKIP for p in planned.values() for o in p.values()), planned)
     check("sync after clean", sync(), settings.status)
     check("sync after clean imported", len(calls["importer"]) == len(rows), calls["importer"])
-
-    # Without clips.
-    settings.use_clips = False
-    sync()
-    planned = operations()
-    check("no-clip mode skips on repeat", all(o == plan_mod.SKIP for p in planned.values() for o in p.values()), planned)
-    settings.use_clips = True
 
 
 try:

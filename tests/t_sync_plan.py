@@ -209,6 +209,31 @@ driver.step()
 engine.abandon_sync()
 checks.check("abandoned sync released", not engine.sync_running() and not progress.progress_state()["active"])
 
+# Keys on bones hidden in the PMX: still imported, but reported because MMD ignores them.
+arm_data = bpy.data.armatures.new("hidden_rig")
+rig = bpy.data.objects.new("hidden_rig", arm_data)
+bpy.context.scene.collection.objects.link(rig)
+bpy.context.view_layer.objects.active = rig
+bpy.ops.object.mode_set(mode="EDIT")
+for bone_name in ("center", "still"):
+    edit_bone = arm_data.edit_bones.new(bone_name)
+    edit_bone.tail = (0.0, 0.0, 1.0)
+bpy.ops.object.mode_set(mode="OBJECT")
+hidden_model = make_model()
+hidden_model.bone_names = ["center", "still"]
+hidden_model.bones.append([pmm.BoneKey(0, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0), INTERP)])
+table = {bone.name: bone for bone in rig.pose.bones}
+checks.check("visible bones not reported", plan_mod.map_bones(hidden_model, table).hidden == [])
+for bone in rig.pose.bones:
+    if hasattr(bone, "hide"):
+        bone.hide = True
+    else:
+        bone.bone.hide = True
+report = plan_mod.map_bones(hidden_model, table)
+checks.check("moving hidden bone reported", report.hidden == ["center"], report.hidden)
+checks.check("hidden bone keys still imported", report.matched == 2 and report.lost_keys == 0)
+bpy.data.objects.remove(rig)
+
 # Timing.
 timings = timing.begin_timings()
 with timing.phase("good"):

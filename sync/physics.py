@@ -8,8 +8,8 @@ from .mmd_tools_link import run_importer
 from .scale import current_scale
 
 
-# Experimental. Layers a baked physics VMD above the PMM clip on its own NLA track,
-# and can switch off the rigid body world so it does not fight the baked result.
+# Experimental. Layers a baked physics VMD above the PMM clip on its own NLA track.
+# The rigid body world is left alone: mmd_tools has its own physics toggle.
 def import_physics_clip(item, armature, settings, label):
     path = bpy.path.abspath(item.physics_vmd) if item.physics_vmd else ""
     if not path:
@@ -50,12 +50,5 @@ def import_physics_clip(item, armature, settings, label):
         placed = True
     finally:
         release_stash(stash, restore=not placed)
-    if settings.physics_disable_rigid_body:
-        world = bpy.context.scene.rigidbody_world
-        if world is not None and world.enabled:
-            world.enabled = False
-            log.info(
-                "rigid body world disabled so it does not fight the baked physics clip"
-            )
     log.info("baked physics VMD applied as a clip above the PMM clip: %s", path)
     return True

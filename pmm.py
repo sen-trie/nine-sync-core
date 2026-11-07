@@ -597,20 +597,18 @@ def encode_name(name, limit=NAME_LIMIT):
     return out.ljust(limit, b"\x00")
 
 
-def interpolation_to_vmd(source, layout="CURVE"):
+# A PMM stores x1 y1 x2 y2 per curve (X, Y, Z, rotation); a VMD row wants all x1,
+# then all y1, x2 and y2, repeated in four shifted copies.
+def interpolation_to_vmd(source):
     row = bytearray(16)
-    if layout == "VMD_ROW":
-        for k in range(16):
-            row[k] = min(int(source[k]), 127)
-    else:
-        for curve in range(4):
-            x1, y1, x2, y2 = (
-                min(int(v), 127) for v in source[curve * 4 : curve * 4 + 4]
-            )
-            row[curve] = x1
-            row[4 + curve] = y1
-            row[8 + curve] = x2
-            row[12 + curve] = y2
+    for curve in range(4):
+        x1, y1, x2, y2 = (
+            min(int(v), 127) for v in source[curve * 4 : curve * 4 + 4]
+        )
+        row[curve] = x1
+        row[4 + curve] = y1
+        row[8 + curve] = x2
+        row[12 + curve] = y2
     out = bytearray(64)
     for shift in range(4):
         for k in range(16 - shift):
@@ -618,7 +616,7 @@ def interpolation_to_vmd(source, layout="CURVE"):
     return bytes(out)
 
 
-def build_vmd(model, layout="CURVE", morph_map=None, bones=True, morphs=True):
+def build_vmd(model, morph_map=None, bones=True, morphs=True):
     chunks = [struct.pack("<30s20s", VMD_SIGNATURE, encode_name(model.name, 20))]
     bone_frames = []
     for name, keys in zip(model.bone_names, model.bones) if bones else ():
@@ -630,7 +628,7 @@ def build_vmd(model, layout="CURVE", morph_map=None, bones=True, morphs=True):
                     key.frame,
                     *key.location,
                     *key.rotation,
-                    interpolation_to_vmd(key.interpolation, layout),
+                    interpolation_to_vmd(key.interpolation),
                 )
             )
     chunks.append(struct.pack("<I", len(bone_frames)))

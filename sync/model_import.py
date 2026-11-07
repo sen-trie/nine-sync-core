@@ -115,9 +115,7 @@ def import_model(root, model, settings, item, parts=ALL_PARTS):
     if shape:
         report_morphs(model, morph_map, morph_available)
     with phase("vmd_build", label):
-        data = build_vmd(
-            model, settings.interpolation_layout, morph_map, bones=motion, morphs=shape
-        )
+        data = build_vmd(model, morph_map, bones=motion, morphs=shape)
     if shape:
         try:
             with phase("uv_morphs", label):
@@ -125,7 +123,7 @@ def import_model(root, model, settings, item, parts=ALL_PARTS):
         except Exception as error:
             log.error("UV morph setup failed: %s\n%s", error, traceback.format_exc())
     owners = collect_owners(targets)
-    use_clips = bool(settings.use_clips) and armature is not None
+    use_clips = armature is not None
     arm_track, shape_track, legacy_shape_track, _legacy_arm = clip_track_names(label)
     key_owners = [o for o in owners if hasattr(o, "key_blocks")] if use_clips else []
     primary_keys = primary_key_owner(key_owners, placeholder)

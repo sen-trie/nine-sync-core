@@ -220,7 +220,11 @@ def accessory_keys(samples, rest_scale, scene, unit):
 # A file name MMD's cp932 path field and Windows both accept, unique among the files
 # written in this export.
 def prop_file_name(obj, taken, extension=".x"):
-    stem = re.sub(r"[^A-Za-z0-9_\-. ]", "_", obj.name).strip(" .")[:60] or "prop"
+    return unique_file_name(obj.name, taken, extension)
+
+
+def unique_file_name(source, taken, extension=".x"):
+    stem = re.sub(r"[^A-Za-z0-9_\-. ]", "_", source).strip(" .")[:60] or "prop"
     name = stem + extension
     number = 2
     while name.lower() in taken:
@@ -269,3 +273,43 @@ def collect_accessories(scene, settings, objects, pmm_path):
         log.info("prop '%s': %s, %d key(s)", obj.name, acc.path, len(acc.keys))
         accessories.append(acc)
     return accessories
+
+
+MARKER_ACCESSORY = "Markers"
+
+# The marker accessory's mesh: one tiny triangle. The accessory is never shown; it is
+# only there to carry keys.
+MARKER_MESH = XMesh(
+    [(0.0, 0.0, 0.0), (0.01, 0.0, 0.0), (0.0, 0.0, 0.01)],
+    [(0.0, 1.0, 0.0)] * 3,
+    [(0, 1, 2)],
+    [0],
+    [DEFAULT_MATERIAL],
+)
+
+
+# MMD has no timeline markers, so each Blender marker becomes a key on a hidden
+# accessory, as a one-way reference for MMD animators. Frames go to MMD's 30 fps like
+# every other key; the key at frame 0 is the accessory's required initial state.
+# Returns the accessory (None without markers), how many markers share an MMD frame
+# with another, and how many fall before frame 0.
+def marker_accessory(scene, pmm_path, index, taken):
+    factor = scene_fps(scene) / PMM_FPS
+    frames = [int(round(marker.frame / factor)) for marker in scene.timeline_markers]
+    usable = [frame for frame in frames if frame >= 0]
+    kept = sorted(set(usable))
+    if not kept:
+        return None, 0, len(frames)
+    folder = os.path.join(os.path.dirname(os.path.abspath(pmm_path)), PROP_FOLDER)
+    os.makedirs(folder, exist_ok=True)
+    acc = PmmAccessory()
+    acc.index = index
+    acc.name = unique_file_name(MARKER_ACCESSORY, taken)
+    acc.path = os.path.join(folder, acc.name)
+    acc.draw_order = index
+    hidden = AccessoryKey(0, 0, -1, 0, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0), 1.0, DEFAULT_SHADOW)
+    acc.keys = [hidden._replace(frame=frame) for frame in sorted({0, *kept})]
+    with open(acc.path, "w", encoding="ascii", newline="\n") as stream:
+        stream.write(build_x_text(MARKER_MESH))
+    log.info("markers: %d marker(s) as %d key(s) on '%s'", len(frames), len(kept), acc.name)
+    return acc, len(usable) - len(kept), len(frames) - len(usable)

@@ -54,17 +54,15 @@ def build_report(context):
     )
     lines.append("status: %s" % settings.status)
     lines.append(
-        "options: auto_scale=%s scale=%.4f clips=%s uv_morphs=%s retime=%s audio=%s physics=%s frame_range=%s layout=%s camera=%s light=%s visibility=%s accessories_in_pmm=%d"
+        "options: auto_scale=%s scale=%.4f uv_morphs=%s retime=%s audio=%s physics=%s frame_range=%s camera=%s light=%s visibility=%s accessories_in_pmm=%d"
         % (
             settings.auto_scale,
             current_scale(settings),
-            settings.use_clips,
             settings.uv_morphs,
             settings.retime_fps,
             settings.sync_audio,
             settings.use_physics_vmd,
             settings.update_scene_settings,
-            settings.interpolation_layout,
             settings.sync_camera,
             settings.sync_light,
             settings.sync_visibility,

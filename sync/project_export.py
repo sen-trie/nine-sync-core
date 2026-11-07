@@ -3,14 +3,13 @@ import os
 import re
 
 from ..common.constants import (
-    CAMERA_COLLECTION,
     PMM_FPS,
     PMM_TEMPLATE_PATH,
     PMX_EXTENSIONS,
     TEMP_PREFIX,
 )
 from ..common.logger import log
-from ..common.scene_utils import find_rig_root, fps_differs, model_key, scene_fps
+from ..common.scene_utils import fps_differs, model_key, scene_fps
 from ..pmm import (
     PmmError,
     PmmModel,
@@ -22,7 +21,7 @@ from ..pmm import (
 )
 from ..common.animation import iter_fcurves
 from ..pmm_writer import build_pmm
-from .accessory_export import collect_accessories
+from .accessory_export import collect_accessories, marker_accessory
 from .mmd_tools_link import mmd_module
 from .pmx_labels import write_labelled_pmx
 from .retime import retime_keys
@@ -289,19 +288,6 @@ def hidden_bone_warning(model, root, stuck):
     )
 
 
-# The rig to write: the one picked in the panel, else the rig of the scene camera,
-# else the Syncer's, else None. Only reads; a rig is never made or rebuilt on export, because
-# rebuilding deletes the rig the user's scene camera points at.
-def export_camera_rig(scene, settings):
-    if settings.export_camera_object is not None:
-        return settings.export_camera_object
-    parent = scene.camera.parent if scene.camera is not None else None
-    if parent is not None and getattr(parent, "mmd_type", "") == "CAMERA":
-        return parent
-    collection = bpy.data.collections.get(CAMERA_COLLECTION)
-    return find_rig_root(collection, "CAMERA") if collection else None
-
-
 # Points the Syncer at the new file and assigns each exported model to its Blender
 # root, so the first sync back after editing in MMD touches the same objects. Opt-in:
 # this is the only part of an export that writes to the .blend.
@@ -359,13 +345,10 @@ def create_pmm(scene, settings, out_path):
     for warning in warnings:
         log.warning(warning)
     camera_keys = []
-    rig_root = None
-    if settings.export_animation and settings.export_camera_motion:
-        rig_root = export_camera_rig(scene, settings)
-        if rig_root is None:
-            warning = "No MMD camera rig, so the project has MMD's default camera. Press Spawn MMD Camera or pick one as MMD Camera"
-            log.warning(warning)
-            warnings.append(warning)
+    # Only the rig picked as MMD Camera is written; none picked keeps MMD's default
+    # camera. A rig is never made or rebuilt on export, because rebuilding deletes the
+    # rig the user's scene camera points at.
+    rig_root = settings.export_camera_object if settings.export_animation else None
     if rig_root is not None:
         _, _, cameras = export_vmd(settings, camera=rig_root)
         camera_keys = anchored(to_pmm_frames(cameras, scene, settings, True))
@@ -377,10 +360,23 @@ def create_pmm(scene, settings, out_path):
     )
     props = [i.target for i in settings.export_props if i.enabled and i.target is not None]
     accessories = collect_accessories(scene, settings, props, out_path) if props else []
+    prop_count = len(accessories)
+    if settings.export_animation and settings.export_markers:
+        taken = {acc.name.lower() for acc in accessories}
+        markers, merged, early = marker_accessory(scene, out_path, len(accessories), taken)
+        if markers is not None:
+            accessories.append(markers)
+        for count, text in (
+            (merged, "%d marker(s) land on the same MMD frame as another marker and share its key"),
+            (early, "%d marker(s) before frame 0 were left out; MMD starts at frame 0"),
+        ):
+            if count:
+                log.warning(text % count)
+                warnings.append(text % count)
     data = build_pmm(template_data, models, camera_keys, play_range, accessories)
     with open(out_path, "wb") as stream:
         stream.write(data)
     log.info("wrote %s (%d bytes)", out_path, len(data))
     if settings.export_link_syncer:
         link_to_syncer(scene, settings, out_path, roots)
-    return len(models), len(camera_keys), len(accessories), warnings
+    return len(models), len(camera_keys), prop_count, warnings

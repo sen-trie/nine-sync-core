@@ -115,6 +115,6 @@ def import_scene_elements(scene, project, settings, plan):
         write_scene_part(settings, plan.source, kind, part)
         done += 1
     camera = plan.scene.get("camera")
-    if settings.sync_camera and settings.set_active_camera and camera is not None and not camera.runs:
+    if settings.sync_camera and camera is not None and not camera.runs:
         keep_scene_camera(scene, settings)
     return done

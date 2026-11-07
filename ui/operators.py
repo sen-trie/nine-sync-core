@@ -321,7 +321,7 @@ class MMDBRIDGE_OT_dismiss_scale_warning(Operator):
 class NINESYNC_OT_spawn_camera(Operator):
     bl_idname = "ninesync.spawn_camera"
     bl_label = "Spawn MMD Camera"
-    bl_description = "Create the MMD camera rig that the Syncer and Create PMM use, or select the existing one"
+    bl_description = "Create the MMD camera rig that the Syncer uses, or select the existing one, and pick it as Create PMM's MMD Camera if none is picked"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
@@ -338,8 +338,9 @@ class NINESYNC_OT_spawn_camera(Operator):
             self.report({"ERROR"}, "Could not create the MMD camera: %s" % error)
             log.error("spawn camera failed: %s", error)
             return {"CANCELLED"}
-        if settings.set_active_camera:
-            context.scene.camera = camera
+        context.scene.camera = camera
+        if settings.export_camera_object is None:
+            settings.export_camera_object = root
         for obj in context.selected_objects:
             obj.select_set(False)
         if root.name in context.view_layer.objects:

@@ -13,6 +13,23 @@ from bpy.types import PropertyGroup
 
 from ..common.constants import ACTION_PREFIX
 from ..common.logger import log
+from ..sync.analysis import current_analysis
+
+
+_inspect_items = []
+
+
+# The Inspector's model picker: one entry per model of the last PMM read, numbered by
+# PMM slot so the choice survives a re-read. Blender only keeps pointers to the
+# strings, so the list is held here until the next call.
+def inspect_model_items(self, context):
+    global _inspect_items
+    result = current_analysis(self.id_data)
+    _inspect_items = [
+        (s.key, "#%d %s" % (s.index, s.name), s.name_en or s.name, "ARMATURE_DATA", s.index)
+        for s in (result.summaries if result is not None else ())
+    ]
+    return _inspect_items
 
 
 # Poll for the target picker: only mmd_tools model roots.
@@ -138,16 +155,6 @@ class MMDBridgeSettings(PropertyGroup):
         description="Layer a VMD baked with MMDBridge above the PMM clip to reproduce MMD's own rigid body results",
         default=False,
     )
-    physics_disable_rigid_body: BoolProperty(
-        name="Disable Rigid Body World",
-        description="Turn off Blender's rigid body world while a baked physics clip is applied",
-        default=True,
-    )
-    use_clips: BoolProperty(
-        name="NLA Clips",
-        description="Keep each model's motion and shapekey animation in reusable action clips on NLA tracks instead of as the active action",
-        default=True,
-    )
     retime_fps: BoolProperty(
         name="Retime to Scene FPS",
         description="PMM keyframes are 30 fps. Scale every key frame by scene fps / 30 so motion keeps its real speed in a scene with a different frame rate",
@@ -165,7 +172,7 @@ class MMDBridgeSettings(PropertyGroup):
     )
     audio_note: StringProperty()
     uv_morphs: BoolProperty(
-        name="UV Morphs (Eye Shapes)",
+        name="UV Morphs",
         description="Apply UV morphs, including the ones inside group morphs, by offsetting the base texture in the material nodes. Needed for effects such as the > < eyes",
         default=True,
     )
@@ -173,15 +180,6 @@ class MMDBridgeSettings(PropertyGroup):
         name="Update Frame Range",
         description="Let mmd_tools set the scene frame range and FPS on every sync; the range is only ever widened",
         default=False,
-    )
-    interpolation_layout: EnumProperty(
-        name="Interpolation Layout",
-        description="How the 16 interpolation bytes in the PMM are ordered",
-        items=[
-            ("CURVE", "Per Curve", "x1 y1 x2 y2 repeated for X, Y, Z, Rotation"),
-            ("VMD_ROW", "VMD Row", "x1 for each curve, then y1, then x2, then y2"),
-        ],
-        default="CURVE",
     )
     sync_camera: BoolProperty(name="Sync Camera", default=True)
     sync_light: BoolProperty(name="Sync Light", default=True)
@@ -192,7 +190,6 @@ class MMDBridgeSettings(PropertyGroup):
         description="Hide and show each model's meshes where the PMM hides and shows the model, in the viewport and in renders. The keys play from their own NLA track, so your own visibility keys stay on top",
         default=False,
     )
-    set_active_camera: BoolProperty(name="Make Scene Camera", default=True)
     follow_camera: BoolProperty(
         name="Follow Bone",
         description="Make the camera follow the model and bone stored in each PMM camera keyframe",
@@ -202,6 +199,11 @@ class MMDBridgeSettings(PropertyGroup):
         name="Follow Bone Rotation",
         description="Also inherit the bone rotation, not only its position",
         default=False,
+    )
+    inspect_model: EnumProperty(
+        name="Model",
+        description="PMM model shown in the PMM Motion Inspector",
+        items=inspect_model_items,
     )
     targets: CollectionProperty(type=MMDBridgeTarget)
     export_items: CollectionProperty(type=MMDBridgeExportItem)
@@ -213,7 +215,7 @@ class MMDBridgeSettings(PropertyGroup):
     )
     export_camera_object: PointerProperty(
         name="MMD Camera",
-        description="MMD camera rig to write into the project. Leave empty to use the scene camera's rig, then the Syncer's rig",
+        description="MMD camera rig whose motion is written into the project. Leave empty to keep MMD's default camera",
         type=bpy.types.Object,
         poll=is_mmd_camera,
     )
@@ -239,8 +241,8 @@ class MMDBridgeSettings(PropertyGroup):
         description="Hide the model in MMD where all of its meshes are hidden in Blender (Disable in Viewports or in Renders), keyed or not",
         default=True,
     )
-    export_camera_motion: BoolProperty(
-        name="Camera",
-        description="Write the MMD Camera rig's motion. Off leaves MMD's default camera",
+    export_markers: BoolProperty(
+        name="Markers",
+        description="Write the timeline markers as keyframes on a hidden 'Markers' accessory, at MMD's 30 fps frames. MMD has no markers of its own; Sync does not read them back",
         default=True,
     )

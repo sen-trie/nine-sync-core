@@ -31,7 +31,7 @@ class NINESYNC_PT_create(Panel):
             draw_wrapped(box, "assets/kagamine.pmm is missing, so Create PMM cannot run.")
         layout.operator("ninesync.spawn_camera", icon="CAMERA_DATA")
         split = layout.split(factor=0.55)
-        split.enabled = settings.export_animation and settings.export_camera_motion
+        split.enabled = settings.export_animation
         split.label(text="MMD Camera")
         split.prop(settings, "export_camera_object", text="")
         header, box = layout.panel("ninesync_export_models", default_closed=False)
@@ -79,7 +79,7 @@ class NINESYNC_PT_create(Panel):
         row.prop(settings, "export_bones", toggle=True)
         row.prop(settings, "export_morphs", toggle=True)
         row.prop(settings, "export_visibility", toggle=True)
-        row.prop(settings, "export_camera_motion", toggle=True)
+        row.prop(settings, "export_markers", toggle=True)
         row = layout.row()
         row.scale_y = 1.5
         row.operator("ninesync.create_pmm", icon="EXPORT")

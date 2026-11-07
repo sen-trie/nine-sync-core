@@ -105,7 +105,7 @@ class MMDBRIDGE_PT_main(Panel):
                 note_row.alert = state == "ERROR"
                 note_row.scale_y = 0.85
                 note_row.label(text=note)
-            if settings.use_clips and item.target is not None:
+            if item.target is not None:
                 clip_row = box.row(align=True)
                 clip_row.label(text="", icon="NLA")
                 clip_row.prop(item, "clip", text="Motion")

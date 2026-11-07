@@ -184,16 +184,19 @@ class NINESYNC_PT_inspector(Panel):
             row.label(text="Out of date: read again", icon="ERROR")
         if result.plan is None:
             return
-        items = {item.key: item for item in result.plan.items}
-        for summary in result.summaries:
-            self.draw_model(layout, summary, items.get(summary.key), running)
+        if result.summaries:
+            settings = context.scene.mmd_bridge
+            by_key = {summary.key: summary for summary in result.summaries}
+            summary = by_key.get(settings.inspect_model) or result.summaries[0]
+            items = {item.key: item for item in result.plan.items}
+            self.draw_model(layout, settings, summary, items.get(summary.key), running)
         for line in result.scene_tracks:
             layout.label(text=line)
 
-    def draw_model(self, layout, summary, item, running):
+    def draw_model(self, layout, settings, summary, item, running):
         box = layout.box()
         header = box.row(align=True)
-        header.label(text="#%d %s" % (summary.index, summary.name), icon="ARMATURE_DATA")
+        header.prop(settings, "inspect_model", text="")
         if item is not None and item.parts and item.selected:
             button = header.row(align=True)
             button.enabled = not running

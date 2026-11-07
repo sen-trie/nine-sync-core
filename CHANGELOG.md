@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.0
+
+- Known limits of MMDBridge Physics: the baked VMD is not retimed to the scene frame rate, so set MMDBridge's export FPS to the scene's.
+- Preview warns when the PMM keys bones that the PMX hides.
+- Create PMM writes timeline markers as keyframes on a hidden "Markers" accessory.
+- Clean up N-panel elements
+
 ## 0.5.0
 
 - Camera and light are change-aware.

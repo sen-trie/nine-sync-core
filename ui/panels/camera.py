@@ -17,7 +17,6 @@ class MMDBRIDGE_PT_camera(Panel):
         settings = context.scene.mmd_bridge
         layout.prop(settings, "sync_camera")
         layout.prop(settings, "sync_light")
-        layout.prop(settings, "set_active_camera")
         layout.separator()
         layout.prop(settings, "follow_camera")
         if settings.follow_camera:

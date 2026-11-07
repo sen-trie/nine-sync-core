@@ -92,18 +92,14 @@ def active_action(owner):
 
 # The actions a part writes to, found the way import_model finds them.
 def part_outputs(row, layout, settings, part, label):
-    use_clips = bool(settings.use_clips)
     if part == "visible":
         found = [(m, find_visibility_action(m, label)) for m in layout.meshes]
         return [output_entry(m, action) for m, action in found if action is not None]
     if part == "motion":
-        clip = row.clip if use_clips else active_action(layout.armature)
-        return [output_entry(layout.armature, clip)]
+        return [output_entry(layout.armature, row.clip)]
     entries = []
     for owner in layout.key_owners:
-        if not use_clips:
-            action = active_action(owner)
-        elif owner == layout.primary_keys and row.shape_clip is not None:
+        if owner == layout.primary_keys and row.shape_clip is not None:
             action = row.shape_clip
         else:
             action = find_bridge_clip_any(owner, clip_track_names(label)[1:3])
