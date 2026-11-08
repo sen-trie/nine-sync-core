@@ -39,7 +39,7 @@ export BLENDER_USER_RESOURCES=/path/to/empty/folder
 mkdir -p "$BLENDER_USER_RESOURCES/extensions/blender_org"
 cp -r <your 5.3 config>/extensions/blender_org/mmd_tools "$BLENDER_USER_RESOURCES/extensions/blender_org/"
 blender --background --factory-startup --command extension build --source-dir . --output-dir out
-blender --background --factory-startup --command extension install-file -r user_default out/ninesync-0.5.0.zip
+blender --background --factory-startup --command extension install-file -r user_default out/ninesync-0.6.0.zip
 
 blender --background --python tests/manual/validate_real.py -- /path/to/project.pmm
 blender --background --python tests/manual/validate_sync_plan.py -- /path/to/project.pmm
