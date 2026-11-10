@@ -196,8 +196,8 @@ jobs:
           TAG: ${{ steps.release.outputs.tag }}
           SHA: ${{ steps.release.outputs.sha }}
         run: |
-          jq -n --arg version "$VERSION" --arg tag "$TAG" --arg sha "$SHA" --arg repo "$GITHUB_REPOSITORY" '{
-            event_type: "component-release",
-            client_payload: {component: "core", version: $version, tag: $tag, sha: $sha, source_repository: $repo}
+          jq -n --arg version "$VERSION" --arg tag "$TAG" --arg commit "$SHA" --arg repo "$GITHUB_REPOSITORY" '{
+            event_type: "component_released",
+            client_payload: {component: "core", repository: $repo, tag: $tag, commit: $commit, version: $version}
           }' | tee payload.json
           gh api "repos/$BUNDLED_REPO/dispatches" --input payload.json
