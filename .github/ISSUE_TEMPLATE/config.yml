@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a bug or request a feature
+    url: https://github.com/sen-trie/nine-sync-release/issues/new/choose
+    about: Users report NineSync issues in the release repository. Issues here are for maintainer-tracked work.

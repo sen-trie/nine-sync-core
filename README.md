@@ -24,6 +24,10 @@ This repository is part of the [combined NineSync extension](https://github.com/
 
 **Sync Now** skips unchanged clips and generally preserves edits to those clips in Blender. Use **Force Resync** when you want to replace a clip with the MMD version.
 
+## Reporting issues
+
+Report bugs and request features in the [NineSync release tracker](https://github.com/sen-trie/nine-sync-release/issues/new/choose), which covers both the combined extension and the standalone add-ons.
+
 ## License
 
 GPL-3.0-or-later. See `LICENSE`.

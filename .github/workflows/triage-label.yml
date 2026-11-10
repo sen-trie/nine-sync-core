@@ -1,0 +1,21 @@
+name: Triage label
+
+# Every new issue gets the needs-triage label, including issues opened without a template (API, CLI or
+# maintainers). Idempotent: an issue that already has the label is left alone.
+on:
+  issues:
+    types: [opened, reopened]
+
+permissions:
+  issues: write
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add needs-triage
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+        run: gh issue edit "$ISSUE" --repo "$REPO" --add-label needs-triage
