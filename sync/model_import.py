@@ -1,4 +1,3 @@
-import bpy
 import logging
 import traceback
 
@@ -17,7 +16,7 @@ from ..common.constants import ACTION_PREFIX, TEMP_PREFIX
 from ..common.logger import log
 from ..common.scene_utils import find_armature, short_text
 from ..common.timing import phase
-from ..pmm import build_vmd
+from ..pmm import bone_track_moves, build_vmd
 from .clips import (
     clip_track_names,
     find_bridge_clip_any,
@@ -26,10 +25,13 @@ from .clips import (
     primary_key_owner,
     release_stash,
 )
-from .mmd_tools_link import mmd_module, mmd_tools_modules, run_importer
+from .mmd_tools_link import mmd_tools_modules, run_importer
 from .morph_keys import ensure_morph_keys
 from .morphs import report_morphs, resolve_morph_names
+from .ik import apply_ik_keys
+from .motion import ik_switches, vmd_bone_name
 from .physics import import_physics_clip
+from .plan import vmd_bone_table
 from .scale import current_scale
 from .sync_state import forget_parts, rig_layout, write_parts
 from .targets import target_usable
@@ -51,26 +53,29 @@ def diagnose_bones(root, model):
             root.name,
         )
         return
-    names = set()
-    for pose_bone in armature.pose.bones:
-        mmd_bone = getattr(pose_bone, "mmd_bone", None)
-        if mmd_bone is not None and mmd_bone.name_j:
-            names.add(mmd_bone.name_j)
-    matched = [n for n in model.bone_names if n in names]
-    unmatched = [n for n in model.bone_names if n not in names]
+    table = vmd_bone_table(armature)
+    matched = [n for n in model.bone_names if vmd_bone_name(n) in table]
+    unmatched = [n for n in model.bone_names if vmd_bone_name(n) not in table]
     log.info(
-        "armature '%s': %d/%d PMM bones match mmd_bone.name_j",
+        "armature '%s': %d/%d PMM bones reach a bone through the VMD",
         armature.name,
         len(matched),
         len(model.bone_names),
     )
-    if unmatched:
-        log.warning("unmatched PMM bones (first 15): %s", unmatched[:15])
+    tracks = dict(zip(model.bone_names, model.bones))
+    losing = [n for n in unmatched if bone_track_moves(tracks[n])]
+    if losing:
+        log.warning("unmatched PMM bones with motion (first 15): %s", losing[:15])
+    if len(unmatched) > len(losing):
+        log.info(
+            "unmatched PMM bones holding only the rest pose, nothing lost (first 15): %s",
+            [n for n in unmatched if n not in losing][:15],
+        )
     animated = [n for n, keys in zip(model.bone_names, model.bones) if len(keys) > 1]
     log.info("bones with more than one keyframe: %d (%s)", len(animated), animated[:10])
 
 
-# Every key frame of a model, bones and morphs, to find its PMM frame span.
+# Every key frame of a model, bones, morphs and IK switches, to find its PMM frame span.
 def model_frames(model):
     for keys in model.bones:
         for key in keys:
@@ -78,6 +83,9 @@ def model_frames(model):
     for keys in model.morphs:
         for key in keys:
             yield key.frame
+    for points in ik_switches(model).values():
+        for frame, _state in points:
+            yield frame
 
 
 # Imports one PMM model onto its mmd_tools rig. The PMM keys go through a temp VMD
@@ -85,7 +93,8 @@ def model_frames(model):
 # in, the user's keys outside the PMM span are restored and, with clips on, results
 # are moved into reusable NLA clips. parts limits the import to "motion" or "shape":
 # the other part's IDs are left out of the targets, so its actions stay as they are.
-def import_model(root, model, settings, item, parts=ALL_PARTS):
+# rebuild (Force Resync) also rebuilds a UV morph setup that looks unchanged.
+def import_model(root, model, settings, item, parts=ALL_PARTS, rebuild=False):
     if not target_usable(root):
         raise RuntimeError(
             "target '%s' has no armature or is not in the scene; reassign the model"
@@ -115,11 +124,15 @@ def import_model(root, model, settings, item, parts=ALL_PARTS):
     if shape:
         report_morphs(model, morph_map, morph_available)
     with phase("vmd_build", label):
-        data = build_vmd(model, morph_map, bones=motion, morphs=shape)
+        data = build_vmd(
+            model, morph_map, bones=motion, morphs=shape
+        )
     if shape:
         try:
             with phase("uv_morphs", label):
-                prepare_uv_channels(root, meshes, model, morph_map, settings.uv_morphs)
+                prepare_uv_channels(
+                    root, meshes, model, morph_map, settings.uv_morphs, rebuild
+                )
         except Exception as error:
             log.error("UV morph setup failed: %s\n%s", error, traceback.format_exc())
     owners = collect_owners(targets)
@@ -183,12 +196,16 @@ def import_model(root, model, settings, item, parts=ALL_PARTS):
                     targets,
                     ACTION_PREFIX + label,
                     False,
+                    vmd_bone_table,
                 )
         finally:
             remove_file(tmp_path)
         if shape:
             with phase("morph_keys", label):
                 ensure_morph_keys(meshes, model, morph_map, root)
+        if motion and armature is not None:
+            with phase("ik_keys", label):
+                apply_ik_keys(armature, model, vmd_bone_table(armature))
         restored = restore_points(kept)
         tag_actions(plain_owners, label)
         log.info("restored %d preserved key(s) for '%s'", restored, model.name)
@@ -232,20 +249,6 @@ def import_model(root, model, settings, item, parts=ALL_PARTS):
             import_physics_clip(item, armature, settings, label)
         except Exception as error:
             log.error("physics clip failed: %s\n%s", error, traceback.format_exc())
-    if settings.update_scene_settings:
-        scene = bpy.context.scene
-        start, end = scene.frame_start, scene.frame_end
-        try:
-            auto_scene = mmd_module("auto_scene_setup")
-            auto_scene.setupFrameRanges()
-            auto_scene.setupFps()
-        except Exception as error:
-            log.warning("could not update scene settings: %s", error)
-        scene.frame_start = min(start, scene.frame_start)
-        scene.frame_end = max(end, scene.frame_end)
-        log.info("scene frame range kept at %d-%d", scene.frame_start, scene.frame_end)
-
-
 # Collects warnings logged during one model's sync so its row can show the WARN
 # state.
 class WarningCapture(logging.Handler):
@@ -283,10 +286,11 @@ def sync_target(target, model, settings, entry=None):
     log.addHandler(capture)
     parts = entry.run_parts if entry is not None else ALL_PARTS
     imported = tuple(p for p in parts if p in ALL_PARTS)
+    rebuild = entry is None or any(entry.parts[p].forced for p in imported)
     try:
         if imported:
             with phase("model", model_label(model)):
-                import_model(target.target, model, settings, target, imported)
+                import_model(target.target, model, settings, target, imported, rebuild)
             if entry is not None:
                 layout = rig_layout(target.target)
                 write_parts(target, entry, layout, settings, model_label(model), imported)

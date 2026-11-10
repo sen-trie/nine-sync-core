@@ -17,6 +17,7 @@ from .pmm import (
     PATH_LENGTH,
     PmmError,
     VisibilityKey,
+    decode_text,
     parse_pmm,
 )
 
@@ -38,15 +39,22 @@ MODEL_NAME_BYTES = 49
 BONE_NAME_BYTES = 19
 
 
-# A length-prefixed Shift-JIS string, cut at a character boundary to fit `limit`.
+# A name as MMD stores it: the Shift-JIS bytes cut at exactly `limit`, even inside a
+# two-byte character. MMD compares these bytes with the PMX, so cutting at a character
+# boundary instead (one byte short) makes it refuse the project.
+def name_bytes(text, limit):
+    return text.encode("cp932", errors="replace")[:limit]
+
+
+# A length-prefixed Shift-JIS string, cut the way MMD cuts it.
 def var_string(text, limit=255):
-    raw = b""
-    for char in text:
-        piece = char.encode("cp932", errors="replace")
-        if len(raw) + len(piece) > limit:
-            break
-        raw += piece
+    raw = name_bytes(text, limit)
     return bytes((len(raw),)) + raw
+
+
+# What the parser reads back for a name written by var_string.
+def stored_name(text, limit):
+    return decode_text(name_bytes(text, limit))
 
 
 def fixed_string(text, length):
@@ -226,8 +234,9 @@ def write_accessory_keys(keys):
 
 
 # The 39 bytes MMD keeps after each accessory's keys: the current value, which a
-# load shows until the first frame change. Written from the first key.
-def accessory_state(key):
+# load shows until the first frame change, written from the first key, and last the
+# accessory's additive switch.
+def accessory_state(key, additive=False):
     return struct.pack(
         "<Bii3ff3fBB",
         accessory_flags(key),
@@ -239,7 +248,7 @@ def accessory_state(key):
         key.scale,
         *key.position,
         key.shadow,
-        0,
+        1 if additive else 0,
     )
 
 
@@ -259,7 +268,7 @@ def write_accessories(accessories):
                 fixed_string(acc.path, ACCESSORY_PATH_LENGTH),
                 bytes((acc.draw_order,)),
                 write_accessory_keys(keys),
-                accessory_state(keys[0]),
+                accessory_state(keys[0], getattr(acc, "additive", False)),
             ]
         )
     return b"".join(out)
@@ -357,10 +366,10 @@ def write_model(model, opaque, bone_default, morph_default):
 
 
 # Offset of the 28-byte playback state from the end of the camera track: camera
-# state 37, light track 41, light state 24, accessory header 6. Layout decoded from
-# MMD saves with known ranges: current frame at +12, flag bytes at +16..+19 (repeat,
-# stop frame on, from frame on), play start at +20 and play end at +24. The first
-# 12 bytes are not understood and are left as the template has them.
+# state 37, light track 41, light state 24, accessory header 6. Layout as read by
+# pmm.read_play_range: the displayed frame at +0, repeat at +17, play start and end
+# on at +18 and +19, the frames at +20 and +24. +12 is not understood; it is written 0
+# as before, which MMD 9.32 loads without complaint.
 PLAYBACK_OFFSET = 37 + 41 + 24 + 6
 
 
@@ -427,8 +436,8 @@ def build_pmm(template, models, camera_keys, play_range=None, accessories=None):
     if accessories and (check.accessory_error or len(check.accessories) != len(accessories)):
         raise PmmError("the written accessories do not read back correctly")
     for wrote, read in zip(models, check.models):
-        stored = lambda names: [var_string(n, BONE_NAME_BYTES)[1:] for n in names]
-        if stored(read.bone_names) != stored(wrote.bone_names) or stored(read.morph_names) != stored(wrote.morph_names):
+        stored = lambda names: [stored_name(n, BONE_NAME_BYTES) for n in names]
+        if read.bone_names != stored(wrote.bone_names) or read.morph_names != stored(wrote.morph_names):
             raise PmmError("model '%s' did not read back correctly" % wrote.name)
         if read.outside_parents != list(wrote.outside_parents):
             raise PmmError("model '%s' outside parents did not read back correctly" % wrote.name)

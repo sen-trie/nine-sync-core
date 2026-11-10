@@ -71,18 +71,30 @@ def action_digest(action):
 
 
 # One destination as the record stores it. linked is false when the action survives but
-# no longer plays on its owner (strip removed, action unassigned).
-def output_entry(owner, action):
+# no longer plays on its owner (strip removed, action unassigned). lazy leaves the digest
+# for compare_outputs to work out only if it needs it; such an entry holds the action, so
+# it is never saved.
+def output_entry(owner, action, lazy=False):
     entry = {"owner": owner.name, "action": "", "digest": "", "linked": False}
     if action is None:
         return entry
     anim = owner.animation_data
     entry["action"] = action.name
-    entry["digest"] = action_digest(action)
+    if lazy:
+        entry["digest"] = None
+        entry["source"] = action
+    else:
+        entry["digest"] = action_digest(action)
     entry["linked"] = anim is not None and (
         anim.action == action or bool(strips_using(anim, action))
     )
     return entry
+
+
+def entry_digest(entry):
+    if entry["digest"] is None:
+        entry["digest"] = action_digest(entry.pop("source"))
+    return entry["digest"]
 
 
 def active_action(owner):
@@ -91,26 +103,28 @@ def active_action(owner):
 
 
 # The actions a part writes to, found the way import_model finds them.
-def part_outputs(row, layout, settings, part, label):
+def part_outputs(row, layout, settings, part, label, lazy=False):
     if part == "visible":
         found = [(m, find_visibility_action(m, label)) for m in layout.meshes]
-        return [output_entry(m, action) for m, action in found if action is not None]
+        return [output_entry(m, action, lazy) for m, action in found if action is not None]
     if part == "motion":
-        return [output_entry(layout.armature, row.clip)]
+        return [output_entry(layout.armature, row.clip, lazy)]
     entries = []
     for owner in layout.key_owners:
         if owner == layout.primary_keys and row.shape_clip is not None:
             action = row.shape_clip
         else:
             action = find_bridge_clip_any(owner, clip_track_names(label)[1:3])
-        entries.append(output_entry(owner, action))
+        entries.append(output_entry(owner, action, lazy))
     return entries
 
 
 # Whether the saved outputs still stand: "ok", "missing" (action gone or detached),
 # "switched" (another action selected) or "edited" (same action, different content).
 # Without clips nothing is user-selected, so a different active action counts as edited.
-def compare_outputs(recorded, current, use_clips):
+# Without check_edits an action under its saved name is not hashed, so an edit to it
+# reads as "ok"; a sync only needs that answer when settings changed.
+def compare_outputs(recorded, current, use_clips, check_edits=True):
     by_owner = {e["owner"]: e for e in current}
     worst = ("ok", "")
     for saved in recorded:
@@ -118,7 +132,11 @@ def compare_outputs(recorded, current, use_clips):
         if now is None or not now["action"]:
             return "missing", saved["action"] or saved["owner"]
         renamed = now["action"] != saved["action"]
-        same_content = now["digest"] == saved["digest"]
+        if not (renamed or check_edits):
+            if not now["linked"]:
+                return "missing", now["action"]
+            continue
+        same_content = entry_digest(now) == saved["digest"]
         if renamed and use_clips and not same_content:
             return "switched", now["action"]
         if not now["linked"]:
@@ -159,6 +177,35 @@ def write_parts(row, entry, layout, settings, label, names):
     row.sync_record = json.dumps(record, sort_keys=True, ensure_ascii=False)
 
 
+# Rewrites the settings hash of skipped parts whose record matched only under the rule
+# from before IMPORT_FORMAT, so later syncs match it directly. Nothing else changes.
+def upgrade_settings(row, entry):
+    names = [n for n, p in entry.parts.items() if p.upgrade and not p.runs]
+    record = read_record(row) if names else None
+    if record is None:
+        return
+    for name in names:
+        saved = record.get("parts", {}).get(name)
+        if saved is not None:
+            saved["settings"] = entry.parts[name].settings
+    row.sync_record = json.dumps(record, sort_keys=True, ensure_ascii=False)
+    log.info("sync record of '%s' moved to import format hashes: %s", row.pmm_name, names)
+
+
+# upgrade_settings for the camera and light record.
+def upgrade_scene_settings(settings, source, parts):
+    names = [n for n, p in parts.items() if p.upgrade and not p.runs]
+    record = read_scene_record(settings, source) if names else None
+    if record is None:
+        return
+    for name in names:
+        saved = record.get("parts", {}).get(name)
+        if saved is not None:
+            saved["settings"] = parts[name].settings
+    settings.scene_record = json.dumps(record, sort_keys=True, ensure_ascii=False)
+    log.info("camera/light record moved to import format hashes: %s", names)
+
+
 # A failed part may have half-replaced its action, so its record cannot be trusted and
 # the next sync treats it as never synced. Parts that were not attempted keep theirs.
 def forget_parts(row, names):
@@ -188,12 +235,12 @@ def find_scene_rig(kind):
 
 
 # What a camera or light import writes: the active action of each rig ID that has one.
-def scene_outputs(kind):
+def scene_outputs(kind, lazy=False):
     rig = find_scene_rig(kind)
     if rig is None:
         return []
     owners = collect_owners(list(rig))
-    return [output_entry(o, active_action(o)) for o in owners if active_action(o) is not None]
+    return [output_entry(o, active_action(o), lazy) for o in owners if active_action(o) is not None]
 
 
 # The camera and light record. It sits on the scene settings, like the model records sit

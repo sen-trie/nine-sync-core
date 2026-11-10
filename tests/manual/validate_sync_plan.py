@@ -56,13 +56,16 @@ def parse_with_mutation(data):
     return project
 
 
-def counting_importer(path, scale, targets, name, detect):
+def counting_importer(path, scale, targets, name, detect, *extra):
     calls["importer"].append(name)
-    return real_importer(path, scale, targets, name, detect)
+    return real_importer(path, scale, targets, name, detect, *extra)
 
 
 engine.parse_pmm = parse_with_mutation
 analysis.parse_pmm = parse_with_mutation
+# Mutations change the parse without changing the file, so a sync must not reuse the
+# preview's parse of the same bytes, as it does for a real file.
+engine.parsed_copy = lambda digest: None
 importer.run_importer = counting_importer
 
 
@@ -354,11 +357,11 @@ def main():
     mutations["apply"] = lambda project: [nudge_bone(i)(project) for i in index_of.values()]
     seen = []
 
-    def failing(path, scale, targets, name, detect):
+    def failing(path, scale, targets, name, detect, *extra):
         seen.append(name)
         if len(seen) == 2:
             raise RuntimeError("expected test failure")
-        return real_importer(path, scale, targets, name, detect)
+        return real_importer(path, scale, targets, name, detect, *extra)
 
     importer.run_importer = failing
     check("failed import still finishes the sync", sync(), settings.status)

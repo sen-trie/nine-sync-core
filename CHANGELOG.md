@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.0
+
+- Sync IK toggle keyframes, using Blender IK contrainsts
+- Cut bone, morph and model names to fit byte-limits when creating PMM.
+- Sync Now is one undo step, also when cancelled or failed partway.
+
 ## 0.6.0
 
 - Known limits of MMDBridge Physics: the baked VMD is not retimed to the scene frame rate, so set MMDBridge's export FPS to the scene's.

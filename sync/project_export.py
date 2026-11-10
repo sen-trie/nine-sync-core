@@ -311,7 +311,7 @@ def link_to_syncer(scene, settings, out_path, roots):
 
 # Writes the PMM, playing the scene frame range. Nothing in the scene changes: the
 # timeline is stepped to read motion and put back. See link_to_syncer for the exception.
-# With no model checked it still writes a project holding the camera, light and props.
+# With no model checked it still writes a project holding the camera and props.
 def create_pmm(scene, settings, out_path):
     items = [i for i in settings.export_items if i.enabled and i.target is not None]
     template = template_path()

@@ -1,5 +1,4 @@
 import bpy
-import hashlib
 import math
 import os
 import time
@@ -10,10 +9,10 @@ from .. import hooks
 from ..common.addon import addon_version
 from ..common.constants import PMM_FPS
 from ..common.logger import log
-from ..common.scene_utils import fps_differs, model_key, redraw_all, scene_fps
+from ..common.scene_utils import model_key, redraw_all, scene_fps
 from ..common.timing import begin_timings, finish_timings, phase
 from ..pmm import PmmError, parse_pmm
-from .analysis import clear_analysis
+from .analysis import clear_analysis, content_digest, parsed_copy
 from .audio import describe_audio, import_audio
 from .model_import import sync_target
 from .plan import BLOCKED, PART_LABELS, SKIP, build_plan, parse_checked
@@ -21,6 +20,7 @@ from .progress import SyncProgress
 from .retime import retime_factor, retime_project
 from .scale import current_scale
 from .scene_elements import import_scene_elements
+from .sync_state import upgrade_scene_settings, upgrade_settings
 from .targets import refresh_targets
 from .tempfiles import sweep_stale_temp
 
@@ -57,9 +57,9 @@ class SyncRun:
 
 
 # Logs size, mtime and a content hash of the PMM, and warns when the content equals
-# the previous sync's. That is the usual 'forgot to save in MMD' cause.
+# the previous sync's. That is the usual 'forgot to save in MMD' cause. Returns the hash.
 def log_file_state(path, data):
-    digest = hashlib.md5(data).hexdigest()[:12]
+    digest = content_digest(data)
     stat = os.stat(path)
     log.info(
         "PMM file: size=%d bytes, modified=%s, content hash=%s",
@@ -72,6 +72,7 @@ def log_file_state(path, data):
             "PMM content is unchanged since the previous sync attempt (save in MMD if you expected new data)"
         )
     _last_sync["digest"] = digest
+    return digest
 
 
 # Logs the first camera and light keys, to check them against MMD without a
@@ -146,6 +147,7 @@ def apply_entry(run, entry, row, model, settings):
         log.info("skip '%s': disabled", entry.pmm_name)
         return
     log_parts(entry)
+    upgrade_settings(row, entry)
     if entry.reason:
         log.warning("skip '%s': %s", entry.pmm_name, entry.reason)
         run.blocked += 1
@@ -186,10 +188,14 @@ def sync_steps(scene, run):
     with phase("read"):
         with open(path, "rb") as handle:
             data = handle.read()
-    log_file_state(path, data)
+    digest = log_file_state(path, data)
     yield from run.tick(0.05, "Parsing PMM")
     with phase("parse"):
-        project = parse_checked(data, parse_pmm)
+        project = parsed_copy(digest)
+        if project is None:
+            project = parse_checked(data, parse_pmm)
+        else:
+            log.info("PMM unchanged since the preview read it; its parse is reused")
     run.total = len(project.models)
     settings.pmm_accessory_count = len(project.accessories)
     factor = retime_factor(scene, settings)
@@ -202,10 +208,6 @@ def sync_steps(scene, run):
             scene_fps(scene),
             PMM_FPS,
         )
-    elif settings.retime_fps and settings.update_scene_settings and fps_differs(scene):
-        log.info(
-            "retiming skipped because Update Frame Range will switch the scene to 30 fps"
-        )
     log_scene_keys(project)
     refresh_targets(settings, project)
     settings.audio_note = describe_audio(project, settings)
@@ -216,7 +218,7 @@ def sync_steps(scene, run):
     )
     yield from run.tick(0.08, "Checking for changes")
     with phase("plan"):
-        plan = build_plan(scene, project, run.force, run.force_keys)
+        plan = build_plan(scene, project, run.force, run.force_keys, check_edits=False)
     rows = {row.key: row for row in settings.targets}
     by_key = {model_key(m): m for m in project.models}
     entries = plan.items
@@ -233,6 +235,7 @@ def sync_steps(scene, run):
     _last_sync["failed"] = run.failed
     yield from run.tick(0.82, "Updating camera and light")
     with phase("camera_light"):
+        upgrade_scene_settings(settings, plan.source, plan.scene)
         run.imported += import_scene_elements(scene, project, settings, plan)
     if project.accessories and not hooks.fx_installed():
         log.info(

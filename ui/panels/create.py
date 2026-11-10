@@ -79,6 +79,8 @@ class NINESYNC_PT_create(Panel):
         row.prop(settings, "export_bones", toggle=True)
         row.prop(settings, "export_morphs", toggle=True)
         row.prop(settings, "export_visibility", toggle=True)
+        row = layout.row(align=True)
+        row.enabled = settings.export_animation
         row.prop(settings, "export_markers", toggle=True)
         row = layout.row()
         row.scale_y = 1.5

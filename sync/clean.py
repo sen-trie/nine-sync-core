@@ -21,6 +21,7 @@ from ..common.constants import (
 from ..common.logger import log
 from ..common.scene_utils import find_rig_root
 from .audio import sequence_strips
+from .ik import restore_ik_influence
 from .mmd_tools_link import mmd_tools_modules
 from .rigs import remove_rig
 from .uv_morphs import clear_uv_channels
@@ -33,6 +34,9 @@ BONE_PATH = re.compile(
 
 
 KEY_PATH = re.compile(r'^key_blocks\["((?:[^"\\]|\\.)*)"\]\.value$')
+
+
+INFLUENCE_PATH = re.compile(r'^pose\.bones\[".*"\]\.constraints\[".*"\]\.influence$')
 
 
 # Reverts the quoting Blender applies to names inside data paths.
@@ -62,6 +66,7 @@ def clean_model_animation(root, counts):
     shape_values = []
     doomed = []
     hidden = []
+    switched = False
     for owner in owners:
         anim = owner.animation_data
         if anim is None:
@@ -85,8 +90,13 @@ def clean_model_animation(root, counts):
                     shape_values.append((owner, unescape_name(matched.group(1))))
                 if fcurve.data_path in VISIBILITY_PATHS and owner not in hidden:
                     hidden.append(owner)
+                if owner == armature and INFLUENCE_PATH.match(fcurve.data_path):
+                    switched = True
         doomed.extend(actions)
     clear_bridge_nla(owners)
+    # Likewise an IK the clip switched off would stay off.
+    if switched:
+        restore_ik_influence(armature)
     # Without its keys a mesh keeps the hide state of the current frame, and nothing
     # would show it again, so models the bridge hid are shown whatever the pose option.
     for owner in hidden:

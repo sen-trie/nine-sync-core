@@ -3,8 +3,7 @@ import os
 import struct
 import types
 
-from ..common.addon import addon_version
-from ..common.constants import ACTION_PREFIX
+from ..common.constants import ACTION_PREFIX, IMPORT_FORMAT
 from ..common.scene_utils import model_key
 from ..common.timing import phase
 from ..pmm import PmmError
@@ -16,18 +15,17 @@ from .motion import (
     bone_key_moves,
     bone_track_moves,
     digest_values,
+    fingerprint_and_digests,
+    ik_fingerprint,
+    IK_TRACK,
     keys_fingerprint,
     morph_track_moves,
-    motion_fingerprint,
     pack_bone_key,
     pack_camera_key,
     pack_light_key,
     pack_morph_key,
     pack_visibility_key,
-    shape_fingerprint,
-    track_digests,
     track_range,
-    visibility_fingerprint,
     visibility_hides,
     VISIBILITY_TRACK,
     vmd_bone_name,
@@ -77,6 +75,9 @@ class PartPlan:
         self.tracks = {}
         self.before = None
         self.changed = None
+        self.forced = False
+        self.legacy_settings = ()
+        self.upgrade = False
 
     @property
     def runs(self):
@@ -154,14 +155,32 @@ def bone_name_table(armature):
     return table
 
 
+# bone_name_table plus, for each bone whose name a VMD cannot hold whole (over 15 bytes,
+# or characters cp932 lacks), the name the VMD carries instead, when no other bone
+# carries the same one. The importer looks VMD names up in this table, so those bones
+# get their motion; MMD itself keys bones by index and never loses them.
+def vmd_bone_table(armature):
+    table = bone_name_table(armature)
+    carried = {}
+    for name, bone in table.items():
+        short = vmd_bone_name(name)
+        if short != name:
+            carried.setdefault(short, []).append(bone)
+    for short, bones in carried.items():
+        if short not in table and len(bones) == 1:
+            table[short] = bones[0]
+    return table
+
+
 # mmd_tools hides the bones the PMX marks not visible; Blender 5 keeps that flag on the
 # pose bone, older builds on the bone. MMD never plays keys on such bones.
 def bone_hidden(pose_bone):
     return bool(getattr(pose_bone, "hide", False) or pose_bone.bone.hide)
 
 
-# Which source tracks reach the rig. 'cut' are names longer than a VMD can carry: they
-# exist on the rig but the importer cannot find them. 'hidden' are moving tracks on bones
+# Which source tracks reach the rig, given vmd_bone_table. 'cut' are names longer than a
+# VMD can carry that another bone shares the carried name with: they exist on the rig
+# but the importer cannot tell them apart. 'hidden' are moving tracks on bones
 # hidden in the PMX: they are still imported, so Blender plays motion MMD ignores.
 def map_bones(model, table):
     report = types.SimpleNamespace(
@@ -237,28 +256,40 @@ def physics_state(row, settings):
     return (row.physics_vmd, stat.st_size, stat.st_mtime_ns)
 
 
+# Add-on versions that saved records with their own version (and mmd_tools') in the
+# settings hash, before IMPORT_FORMAT. A record that still matches under that rule is
+# current, so updating the add-on or mmd_tools alone neither re-imports nor blocks.
+LEGACY_VERSIONS = ((0, 4, 0), (0, 5, 0))
+
+
 # Everything besides the PMM keys that shapes a part's action. A change here means the
-# existing output no longer matches what a sync would produce.
+# existing output no longer matches what a sync would produce. Returns the hash and the
+# hashes a pre-IMPORT_FORMAT record would hold for the same import.
 def part_settings(part, scene, settings, root, signature, row):
-    common = (
-        tuple(addon_version()),
-        mmd_tools_version(),
-        round(retime_factor(scene, settings), 6),
-        round(current_scale(settings), 6),
-        True,  # the removed NLA Clips option, always on; kept so saved records still match
-        bool(settings.update_scene_settings),
-        root.name,
-    )
-    if part == "motion":
-        return digest_values(
-            # "CURVE" was the removed Interpolation Layout option; kept so saved records match
-            common, "CURVE", physics_state(row, settings), signature
-        )
+    retime = round(retime_factor(scene, settings), 6)
+    scale = round(current_scale(settings), 6)
     if part == "visible":
-        return digest_values(
-            tuple(addon_version()), round(retime_factor(scene, settings), 6), root.name, signature
-        )
-    return digest_values(common, bool(settings.uv_morphs), signature)
+        current = digest_values("format", IMPORT_FORMAT, part, retime, root.name, signature)
+        legacy = [digest_values(v, retime, root.name, signature) for v in LEGACY_VERSIONS]
+        return current, tuple(legacy)
+    # The removed Update Frame Range option, as records hashed it; always off now.
+    frame_range = False
+    physics = physics_state(row, settings) if part == "motion" else None
+    extra = physics if part == "motion" else bool(settings.uv_morphs)
+    current = digest_values(
+        "format", IMPORT_FORMAT, part, retime, scale, frame_range, root.name, extra, signature
+    )
+    legacy = []
+    mmd = mmd_tools_version()
+    for version in LEGACY_VERSIONS:
+        # True is the removed NLA Clips option and "CURVE" the removed Interpolation
+        # Layout option, as the old records hashed them.
+        common = (version, mmd, retime, scale, True, frame_range, root.name)
+        if part == "motion":
+            legacy.append(digest_values(common, "CURVE", physics, signature))
+        else:
+            legacy.append(digest_values(common, extra, signature))
+    return current, tuple(legacy)
 
 
 # Action name shown in the preview, and whether it already exists.
@@ -275,16 +306,24 @@ def describe_destination(part, entries, label):
 
 # The decision table. An edit in Blender is never replaced because of a mere settings
 # or version change; new PMM keys or an explicit selection are what authorize it.
+# Without check_edits (a sync, not the preview) actions are hashed only where the
+# answer changes what runs: settings changed while the PMM did not.
 def decide(
-    plan, record_part, record_note, current, source_changed, use_clips, changed_text="PMM motion changed"
+    plan, record_part, record_note, current, source_changed, use_clips, changed_text="PMM motion changed", check_edits=True
 ):
     verb = UPDATE if plan.exists else CREATE
     if record_part is None:
         plan.operation = verb
         plan.reason = record_note
         return
-    state, detail = compare_outputs(record_part["outputs"], current, use_clips)
-    settings_changed = record_part.get("settings") != plan.settings
+    stored = record_part.get("settings")
+    settings_changed = stored != plan.settings
+    if settings_changed and stored in plan.legacy_settings:
+        settings_changed = False
+        plan.upgrade = True
+    state, detail = compare_outputs(
+        record_part["outputs"], current, use_clips, check_edits or (settings_changed and not source_changed)
+    )
     if state == "missing":
         plan.operation = verb
         plan.reason = "Output '%s' is gone" % detail
@@ -321,13 +360,13 @@ def changed_tracks(saved, current):
     return names + [n for n in saved if n not in current]
 
 
-# (track names, tracks, key packer, fingerprint) a part is built from.
+# (track names, tracks, key packer) a part is built from.
 def part_source(part, model):
     if part == "motion":
-        return model.bone_names, model.bones, pack_bone_key, motion_fingerprint
+        return model.bone_names, model.bones, pack_bone_key
     if part == "shape":
-        return model.morph_names, model.morphs, pack_morph_key, shape_fingerprint
-    return [VISIBILITY_TRACK], [model.visibility], pack_visibility_key, visibility_fingerprint
+        return model.morph_names, model.morphs, pack_morph_key
+    return [VISIBILITY_TRACK], [model.visibility], pack_visibility_key
 
 
 CHANGED_TEXT = {
@@ -339,17 +378,20 @@ CHANGED_TEXT = {
 
 # Plans one part of a mapped model. Every part lives on NLA tracks, so outputs are
 # compared as clips.
-def plan_part(part, item, model, row, root, layout, scene, settings, signature, record, force):
+def plan_part(part, item, model, row, root, layout, scene, settings, signature, record, force, check_edits=True):
     label = model_label(model)
     plan = PartPlan(part)
-    names, tracks, pack, fingerprint = part_source(part, model)
+    names, tracks, pack = part_source(part, model)
     with phase("fingerprint", label):
-        plan.fingerprint = fingerprint(model)
-        plan.tracks = track_digests(names, tracks, pack)
+        plan.fingerprint, plan.tracks = fingerprint_and_digests(names, tracks, pack)
+        ik = ik_fingerprint(model) if part == "motion" else ""
+        if ik:
+            plan.fingerprint = digest_values(plan.fingerprint, ik)
+            plan.tracks[IK_TRACK] = ik[:8]
     plan.frame_range = track_range(tracks)
     plan.keys = sum(len(k) for k in tracks)
-    plan.settings = part_settings(part, scene, settings, root, signature, row)
-    current = part_outputs(row, layout, settings, part, label) if row is not None else []
+    plan.settings, plan.legacy_settings = part_settings(part, scene, settings, root, signature, row)
+    current = part_outputs(row, layout, settings, part, label, not check_edits) if row is not None else []
     plan.destination, plan.exists = describe_destination(part, current, label)
     saved = None
     note = "Not synced yet"
@@ -366,16 +408,17 @@ def plan_part(part, item, model, row, root, layout, scene, settings, signature, 
     if force:
         plan.operation = UPDATE if plan.exists else CREATE
         plan.reason = "Force Resync"
+        plan.forced = True
         return plan
     changed = saved is not None and saved.get("fingerprint") != plan.fingerprint
-    decide(plan, saved, note, current, changed, True, CHANGED_TEXT[part])
+    decide(plan, saved, note, current, changed, True, CHANGED_TEXT[part], check_edits)
     if part == "visible" and plan.runs and not visibility_hides(model.visibility):
         plan.reason = "PMM no longer hides the model; its NineSync visibility keys will be removed"
     return plan
 
 
 # Plans one PMM model into an item. Reads the rig and the record; writes nothing.
-def plan_model(model, row, scene, settings, source, force):
+def plan_model(model, row, scene, settings, source, force, check_edits=True):
     key = model_key(model)
     item = PlanItem(key, model.name or model.name_en or key)
     item.source = source
@@ -393,7 +436,7 @@ def plan_model(model, row, scene, settings, source, force):
         item.reason = "Target has no armature"
         return item
     with phase("mapping", item.pmm_name):
-        table = bone_name_table(layout.armature)
+        table = vmd_bone_table(layout.armature)
         resolved = resolve_morph_names(root, layout.meshes, model)[0]
         item.bones = map_bones(model, table)
         item.morphs = map_morphs(model, resolved)
@@ -421,14 +464,14 @@ def plan_model(model, row, scene, settings, source, force):
     morph_signature = digest_values(sorted(resolved.items()), groups)
     if model.bones:
         item.parts["motion"] = plan_part(
-            "motion", item, model, row, root, layout, scene, settings, bone_signature, record, force
+            "motion", item, model, row, root, layout, scene, settings, bone_signature, record, force, check_edits
         )
     if model.morphs and layout.meshes:
         item.parts["shape"] = plan_part(
-            "shape", item, model, row, root, layout, scene, settings, morph_signature, record, force
+            "shape", item, model, row, root, layout, scene, settings, morph_signature, record, force, check_edits
         )
     if settings.sync_visibility:
-        plan_visibility(item, model, row, root, layout, scene, settings, record, force)
+        plan_visibility(item, model, row, root, layout, scene, settings, record, force, check_edits)
     if "motion" in item.parts and row is not None and settings.use_physics_vmd and row.physics_vmd:
         if not os.path.isfile(bpy.path.abspath(row.physics_vmd)):
             item.parts["motion"].warnings.append("Baked physics VMD not found")
@@ -438,9 +481,9 @@ def plan_model(model, row, scene, settings, source, force):
 # The visibility part: planned while the PMM hides the model, or while NineSync keys from
 # an earlier sync are still on the meshes and have to go. A model the PMM never hides
 # and that has no such keys needs nothing.
-def plan_visibility(item, model, row, root, layout, scene, settings, record, force):
+def plan_visibility(item, model, row, root, layout, scene, settings, record, force, check_edits=True):
     label = model_label(model)
-    owned = row is not None and bool(part_outputs(row, layout, settings, "visible", label))
+    owned = row is not None and bool(part_outputs(row, layout, settings, "visible", label, True))
     if not visibility_hides(model.visibility) and not owned:
         return
     if not layout.meshes:
@@ -448,33 +491,31 @@ def plan_visibility(item, model, row, root, layout, scene, settings, record, for
         return
     signature = digest_values(sorted(m.name for m in layout.meshes))
     item.parts["visible"] = plan_part(
-        "visible", item, model, row, root, layout, scene, settings, signature, record, force
+        "visible", item, model, row, root, layout, scene, settings, signature, record, force, check_edits
     )
 
 
 # Everything besides the keys that shapes the camera or light output, plus warnings
 # that belong in the preview. Camera follow targets count, so reassigning a followed
-# model updates the camera and nothing else.
+# model updates the camera and nothing else. Returns (hash, legacy hashes as in
+# part_settings, warnings).
 def scene_settings(kind, scene, settings, project):
-    common = (
-        tuple(addon_version()),
-        round(retime_factor(scene, settings), 6),
-        round(current_scale(settings), 6),
-    )
+    retime = round(retime_factor(scene, settings), 6)
+    scale = round(current_scale(settings), 6)
     if kind == "light":
-        return digest_values(common), []
+        current = digest_values("format", IMPORT_FORMAT, kind, retime, scale)
+        legacy = [digest_values((v, retime, scale)) for v in LEGACY_VERSIONS]
+        return current, tuple(legacy), []
     table, problems = follow_table(project, settings)
     follows = sorted(
         (pair, None if found is None else (found[0].name, found[1]))
         for pair, found in table.items()
     )
-    signature = (
-        mmd_tools_version(),
-        bool(settings.follow_camera),
-        bool(settings.follow_rotation),
-        follows,
-    )
-    return digest_values(common, signature), problems
+    options = (bool(settings.follow_camera), bool(settings.follow_rotation), follows)
+    current = digest_values("format", IMPORT_FORMAT, kind, retime, scale, options)
+    mmd = mmd_tools_version()
+    legacy = [digest_values((v, retime, scale), (mmd,) + options) for v in LEGACY_VERSIONS]
+    return current, tuple(legacy), problems
 
 
 SCENE_SOURCES = {
@@ -485,10 +526,10 @@ SCENE_SOURCES = {
 
 # Plans the camera or the light on its own, with the decision table of a model part:
 # a camera edit leaves the light alone and the other way round.
-def plan_scene_part(kind, scene, project, settings, record, record_note, force):
+def plan_scene_part(kind, scene, project, settings, record, record_note, force, check_edits=True):
     attribute, pack, toggle, default_name = SCENE_SOURCES[kind]
     plan = PartPlan(kind)
-    current = scene_outputs(kind)
+    current = scene_outputs(kind, not check_edits)
     names = list(dict.fromkeys(e["action"] for e in current))
     plan.exists = bool(names)
     plan.destination = default_name
@@ -509,7 +550,7 @@ def plan_scene_part(kind, scene, project, settings, record, record_note, force):
     plan.fingerprint = keys_fingerprint(keys, pack)
     plan.keys = len(keys)
     plan.frame_range = track_range([keys])
-    plan.settings, problems = scene_settings(kind, scene, settings, project)
+    plan.settings, plan.legacy_settings, problems = scene_settings(kind, scene, settings, project)
     plan.warnings.extend(problems)
     saved = record.get("parts", {}).get(kind) if record is not None else None
     if saved is not None:
@@ -519,15 +560,15 @@ def plan_scene_part(kind, scene, project, settings, record, record_note, force):
         plan.reason = "Force Resync"
         return plan
     changed = saved is not None and saved.get("fingerprint") != plan.fingerprint
-    decide(plan, saved, record_note, current, changed, False, "PMM %s keys changed" % kind)
+    decide(plan, saved, record_note, current, changed, False, "PMM %s keys changed" % kind, check_edits)
     return plan
 
 
-def plan_scene(scene, project, settings, source, force):
+def plan_scene(scene, project, settings, source, force, check_edits=True):
     record = read_scene_record(settings, source)
     note = "PMM file changed" if record is None and settings.scene_record else "Not synced yet"
     return {
-        kind: plan_scene_part(kind, scene, project, settings, record, note, force)
+        kind: plan_scene_part(kind, scene, project, settings, record, note, force, check_edits)
         for kind in SCENE_KINDS
     }
 
@@ -540,8 +581,10 @@ def source_identity(settings):
 
 
 # The shared, side-effect free plan: preview shows it and a sync executes a fresh copy,
-# so the two cannot disagree. force_keys limits a forced run to those rows.
-def build_plan(scene, project, force=False, force_keys=()):
+# so the two cannot disagree. force_keys limits a forced run to those rows. check_edits
+# off (a sync) hashes actions only where that changes what runs, so an unchanged sync
+# may not name an edited clip in the log; the preview keeps it on and names every one.
+def build_plan(scene, project, force=False, force_keys=(), check_edits=True):
     settings = scene.mmd_bridge
     plan = SyncPlan()
     plan.factor = retime_factor(scene, settings)
@@ -552,7 +595,7 @@ def build_plan(scene, project, force=False, force_keys=()):
     for model in project.models:
         key = model_key(model)
         forced = force or key in force_keys
-        item = plan_model(model, rows.get(key), scene, settings, source, forced)
+        item = plan_model(model, rows.get(key), scene, settings, source, forced, check_edits)
         if item.selected and item.target_name:
             claimed.setdefault(item.target_name, []).append(item)
         plan.items.append(item)
@@ -563,5 +606,5 @@ def build_plan(scene, project, force=False, force_keys=()):
                 item.warnings.append(
                     "%d PMM models share the target '%s'" % (len(sharing), item.target_name)
                 )
-    plan.scene = plan_scene(scene, project, settings, source, force)
+    plan.scene = plan_scene(scene, project, settings, source, force, check_edits)
     return plan

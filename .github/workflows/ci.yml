@@ -39,6 +39,7 @@ jobs:
           python tests/t_animation.py
           python tests/t_sync_plan.py
           python tests/t_selective_sync.py
+          python tests/t_review_fixes.py
       - name: Core registers alone
         working-directory: core
         run: python tests/t_registration.py

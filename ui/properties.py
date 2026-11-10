@@ -176,11 +176,6 @@ class MMDBridgeSettings(PropertyGroup):
         description="Apply UV morphs, including the ones inside group morphs, by offsetting the base texture in the material nodes. Needed for effects such as the > < eyes",
         default=True,
     )
-    update_scene_settings: BoolProperty(
-        name="Update Frame Range",
-        description="Let mmd_tools set the scene frame range and FPS on every sync; the range is only ever widened",
-        default=False,
-    )
     sync_camera: BoolProperty(name="Sync Camera", default=True)
     sync_light: BoolProperty(name="Sync Light", default=True)
     # Camera and light counterpart of MMDBridgeTarget.sync_record.

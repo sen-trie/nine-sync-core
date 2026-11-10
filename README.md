@@ -1,96 +1,29 @@
 # NineSync: PMM Bridge
 
-Live-syncs MikuMikuDance `.pmm` projects into Blender through mmd_tools: model motion and morphs, UV morphs, NLA clips, camera, light and audio.
+Import and sync MikuMikuDance `.pmm` projects in Blender, including model animations, morphs, camera movement, lighting and audio. Sync again after editing your MMD project to update your Blender scene.
 
-Accessories (`.x`) and MME effects (`.fx`) are handled by the separate add-on **NineSync: FX Importer** (`ninesync_fx`). This add-on never touches effects. When a PMM contains accessories and FX is not installed, the panel shows a notice.
+This repository is part of the [combined NineSync extension](https://github.com/sen-trie/nine-sync-release).
 
 ## Requirements
 
-- Blender 5.3 or newer
-- mmd_tools 4.5.5+
-- Optional: NineSync: FX Importer for accessories and effects
+- Blender 5.3+
+- [mmd_tools](https://extensions.blender.org/add-ons/mmd-tools/) 4.5.5+
 
-## Install
+## Installation
 
-1. Install and enable mmd_tools.
-2. In Blender, open Edit > Preferences > Get Extensions, choose Install from Disk in the top-right menu, and pick the `ninesync` zip.
-3. Open the 3D Viewport sidebar (N) and find the `NineSync` tab.
+1. Install and enable **mmd_tools** in Blender.
+2. Download the PMM Bridge extension ZIP from [Releases](https://github.com/sen-trie/nine-sync-core/releases).
+3. In Blender, open **Edit > Preferences > Get Extensions**, select **Install from Disk**, and choose the ZIP.
 
-To build the zip from this folder:
+## Getting started
 
-```
-blender --command extension build --source-dir . --output-dir <folder>
-```
+1. In the **3D Viewport**, press **N** and open the **NineSync** tab.
+2. Select your `.pmm` project and configure the model targets.
+3. Click **Sync Now** to import or update animations.
+4. Use **Preview** to review changes before syncing, or **PMM Motion Inspector** to see how motion is assigned.
 
-The add-on runs on its own. NineSync: FX Importer is a separate zip, installed the same way, in either order.
-
-## What a sync updates
-
-Sync Now works from a plan. **Preview** opens a window listing the PMX models that changed since the last sync, before and after, with unchanged models at the bottom. **PMM Motion Inspector**, at the bottom of the sidebar, shows the source motion and how it maps to each target. Neither changes the scene, and a sync always plans afresh, so what runs matches what the file says at that moment. Each enabled model has up to three destinations, its Motion Clip, its Shapekey Clip and, with Sync Model Visibility on, its visibility keys, and each gets one of:
-
-| Operation        | When                                                                                                     |
-| ---------------- | -------------------------------------------------------------------------------------------------------- |
-| Create           | The destination does not exist yet, or was deleted                                                       |
-| Update           | The PMM keys for it changed, you selected a different clip, its settings changed, or it was never synced |
-| Skip (Unchanged) | Nothing relevant changed                                                                                 |
-| Blocked          | No target, or settings changed on a clip you edited in Blender                                           |
-
-**Your edits.** If you edit a synced clip in Blender and the PMM has not changed, the clip is skipped and the edit stays. A settings change alone will not replace it: the clip shows Blocked until you press Force Resync. New keys in the PMM do update it, with a warning in the preview; as always, only keys inside the PMM frame span are replaced. Sync Now is the normal choice. Force Resync, at the top of the Inspector, imports everything regardless, and each model in the Inspector has its own.
-
-Camera and light are two more destinations, planned the same way but each on its own, so an edit to one never rebuilds the other. Their record lives on the scene settings (`scene_record`). The camera's settings include the model and bone each followed key resolves to. Audio and FX hooks still run on every sync.
-
-**Model visibility** (Options > Sync Model Visibility, off by default). MMD keys a model's show/hide in its display keyframes, which also hold the IK switches and outside parents; NineSync reads only the show/hide flag. A hidden model hides every mesh of its mmd*tools rig, with constant `hide_viewport` and `hide_render` keys at the PMM frames and no fade. The keys sit in one action, `MMDBridge*<model>\_visibility`, played from an NLA track of the same name on each mesh, so the mesh's active action is never replaced and your own visibility keys win. It is a third destination of the model row, beside Motion and Shapekey, and is skipped while unchanged. When the PMM stops hiding a model, the next sync removes these keys and shows the meshes. Turning the option off leaves existing keys as they are; Clean removes them. The armature and the rig's other objects are not hidden. Create MMD Project writes it back (Export Animation > Visibility): a model is hidden in MMD where every one of its meshes is hidden in the viewport or in renders, read at each frame those properties are keyed, from the active action or NLA.
-
-**How change detection works.** A model is identified by its PMM slot and name (`model_key`, for example `0:Miku`), so two models with the same name stay separate. Renaming a model or moving it to another slot in MMD makes it a new row, which syncs as new. Bone and morph tracks are hashed separately from their parsed keys, including interpolation, so re-saving a PMM without changing its motion causes no import.
-
-The last successful state is stored as JSON on each model row (`sync_record`), so it saves, undoes and travels with the `.blend` and cannot apply to another file. It holds the hashes, the import settings, a hash of the PMM path (never the path itself) and a content hash of each destination action. A record moves forward only after its part imported successfully; a failed part forgets its record and retries, and Clean or changing the target clears it.
-
-Esc cancels between models, never during one, so each model ends up fully synced or untouched. The window redraws between models; a single model's import blocks, so progress moves in stages rather than by exact percentage. Phase timings go to the `NineSyncLog` text only.
-
-## Using it with NineSync: FX
-
-Both add-ons put their panels in the sidebar tab `NineSync`. They never import each other. They meet in a small registry stored in `bpy.app.driver_namespace["ninesync_hooks"]` (see `hooks.py`, identical in both repos):
-
-| Hook                    | Called by core                                 | FX does                                                 |
-| ----------------------- | ---------------------------------------------- | ------------------------------------------------------- |
-| `post_sync(ctx)`        | `sync()`, after camera and light, before audio | imports accessories and effects, returns the item count |
-| `clean(scene, options)` | Clean, when "Accessories & effects" is ticked  | deletes accessory objects, returns a counts dict        |
-| `report(context)`       | Support Report                                 | returns extra report lines                              |
-
-`ctx` is a `types.SimpleNamespace` with `scene`, `project` (already retimed), `pmm_path`, `targets` (`{model_key: mmd_tools root}`), `unit`, `retimed` (always True from core), `integrated` (True), `core_version`.
-
-`registry()["shared"]["import_scale"]` carries the "set import scale" preset to FX's accessory importer.
-
-`API_VERSION` is 1. On a mismatch each side logs a warning and skips the hooks.
-
-## Layout
-
-```
-__init__.py    register, load handler, hook registration
-hooks.py       hook registry client (byte-identical in ninesync-fx)
-pmm.py         PMM parser (core only; FX reads PMM data through ctx.project)
-pmm_writer.py  writes a PMM for Create MMD Project
-x_writer.py    writes .x props for Create MMD Project
-common/        constants, logging, scene and animation helpers (no sync logic)
-sync/          everything that touches mmd_tools or writes animation:
-               engine, plan, change detection, models, morphs, UV morphs,
-               clips, camera, light, audio, clean, report, project export
-ui/            properties, operators, preferences, panels/
-tests/         see tests/README.md
-```
-
-## Compatibility
-
-Only the combinations listed here are documented; others are untested.
-
-| core  | FX    | hook API |
-| ----- | ----- | -------- |
-| 0.4.x | 0.3.x | 1        |
-| 0.3.x | 0.3.x | 1        |
-| 0.2.x | 0.2.x | 1        |
+**Sync Now** skips unchanged clips and generally preserves edits to those clips in Blender. Use **Force Resync** when you want to replace a clip with the MMD version.
 
 ## License
 
-Copyright (C) 2026 sentrie
-
-GPL-3.0-or-later; see `LICENSE`.
+GPL-3.0-or-later. See `LICENSE`.

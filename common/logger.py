@@ -8,6 +8,9 @@ from .constants import LOG_TEXT_MAX_LINES, LOG_TEXT_NAME
 log = logging.getLogger("NineSync")
 
 
+# Writes the log into the NineSyncLog text. Past the line limit the oldest lines go, not
+# the whole text, so a long sync keeps its start until Support Report reads it. Trimmed
+# to two thirds of the limit at a time, so the rewrite does not run on every line.
 class TextBlockHandler(logging.Handler):
     def emit(self, record):
         try:
@@ -15,7 +18,8 @@ class TextBlockHandler(logging.Handler):
                 LOG_TEXT_NAME
             )
             if len(text.lines) > LOG_TEXT_MAX_LINES:
-                text.clear()
+                kept = text.as_string().splitlines()[-(LOG_TEXT_MAX_LINES * 2 // 3):]
+                text.from_string("\n".join(kept) + "\n")
             text.write(self.format(record) + "\n")
         except Exception:
             pass

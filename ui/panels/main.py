@@ -64,11 +64,6 @@ class MMDBRIDGE_PT_main(Panel):
                 icon="TIME",
             )
             fps_box.prop(settings, "retime_fps")
-            if settings.retime_fps and settings.update_scene_settings:
-                draw_wrapped(
-                    fps_box,
-                    "Update Frame Range also switches the scene to 30 fps, so retiming is skipped.",
-                )
         if scale_warning_active(settings):
             box = layout.box()
             header = box.row()

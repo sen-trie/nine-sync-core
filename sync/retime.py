@@ -3,7 +3,7 @@ from ..common.scene_utils import fps_differs, scene_fps
 
 
 def retime_factor(scene, settings):
-    if not settings.retime_fps or settings.update_scene_settings:
+    if not settings.retime_fps:
         return 1.0
     if not fps_differs(scene):
         return 1.0
@@ -34,7 +34,13 @@ def retime_project(project, factor):
         model.bones = [retime_keys(keys, factor) for keys in model.bones]
         model.morphs = [retime_keys(keys, factor) for keys in model.morphs]
         model.visibility = retime_keys(model.visibility, factor, True)
+        model.ik_keys = retime_keys(model.ik_keys, factor, True)
         model.last_frame = int(round(model.last_frame * factor))
+    if project.play_range is not None:
+        project.play_range = project.play_range._replace(
+            start=int(round(project.play_range.start * factor)),
+            end=int(round(project.play_range.end * factor)),
+        )
     project.camera_keys = retime_keys(project.camera_keys, factor, True)
     project.light_keys = retime_keys(project.light_keys, factor, True)
     for acc in project.accessories:

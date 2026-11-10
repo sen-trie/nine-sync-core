@@ -1,3 +1,5 @@
+import numpy
+
 from ..common.animation import iter_fcurves, rewrite_fcurve
 from ..common.logger import log
 from .morphs import expand_group_morph, group_morph_table, uv_morph_table
@@ -17,6 +19,42 @@ def sample_morph(keys, frame):
                 return a.weight
             return a.weight + (b.weight - a.weight) * (frame - a.frame) / span
     return keys[-1].weight
+
+
+# sample_morph at many frames at once. Same segment choice (the first one that holds
+# the frame) and the same float operations in the same order, so every value is
+# bit-identical to the loop, without its cost of keys times frames.
+def sample_morph_many(keys, frames):
+    at = numpy.asarray(frames, dtype=numpy.float64)
+    key_frames = numpy.array([k.frame for k in keys], dtype=numpy.float64)
+    weights = numpy.array([k.weight for k in keys], dtype=numpy.float64)
+    out = numpy.empty(len(at), dtype=numpy.float64)
+    low = at <= key_frames[0]
+    high = ~low & (at >= key_frames[-1])
+    out[low] = weights[0]
+    out[high] = weights[-1]
+    inside = ~(low | high)
+    if inside.any():
+        x = at[inside]
+        right = numpy.searchsorted(key_frames, x, side="left")
+        left = right - 1
+        span = key_frames[right] - key_frames[left]
+        value = weights[left] + (weights[right] - weights[left]) * (x - key_frames[left]) / span
+        out[inside] = value
+    return out
+
+
+# True when mmd_tools' morph binding drives this rig (Morph Tools > Bind): it unmutes the
+# placeholder's first shape key, and its drivers then apply every morph, bone and
+# material offsets of group morphs included, from the slider keys the VMD import sets.
+# Reads only, unlike mmd_tools' placeholder(), which can add a shape key.
+def morphs_bound(root):
+    placeholder = next(
+        (c for c in root.children if getattr(c, "mmd_type", "") == "PLACEHOLDER" and c.type == "MESH"),
+        None,
+    )
+    keys = getattr(getattr(placeholder, "data", None), "shape_keys", None)
+    return keys is not None and len(keys.key_blocks) > 0 and not keys.key_blocks[0].mute
 
 
 # Groups morph tracks by the shape key they finally drive, expanding group morphs.
@@ -81,12 +119,11 @@ def ensure_morph_keys(hosts, model, resolved, root):
             if (kind, leaf) not in group_driven and path in existing:
                 continue
             frames = sorted({k.frame for mkeys, _ in items for k in mkeys})
-            values = []
-            for frame in frames:
-                total = sum(
-                    factor * sample_morph(mkeys, frame) for mkeys, factor in items
-                )
-                values.append(min(max(total, block.slider_min), block.slider_max))
+            total = numpy.zeros(len(frames), dtype=numpy.float64)
+            for mkeys, factor in items:
+                total = total + factor * sample_morph_many(mkeys, frames)
+            low, high = block.slider_min, block.slider_max
+            values = [min(max(float(v), low), high) for v in total]
             block.value = values[0]
             try:
                 keys.keyframe_insert(data_path=path, frame=frames[0])
@@ -123,9 +160,14 @@ def ensure_morph_keys(hosts, model, resolved, root):
             "shape keys driven by mmd_tools morph binding were left to their drivers: %s",
             sorted(set(driven_skipped))[:20],
         )
-    if skipped:
+    if skipped and morphs_bound(root):
+        log.info(
+            "group morph bone/material offsets are applied by mmd_tools' morph binding from the keyed sliders: %s",
+            skipped[:20],
+        )
+    elif skipped:
         log.warning(
-            "group morph offsets that are not shape keys or UV morphs were not applied (material/bone): %s",
+            "group morph offsets that are not shape keys or UV morphs were not applied (material/bone); Bind morphs in mmd_tools' Morph Tools to apply them: %s",
             skipped[:20],
         )
     return written

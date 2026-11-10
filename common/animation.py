@@ -111,12 +111,26 @@ def snapshot_outside(owners, low, high, sources=None, keep_all=None):
     return saved
 
 
+# (data_path, index) -> fcurve on each owner's active action, read once per owner:
+# finding every saved curve by scanning the action cost curves x saved curves.
+def fcurve_index(owner):
+    data = owner.animation_data
+    action = data.action if data else None
+    if action is None:
+        return {}
+    return {(fc.data_path, fc.array_index): fc for fc in iter_fcurves(action, data.action_slot)}
+
+
 # Re-inserts keys saved by snapshot_outside, recreating the fcurve when the import
 # discarded it. Returns how many keys were restored.
 def restore_points(saved):
     restored = 0
+    tables = {}
     for owner, data_path, index, group, points in saved:
-        fcurve = find_fcurve(owner, data_path, index)
+        pointer = owner.as_pointer()
+        if pointer not in tables:
+            tables[pointer] = fcurve_index(owner)
+        fcurve = tables[pointer].get((data_path, index))
         if fcurve is None:
             fcurve = create_fcurve(owner, data_path, index, group, points[0][0])
         if fcurve is None:

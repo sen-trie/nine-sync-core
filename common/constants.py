@@ -61,6 +61,12 @@ UV_SLIDER_LIMIT = 10.0
 PMM_FPS = 30.0
 
 
+# Version of what a sync writes into Blender, hashed into every sync record in place of
+# the add-on version. Bump it only when an import of unchanged PMM data and settings
+# would write different actions, so updates that change nothing else re-import nothing.
+IMPORT_FORMAT = 1
+
+
 AUDIO_STATE_SIZE = 28
 
 

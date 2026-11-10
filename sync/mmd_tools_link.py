@@ -146,13 +146,14 @@ class CollectHandler(logging.Handler):
 # Drives mmd_tools' VMDImporter directly instead of the operator, so one VMD can be
 # assigned to several objects. Constructor arguments are filtered by signature to
 # tolerate mmd_tools versions that differ. Root logging is swapped for a collector
-# and the frame forced to 0 during the import, then both are restored.
-def run_importer(tmp_path, scale, targets, action_name, detect_changes):
+# and the frame forced to 0 during the import, then both are restored. bone_mapper
+# replaces mmd_tools' own name table (armature -> {VMD name: pose bone}).
+def run_importer(tmp_path, scale, targets, action_name, detect_changes, bone_mapper=None):
     importer_mod, _model_mod, utils_mod = mmd_tools_modules()
     wanted = dict(
         filepath=tmp_path,
         scale=scale,
-        bone_mapper=utils_mod.makePmxBoneMap,
+        bone_mapper=bone_mapper or utils_mod.makePmxBoneMap,
         use_pose_mode=False,
         frame_margin=0,
         use_mirror=False,

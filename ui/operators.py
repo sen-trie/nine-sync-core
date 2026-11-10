@@ -13,7 +13,7 @@ from ..sync.accessory_export import refresh_prop_colors
 from ..sync.audio import describe_audio
 from ..sync.clean import run_clean
 from ..sync.analysis import analyze, clear_analysis
-from ..sync.engine import SyncDriver, run_sync, sync_running
+from ..sync.engine import SyncDriver, sync_running
 from ..sync.mmd_tools_link import mmd_tools_available, mmd_tools_status
 from ..sync.project_export import create_pmm, refresh_export_items
 from ..sync.rigs import ensure_camera_rig
@@ -27,10 +27,13 @@ from .preferences import addon_preferences, apply_import_scale
 from .relink import refuse_if_outdated
 
 
+# UNDO makes each sync one undo step. REGISTER is left out on purpose: the redo panel
+# would re-run a whole blocking sync on every option tweak.
 class MMDBRIDGE_OT_sync_now(Operator):
     bl_idname = "ninesync.sync_now"
     bl_label = "Sync Now"
-    bl_description = "Sync the selected models from the PMM. Unchanged models are skipped. Esc cancels between models"
+    bl_description = "Sync the selected models from the PMM. Unchanged models are skipped. Esc cancels between models; Ctrl+Z undoes the whole sync"
+    bl_options = {"UNDO"}
 
     force: BoolProperty(
         name="Force Resync",
@@ -68,16 +71,29 @@ class MMDBRIDGE_OT_sync_now(Operator):
     def force_keys(self):
         return (self.force_key,) if self.force_key else ()
 
-    def conclude(self, context, ok):
+    # FINISHED whenever the scene may have changed, so the undo step is pushed for a
+    # failed or cancelled sync that imported part of the models too.
+    def conclude(self, context, driver):
         status = context.scene.mmd_bridge.status
-        self.report({"INFO"} if ok else {"ERROR"}, status)
-        return {"FINISHED"} if ok else {"CANCELLED"}
+        run = driver.run
+        changed = run.imported or run.synced or run.failed
+        if driver.outcome == "cancelled":
+            self.report({"WARNING"}, status)
+        else:
+            self.report({"INFO"} if driver.ok else {"ERROR"}, status)
+        return {"FINISHED"} if driver.ok or changed else {"CANCELLED"}
 
     # Blocking path for scripts and background mode, where no event loop can tick.
     def execute(self, context):
         if not self.ready(context):
             return {"CANCELLED"}
-        return self.conclude(context, run_sync(context.scene, self.force, self.force_keys()))
+        driver = SyncDriver(context.scene, self.force, self.force_keys())
+        try:
+            while driver.step():
+                pass
+        finally:
+            driver.close()
+        return self.conclude(context, driver)
 
     # One work unit per timer tick, so Blender redraws the progress between models and
     # Esc is heard. Everything stays on the main thread.
@@ -96,10 +112,7 @@ class MMDBRIDGE_OT_sync_now(Operator):
         elif event.type == "TIMER":
             if not self._driver.step():
                 self.release(context)
-                if self._driver.outcome == "cancelled":
-                    self.report({"WARNING"}, context.scene.mmd_bridge.status)
-                    return {"CANCELLED"}
-                return self.conclude(context, self._driver.ok)
+                return self.conclude(context, self._driver)
         return {"RUNNING_MODAL"}
 
     def cancel(self, context):

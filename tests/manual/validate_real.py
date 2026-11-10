@@ -291,6 +291,8 @@ def main():
     roots = import_models(project)
     settings = scene.mmd_bridge
     settings.filepath = PMM_PATH
+    # Sync Audio is off by default since 0.5.0; the audio checks need it on.
+    settings.sync_audio = True
     sync("30 fps")
     check_all(project, roots, 1.0, "30 fps")
     first_totals = {i: key_total(r) for i, r in roots.items()}
@@ -301,7 +303,6 @@ def main():
     check("resync keeps one sound strip", len(sounds) <= 1)
 
     settings.retime_fps = True
-    settings.update_scene_settings = False
     scene.render.fps = 60
     sync("60 fps")
     retimed = fresh_project()

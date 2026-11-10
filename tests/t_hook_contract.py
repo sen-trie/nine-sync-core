@@ -79,7 +79,7 @@ entry.parts["motion"] = plan_mod.PartPlan("motion")
 entry.parts["motion"].operation = plan_mod.UPDATE
 plan = plan_mod.SyncPlan()
 plan.items = [entry]
-engine.build_plan = lambda *a: plan
+engine.build_plan = lambda *a, **k: plan
 
 
 def post_sync(ctx):
@@ -97,7 +97,6 @@ scene.render.fps_base = 1.0
 settings = scene.mmd_bridge
 settings.filepath = os.path.join(REPO, "assets", "kagamine.pmm")
 settings.retime_fps = True
-settings.update_scene_settings = False
 target = settings.targets.add()
 target.key = model_key(model)
 target.pmm_name = model.name

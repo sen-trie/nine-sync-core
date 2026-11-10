@@ -2,16 +2,17 @@ import hashlib
 import struct
 import types
 
-from ..pmm import encode_name
+from ..pmm import REST_EPSILON, bone_key_moves, bone_track_moves, encode_name
 
 
-REST_EPSILON = 1e-6
 BONE_KEY = struct.Struct("<i3d4d")
 MORPH_KEY = struct.Struct("<id")
 VISIBILITY_KEY = struct.Struct("<iB")
 CAMERA_KEY = struct.Struct("<id3d3diiii")
 LIGHT_KEY = struct.Struct("<i3d3d")
 VISIBILITY_TRACK = "visibility"
+# Name the IK switches go under in a motion record's per-track digests.
+IK_TRACK = "IK switches"
 
 
 # Hash of canonical parsed tracks, not raw file bytes: re-saving a PMM or changing an
@@ -79,30 +80,53 @@ def visibility_fingerprint(model):
 # Per-track hashes, saved with a sync so the next preview can name what changed. Eight
 # hex digits only have to tell one revision of a track from the next.
 def track_digests(names, tracks, pack_key):
+    return fingerprint_and_digests(names, tracks, pack_key)[1]
+
+
+# digest_tracks and track_digests in one pass, packing each key once. The hashes are
+# the same as computing the two apart.
+def fingerprint_and_digests(names, tracks, pack_key):
+    whole = hashlib.sha256()
+    whole.update(struct.pack("<I", len(tracks)))
     table = {}
     for name, keys in zip(names, tracks):
-        sha = hashlib.sha256()
-        for key in keys:
-            sha.update(pack_key(key))
-        table[name] = sha.hexdigest()[:8]
-    return table
+        packed = b"".join(map(pack_key, keys))
+        whole.update(name.encode("utf-8", "replace") + b"\0")
+        whole.update(struct.pack("<I", len(keys)))
+        whole.update(packed)
+        table[name] = hashlib.sha256(packed).hexdigest()[:8]
+    return whole.hexdigest()[:32], table
+
+
+# Per IK constraint index, the (frame, on) points where its switch changes, first key
+# included, for the IKs the PMM switches off at least once. A track that keeps every
+# IK on is what a rig does anyway, so it yields nothing.
+def ik_switches(model):
+    found = {}
+    for index in range(len(model.constraints)):
+        points = []
+        for key in model.ik_keys:
+            state = key.states[index] if index < len(key.states) else 1
+            if not points or points[-1][1] != state:
+                points.append((key.frame, state))
+        if any(not state for _frame, state in points):
+            found[index] = points
+    return found
+
+
+# Hash of the IK switches for the motion fingerprint, or "" when no IK is ever switched
+# off, which leaves fingerprints of PMMs without such keys as they were.
+def ik_fingerprint(model):
+    switches = ik_switches(model)
+    if not switches:
+        return ""
+    names = [model.bone_names[model.constraints[i]] if 0 <= model.constraints[i] < len(model.bone_names) else str(i) for i in sorted(switches)]
+    return digest_values(names, [switches[i] for i in sorted(switches)])
 
 
 # A short stable hash of any repr-able values, for settings and rig signatures.
 def digest_values(*values):
     return hashlib.sha256(repr(values).encode("utf-8", "replace")).hexdigest()[:24]
-
-
-# True when a key poses the bone away from rest. PMM stores one initial key per bone
-# whether or not it was touched, so a lone rest key is not animation.
-def bone_key_moves(key):
-    if any(abs(v) > REST_EPSILON for v in key.location):
-        return True
-    return abs(abs(key.rotation[3]) - 1.0) > REST_EPSILON
-
-
-def bone_track_moves(keys):
-    return len(keys) > 1 or any(bone_key_moves(k) for k in keys)
 
 
 # Same rule as report_morphs: a morph counts once a key has a non-zero weight.

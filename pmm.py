@@ -1,3 +1,4 @@
+import functools
 import struct
 from typing import NamedTuple, Tuple
 
@@ -69,6 +70,11 @@ ACCESSORY_ADDITIONAL = struct.Struct("<iiiiBii3f3ffBB")
 ACCESSORY_STATE_SIZE = 39
 
 
+# The additive switch in that state block: its last byte, the only one MMD 9.32 changed
+# when additive was turned on and the project saved.
+ACCESSORY_ADDITIVE_OFFSET = 38
+
+
 MODEL_KEY_HEAD = struct.Struct("<iii")
 
 
@@ -106,11 +112,18 @@ class LightKey(NamedTuple):
     direction: Tuple[float, float, float]
 
 
-# One key of a model's display track. MMD stores it with the IK switches and outside
-# parents of that frame; only the show/hide flag is read.
+# One key of a model's display track: the show/hide flag of that frame. MMD stores the
+# IK switches (IkKey) and outside parents in the same key.
 class VisibilityKey(NamedTuple):
     frame: int
     visible: int
+
+
+# The IK switches of one display key: states[k] is 1 when the IK of bone
+# model.constraints[k] is on at this frame, 0 when MMD switched it off.
+class IkKey(NamedTuple):
+    frame: int
+    states: Tuple[int, ...]
 
 
 class PmmModel:
@@ -124,6 +137,7 @@ class PmmModel:
         "bones",
         "morphs",
         "visibility",
+        "ik_keys",
         "last_frame",
         "constraints",
         "outside_parents",
@@ -142,6 +156,7 @@ class PmmModel:
         self.bones = []
         self.morphs = []
         self.visibility = []
+        self.ik_keys = []
         self.last_frame = 0
         self.constraints = []
         self.outside_parents = []
@@ -162,8 +177,9 @@ class AccessoryKey(NamedTuple):
     opacity: float = 1.0
 
 
+# additive is MMD's 加算 (additive blending) switch, one per accessory and not keyed.
 class PmmAccessory:
-    __slots__ = ("index", "name", "path", "draw_order", "keys")
+    __slots__ = ("index", "name", "path", "draw_order", "keys", "additive")
 
     def __init__(self):
         self.index = 0
@@ -171,11 +187,22 @@ class PmmAccessory:
         self.path = ""
         self.draw_order = 0
         self.keys = []
+        self.additive = False
+
+
+# MMD's play range: start and end frames, whether each is switched on, and repeat.
+class PlayRange(NamedTuple):
+    start: int
+    end: int
+    use_start: bool
+    use_end: bool
+    repeat: bool
 
 
 class PmmProject:
     __slots__ = (
         "version",
+        "play_range",
         "models",
         "selected_model",
         "camera_keys",
@@ -191,6 +218,7 @@ class PmmProject:
 
     def __init__(self):
         self.spans = None
+        self.play_range = None
         self.audio_enabled = False
         self.audio_path = ""
         self.audio_error = ""
@@ -381,19 +409,20 @@ def read_morph_track(reader, morph_count):
 
 # A display keyframe: [index], frame, previous, next, visible, one IK switch per
 # constraint, (model, bone) per outside parent, selected. Returns (index, frame, next,
-# visible).
+# visible, IK states).
 def read_model_keyframe(reader, constraint_count, outside_count, with_index):
     index = reader.i32() if with_index else 0
     frame, _previous, next_index = reader.unpack(MODEL_KEY_HEAD)
     visible = reader.u8()
-    reader.skip(constraint_count + outside_count * 8 + 1)
-    return index, frame, next_index, 1 if visible else 0
+    states = tuple(1 if b else 0 for b in reader.raw(constraint_count))
+    reader.skip(outside_count * 8 + 1)
+    return index, frame, next_index, 1 if visible else 0, states
 
 
 # The display track as a frame-ordered chain, walked like the bone tracks: the chain
-# order, not the record order, is what MMD plays.
-def read_visibility_track(reader, constraint_count, outside_count):
-    _index, frame, next_index, visible = read_model_keyframe(
+# order, not the record order, is what MMD plays. Returns (visibility keys, IK keys).
+def read_display_track(reader, constraint_count, outside_count):
+    _index, frame, next_index, visible, states = read_model_keyframe(
         reader, constraint_count, outside_count, False
     )
     additional = {}
@@ -401,6 +430,7 @@ def read_visibility_track(reader, constraint_count, outside_count):
         entry = read_model_keyframe(reader, constraint_count, outside_count, True)
         additional[entry[0]] = entry[1:]
     keys = [VisibilityKey(frame, visible)]
+    ik_keys = [IkKey(frame, states)]
     seen = set()
     cursor = next_index
     while cursor != 0 and cursor not in seen:
@@ -408,10 +438,15 @@ def read_visibility_track(reader, constraint_count, outside_count):
         if entry is None:
             break
         seen.add(cursor)
-        frame, next_index, visible = entry
+        frame, next_index, visible, states = entry
         keys.append(VisibilityKey(frame, visible))
+        ik_keys.append(IkKey(frame, states))
         cursor = next_index
-    return normalize_keys(keys)
+    return normalize_keys(keys), normalize_keys(ik_keys)
+
+
+def read_visibility_track(reader, constraint_count, outside_count):
+    return read_display_track(reader, constraint_count, outside_count)[0]
 
 
 # Besides the keys, read_model keeps the bytes the writer cannot derive (editor
@@ -441,7 +476,9 @@ def read_model(reader):
     model.last_frame = reader.i32()
     model.bones = read_bone_track(reader, bone_count)
     model.morphs = read_morph_track(reader, morph_count)
-    model.visibility = read_visibility_track(reader, constraint_count, outside_count)
+    model.visibility, model.ik_keys = read_display_track(
+        reader, constraint_count, outside_count
+    )
     bone_state = reader.raw(bone_count * BONE_STATE_SIZE)
     morph_state = reader.raw(morph_count * MORPH_STATE_SIZE)
     constraint_state = reader.raw(constraint_count)
@@ -513,18 +550,28 @@ def read_accessories(reader):
         acc.path = reader.fixed_string(ACCESSORY_PATH_LENGTH)
         acc.draw_order = reader.u8()
         acc.keys = read_accessory_keys(reader)
-        reader.skip(ACCESSORY_STATE_SIZE)
+        state = reader.raw(ACCESSORY_STATE_SIZE)
+        acc.additive = bool(state[ACCESSORY_ADDITIVE_OFFSET])
         found.append(acc)
     return found
 
 
+# The playback block before the audio: current frame at +0, then flags at +17 (repeat),
+# +18 (play start on) and +19 (play end on), and the start and end frames at +20 and
+# +24. Decoded from MMD 9.32 saves with known ranges; the other bytes are not known.
+def read_play_range(block):
+    start, end = struct.unpack_from("<ii", block, 20)
+    return PlayRange(start, end, bool(block[18]), bool(block[19]), bool(block[17]))
+
+
+# Returns (play range, audio enabled, audio path).
 def read_audio(reader):
-    reader.skip(AUDIO_STATE_SIZE)
+    play_range = read_play_range(reader.raw(AUDIO_STATE_SIZE))
     enabled = reader.u8() != 0
     path = reader.fixed_string(AUDIO_PATH_LENGTH)
     if path and not path.lower().endswith(AUDIO_EXTENSIONS):
-        return False, ""
-    return enabled, path
+        return play_range, False, ""
+    return play_range, enabled, path
 
 
 def parse_pmm(data):
@@ -562,10 +609,38 @@ def parse_pmm(data):
             project.accessories = []
         else:
             try:
-                project.audio_enabled, project.audio_path = read_audio(reader)
+                project.play_range, project.audio_enabled, project.audio_path = read_audio(reader)
             except PmmError as error:
                 project.audio_error = str(error)
     return project
+
+
+# A copy that retime_project, a sync or a hook can change freely: every model,
+# accessory and key list is new, the keys themselves (immutable) are shared.
+def copy_project(project):
+    out = PmmProject()
+    for name in PmmProject.__slots__:
+        setattr(out, name, getattr(project, name))
+    out.camera_keys = list(project.camera_keys)
+    out.light_keys = list(project.light_keys)
+    out.models = []
+    for model in project.models:
+        twin = PmmModel()
+        for name in PmmModel.__slots__:
+            value = getattr(model, name)
+            setattr(twin, name, list(value) if isinstance(value, list) else value)
+        twin.bones = [list(keys) for keys in model.bones]
+        twin.morphs = [list(keys) for keys in model.morphs]
+        twin.opaque = dict(model.opaque) if model.opaque is not None else None
+        out.models.append(twin)
+    out.accessories = []
+    for acc in project.accessories:
+        twin = PmmAccessory()
+        for name in PmmAccessory.__slots__:
+            setattr(twin, name, getattr(acc, name))
+        twin.keys = list(acc.keys)
+        out.accessories.append(twin)
+    return out
 
 
 def parse_pmm_file(path):
@@ -598,8 +673,15 @@ def encode_name(name, limit=NAME_LIMIT):
 
 
 # A PMM stores x1 y1 x2 y2 per curve (X, Y, Z, rotation); a VMD row wants all x1,
-# then all y1, x2 and y2, repeated in four shifted copies.
+# then all y1, x2 and y2, repeated in four shifted copies. Cached: a file holds only a
+# few distinct curves, and this ran once per bone key.
 def interpolation_to_vmd(source):
+    return vmd_interpolation_row(bytes(source))
+
+
+# The cached conversion, keyed by the curve bytes.
+@functools.lru_cache(maxsize=4096)
+def vmd_interpolation_row(source):
     row = bytearray(16)
     for curve in range(4):
         x1, y1, x2, y2 = (
@@ -616,10 +698,26 @@ def interpolation_to_vmd(source):
     return bytes(out)
 
 
+REST_EPSILON = 1e-6
+
+
+# True when a key poses the bone away from rest. PMM stores one initial key per bone
+# whether or not it was touched, so a lone rest key is not animation.
+def bone_key_moves(key):
+    if any(abs(v) > REST_EPSILON for v in key.location):
+        return True
+    return abs(abs(key.rotation[3]) - 1.0) > REST_EPSILON
+
+
+def bone_track_moves(keys):
+    return len(keys) > 1 or any(bone_key_moves(k) for k in keys)
+
+
 def build_vmd(model, morph_map=None, bones=True, morphs=True):
     chunks = [struct.pack("<30s20s", VMD_SIGNATURE, encode_name(model.name, 20))]
     bone_frames = []
-    for name, keys in zip(model.bone_names, model.bones) if bones else ():
+    tracks = list(zip(model.bone_names, model.bones)) if bones else []
+    for name, keys in tracks:
         packed_name = encode_name(name)
         for key in keys:
             bone_frames.append(

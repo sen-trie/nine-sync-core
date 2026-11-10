@@ -1,16 +1,31 @@
 import bpy
+import hashlib
 import os
 import types
 
 from ..common.scene_utils import model_key
-from ..pmm import PmmError, parse_pmm
+from ..pmm import PmmError, copy_project, parse_pmm
 from .motion import summarize_model, track_range
 from .plan import build_plan, parse_checked
 from .retime import retime_factor, retime_project
 from .scale import current_scale
 
 
-_cache = {"result": None}
+_cache = {"result": None, "parsed": None}
+
+
+# Content hash a parsed project is kept under, the same one the sync log shows.
+def content_digest(data):
+    return hashlib.md5(data).hexdigest()[:12]
+
+
+# The project the last preview parsed, as a fresh copy, when the file still holds the
+# same bytes; None otherwise. Spares a sync started from the preview a second parse.
+def parsed_copy(digest):
+    kept = _cache["parsed"]
+    if kept is None or kept[0] != digest:
+        return None
+    return copy_project(kept[1])
 
 
 # Cheap fingerprint of every preview input, cheap enough to compare on each redraw. It
@@ -43,7 +58,6 @@ def input_token(scene):
         round(current_scale(settings), 6),
         round(retime_factor(scene, settings), 6),
         settings.uv_morphs,
-        settings.update_scene_settings,
         settings.use_physics_vmd,
         settings.sync_camera,
         settings.sync_light,
@@ -70,10 +84,12 @@ def analyze(scene):
         return result
     try:
         with open(path, "rb") as handle:
-            project = parse_checked(handle.read(), parse_pmm)
+            data = handle.read()
+        project = parse_checked(data, parse_pmm)
     except (PmmError, OSError) as error:
         result.error = "Could not read the PMM: %s" % error
         return result
+    _cache["parsed"] = (content_digest(data), copy_project(project))
     for model in project.models:
         summary = summarize_model(model)
         summary.key = model_key(model)
@@ -107,3 +123,4 @@ def current_analysis(scene):
 
 def clear_analysis():
     _cache["result"] = None
+    _cache["parsed"] = None
