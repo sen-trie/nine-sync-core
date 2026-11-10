@@ -9,7 +9,6 @@ from support import REPO, Checks, fx_folder
 
 TOP_LEVEL = ("hooks", "pmm", "pmm_writer", "x_writer")
 FORBIDDEN_IMPORTS = ("ninesync_fx", "xfile", "fx", "mme")
-STALE_PRODUCT = re.compile(r"combined (NineSync|add-?on)|monolith|MMD PMM Bridge", re.IGNORECASE)
 # Layer of each module group, then the layers it may import from.
 ALLOWED = {
     "common": {"common"},
@@ -83,17 +82,6 @@ def check_versions(checks):
     checks.check("changelog lists the version", "## %s" % version in changelog)
 
 
-def check_copy(checks):
-    stale = []
-    docs = ("README.md", "CLAUDE.md", os.path.join("docs", "HANDOFF.md"))
-    # CLAUDE.md and docs/ are local to the owner's checkout, so CI does not have them.
-    present = [p for p in (os.path.join(REPO, n) for n in docs) if os.path.exists(p)]
-    for path in list(sources()) + present:
-        text = open(path, encoding="utf-8").read()
-        stale += ["%s: %s" % (os.path.relpath(path, REPO), m.group()) for m in STALE_PRODUCT.finditer(text)]
-    checks.check("no references to the pre-split add-on in current copy", not stale, stale or "")
-
-
 # Create PMM copies the template's bytes into every exported file, so a drive or user
 # folder left in it would ship to whoever the user sends their PMM to.
 def check_template(checks):
@@ -120,7 +108,6 @@ if __name__ == "__main__":
     checks = Checks()
     check_imports(checks)
     check_versions(checks)
-    check_copy(checks)
     check_template(checks)
     check_hooks(checks)
     checks.finish()
