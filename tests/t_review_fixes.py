@@ -15,7 +15,7 @@ import bpy
 # bytes MMD compares (B1), faster hashing and sampling with identical results (P4-P6),
 # import format records (P7), parse reuse (P8), IK switches (C1),
 # accessory additive (C5), bone names a VMD cannot hold (C8), the
-# undo step (C11).
+# undo step (C11), Rigify remap table and detection.
 stage("ninesync")
 core = load("ninesync")
 core.register()
@@ -207,6 +207,31 @@ part = plan_mod.PartPlan("motion")
 part.exists, part.settings, part.legacy_settings = True, current, legacy
 plan_mod.decide(part, saved, "", [], False, True)
 checks.check("legacy record skips and is marked for upgrade", part.operation == plan_mod.SKIP and part.upgrade)
+
+# Rigify remap: the embedded table, and which armatures count as a converted rig.
+rigify_map = importlib.import_module("ninesync.common.rigify_map")
+rigify = importlib.import_module("ninesync.sync.rigify")
+controls = [row[1] for row in rigify_map.CONTROLS]
+checks.check("rigify table drives each control once", len(controls) == len(set(controls)), len(controls))
+checks.check("a bone in both modes has one IK and one FK control", all(len({r[3] for r in rigify_map.CONTROLS if r[0] == n}) == len([r for r in rigify_map.CONTROLS if r[0] == n]) for n in {r[0] for r in rigify_map.CONTROLS}))
+checks.check("rigify table rows are complete", all(len(r) == 4 and r[1] and r[3] in ("ik", "fk", "any") for r in rigify_map.CONTROLS))
+checks.check("limb groups all have a switch bone", {r[2] for r in rigify_map.CONTROLS if r[2].startswith(("ARM", "LEG"))} <= set(rigify_map.LIMB_OWNERS))
+checks.check("leg IK control is an IK row, leg FK control an FK row", ("左足ＩＫ", "foot_ik.L", "LEG_L", "ik") in rigify_map.CONTROLS and ("左足", "thigh_fk.L", "LEG_L", "fk") in rigify_map.CONTROLS)
+fake = bpy.data.objects.new("fake_rig", bpy.data.armatures.new("fake_rig"))
+bpy.context.scene.collection.objects.link(fake)
+bpy.context.view_layer.objects.active = fake
+bpy.ops.object.mode_set(mode="EDIT")
+fake.data.edit_bones.new("torso").tail = (0, 0, 1)
+bpy.ops.object.mode_set(mode="OBJECT")
+checks.check("no rig_id is not a rigify rig", not rigify.is_rigify_armature(fake))
+fake.data["rig_id"] = "abc"
+checks.check("rig_id without the bind switch is not converted", not rigify.is_rigify_armature(fake))
+fake.pose.bones["torso"][rigify_map.BIND_PROPERTY] = 1.0
+checks.check("rig_id and the bind switch is a converted rig", rigify.is_rigify_armature(fake))
+checks.check("None is not a rig", not rigify.is_rigify_armature(None))
+checks.check("kinds from names", [rigify.infer_kind(n) for n in ("foot_ik.L", "thigh_fk.R", "head")] == ["ik", "fk", "any"])
+checks.check("limbs from names", [rigify.infer_group(n) for n in ("foot_ik.L", "upper_arm_fk.R", "head")] == ["LEG_L", "ARM_R", "TORSO"])
+checks.check("no edits leaves a rig's hash unchanged", rigify.rigify_signature(None, None) is None)
 
 # P8: the preview's parse is reused only for the same bytes, as an independent copy.
 analysis._cache["parsed"] = (analysis.content_digest(template), pmm.copy_project(base))

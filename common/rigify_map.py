@@ -1,0 +1,96 @@
+# MMD bone (name_j) -> Rigify control, for rigs converted with MMD Tools Append. The
+# rows come from that add-on's Rigify bind table (GPL-3.0-or-later, MMD Tools Append by
+# UuuNyaa and the MMD & Blender Team). Only rows with a control and a bind are kept.
+# group is the limb the control belongs to; kind says whether it is an IK control, an FK
+# control or neither, so a limb's switch (IK_FK on its parent bone) picks which are used.
+# No bpy here.
+
+RIGIFY_FORMAT = 3
+
+BIND_PROPERTY = "mmd_append_bind_mmd_rigify"
+
+# Limb group -> the bone holding its IK_FK switch (0 is IK, 1 is FK).
+LIMB_OWNERS = {
+    "ARM_L": "upper_arm_parent.L",
+    "ARM_R": "upper_arm_parent.R",
+    "LEG_L": "thigh_parent.L",
+    "LEG_R": "thigh_parent.R",
+}
+
+CONTROLS = (
+    # Not in that table: a limb in IK mode follows through its IK controls: the hand, and the base of the chain.
+    ('左手首', 'hand_ik.L', 'ARM_L', 'ik'),
+    ('右手首', 'hand_ik.R', 'ARM_R', 'ik'),
+    ('左腕', 'upper_arm_ik.L', 'ARM_L', 'ik'),
+    ('右腕', 'upper_arm_ik.R', 'ARM_R', 'ik'),
+    ('左足', 'thigh_ik.L', 'LEG_L', 'ik'),
+    ('右足', 'thigh_ik.R', 'LEG_R', 'ik'),
+    ('全ての親', 'root', 'TORSO', 'any'),
+    ('センター', 'center', 'TORSO', 'any'),
+    ('グルーブ', 'groove', 'TORSO', 'any'),
+    ('腰', 'torso', 'TORSO', 'any'),
+    ('上半身', 'spine_fk.002', 'TORSO', 'fk'),
+    ('上半身2', 'spine_fk.003', 'TORSO', 'fk'),
+    ('首', 'neck', 'TORSO', 'any'),
+    ('頭', 'head', 'TORSO', 'any'),
+    ('両目', 'mmd_append_eyes_fk', 'FACE', 'fk'),
+    ('左目', 'mmd_append_eye_fk.L', 'FACE', 'fk'),
+    ('右目', 'mmd_append_eye_fk.R', 'FACE', 'fk'),
+    ('左肩', 'shoulder.L', 'TORSO', 'any'),
+    ('左腕', 'upper_arm_fk.L', 'ARM_L', 'fk'),
+    ('左ひじ', 'forearm_fk.L', 'ARM_L', 'fk'),
+    ('左手首', 'hand_fk.L', 'ARM_L', 'fk'),
+    ('左親指０', 'thumb.01.L', 'ARM_L', 'any'),
+    ('左親指１', 'thumb.02.L', 'ARM_L', 'any'),
+    ('左親指２', 'thumb.03.L', 'ARM_L', 'any'),
+    ('左人指１', 'f_index.01.L', 'ARM_L', 'any'),
+    ('左人指２', 'f_index.02.L', 'ARM_L', 'any'),
+    ('左人指３', 'f_index.03.L', 'ARM_L', 'any'),
+    ('左中指１', 'f_middle.01.L', 'ARM_L', 'any'),
+    ('左中指２', 'f_middle.02.L', 'ARM_L', 'any'),
+    ('左中指３', 'f_middle.03.L', 'ARM_L', 'any'),
+    ('左薬指１', 'f_ring.01.L', 'ARM_L', 'any'),
+    ('左薬指２', 'f_ring.02.L', 'ARM_L', 'any'),
+    ('左薬指３', 'f_ring.03.L', 'ARM_L', 'any'),
+    ('左小指１', 'f_pinky.01.L', 'ARM_L', 'any'),
+    ('左小指２', 'f_pinky.02.L', 'ARM_L', 'any'),
+    ('左小指３', 'f_pinky.03.L', 'ARM_L', 'any'),
+    ('右肩', 'shoulder.R', 'TORSO', 'any'),
+    ('右腕', 'upper_arm_fk.R', 'ARM_R', 'fk'),
+    ('右ひじ', 'forearm_fk.R', 'ARM_R', 'fk'),
+    ('右手首', 'hand_fk.R', 'ARM_R', 'fk'),
+    ('右親指０', 'thumb.01.R', 'ARM_R', 'any'),
+    ('右親指１', 'thumb.02.R', 'ARM_R', 'any'),
+    ('右親指２', 'thumb.03.R', 'ARM_R', 'any'),
+    ('右人指１', 'f_index.01.R', 'ARM_R', 'any'),
+    ('右人指２', 'f_index.02.R', 'ARM_R', 'any'),
+    ('右人指３', 'f_index.03.R', 'ARM_R', 'any'),
+    ('右中指１', 'f_middle.01.R', 'ARM_R', 'any'),
+    ('右中指２', 'f_middle.02.R', 'ARM_R', 'any'),
+    ('右中指３', 'f_middle.03.R', 'ARM_R', 'any'),
+    ('右薬指１', 'f_ring.01.R', 'ARM_R', 'any'),
+    ('右薬指２', 'f_ring.02.R', 'ARM_R', 'any'),
+    ('右薬指３', 'f_ring.03.R', 'ARM_R', 'any'),
+    ('右小指１', 'f_pinky.01.R', 'ARM_R', 'any'),
+    ('右小指２', 'f_pinky.02.R', 'ARM_R', 'any'),
+    ('右小指３', 'f_pinky.03.R', 'ARM_R', 'any'),
+    ('下半身', 'spine_fk.001', 'TORSO', 'fk'),
+    ('左足', 'thigh_fk.L', 'LEG_L', 'fk'),
+    ('左ひざ', 'shin_fk.L', 'LEG_L', 'fk'),
+    ('左足首', 'foot_fk.L', 'LEG_L', 'fk'),
+    ('左足ＩＫ', 'foot_ik.L', 'LEG_L', 'ik'),
+    ('左足先EX', 'toe.L', 'LEG_L', 'any'),
+    ('右足', 'thigh_fk.R', 'LEG_R', 'fk'),
+    ('右ひざ', 'shin_fk.R', 'LEG_R', 'fk'),
+    ('右足首', 'foot_fk.R', 'LEG_R', 'fk'),
+    ('右足ＩＫ', 'foot_ik.R', 'LEG_R', 'ik'),
+    ('右足先EX', 'toe.R', 'LEG_R', 'any'),
+    ('左つま先ＩＫ', 'mmd_append_toe_ik.L', 'LEG_L', 'ik'),
+    ('右つま先ＩＫ', 'mmd_append_toe_ik.R', 'LEG_R', 'ik'),
+    ('左肩C', 'mmd_append_shoulder_cancel.L', 'NONE', 'any'),
+    ('左肩P', 'mmd_append_shoulder_parent.L', 'NONE', 'any'),
+    ('右肩C', 'mmd_append_shoulder_cancel.R', 'NONE', 'any'),
+    ('右肩P', 'mmd_append_shoulder_parent.R', 'NONE', 'any'),
+    ('左足IK親', 'mmd_append_leg_ik_parent.L', 'LEG_L', 'ik'),
+    ('右足IK親', 'mmd_append_leg_ik_parent.R', 'LEG_R', 'ik'),
+)

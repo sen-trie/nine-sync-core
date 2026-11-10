@@ -64,6 +64,44 @@ def on_target_changed(self, context):
     self.sync_record = ""
 
 
+# One mapping slot of the Rigify Remap editor: the MMD bone (Blender name), fixed, and the
+# Rigify control chosen for it, empty for none. base is the control the built-in table
+# gives that bone, empty for a slot the user added, so a differing control is an edit.
+class MMDBridgeRemapSlot(PropertyGroup):
+    bone: StringProperty()
+    control: StringProperty()
+    base: StringProperty()
+
+
+# A Rigify control a slot can choose, for the search field. Held on the window manager.
+class MMDBridgeControlName(PropertyGroup):
+    name: StringProperty()
+
+
+# Puts the control chosen for a PMM bone that had none into the target's mapping, as a
+# slot of its own; clearing it switches the slot off.
+def free_control_changed(self, context):
+    targets = context.scene.mmd_bridge.targets
+    index = context.window_manager.ninesync_rigify_target
+    if not 0 <= index < len(targets):
+        return
+    slots = targets[index].rigify_slots
+    slot = next((s for s in slots if s.bone == self.mmd and not s.base), None)
+    if slot is None:
+        if not self.control:
+            return
+        slot = slots.add()
+        slot.bone = self.mmd
+    slot.control = self.control
+
+
+# One PMM bone no control follows, as the Rigify Remap editor lists it while its Only
+# Missing switch is on, and the control being chosen for it. Held on the window manager.
+class MMDBridgeFreeBone(PropertyGroup):
+    mmd: StringProperty()
+    control: StringProperty(update=free_control_changed)
+
+
 class MMDBridgeTarget(PropertyGroup):
     key: StringProperty()
     pmm_name: StringProperty()
@@ -83,6 +121,12 @@ class MMDBridgeTarget(PropertyGroup):
         type=bpy.types.Action,
         poll=clip_poll,
     )
+    rigify_remap: BoolProperty(
+        name="Rigify Remap",
+        description="For a Rigify rig converted with MMD Tools Append: carry the PMM motion over onto the Rigify controls",
+        default=True,
+    )
+    rigify_slots: CollectionProperty(type=MMDBridgeRemapSlot)
     state: StringProperty(default="NEW")
     status_text: StringProperty()
     # JSON state of the last successful sync per part. It lives on the row so it is

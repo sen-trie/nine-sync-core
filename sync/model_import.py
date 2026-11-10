@@ -31,6 +31,7 @@ from .morphs import report_morphs, resolve_morph_names
 from .ik import apply_ik_keys
 from .motion import ik_switches, vmd_bone_name
 from .physics import import_physics_clip
+from .rigify import clear_remap, is_rigify_armature, retarget
 from .plan import vmd_bone_table
 from .scale import current_scale
 from .sync_state import forget_parts, rig_layout, write_parts
@@ -249,6 +250,25 @@ def import_model(root, model, settings, item, parts=ALL_PARTS, rebuild=False):
             import_physics_clip(item, armature, settings, label)
         except Exception as error:
             log.error("physics clip failed: %s\n%s", error, traceback.format_exc())
+    if motion and is_rigify_armature(armature):
+        remap_rigify(armature, model, item, label)
+
+
+# A Rigify rig made by MMD Tools Append cannot take the PMM motion on its MMD bones, as
+# the Rigify controls drive them. The motion is carried over onto the controls from the
+# MMD bones the plain import just keyed. Failing here leaves the plain import in place.
+def remap_rigify(armature, model, item, label):
+    if not item.rigify_remap:
+        log.info("Rigify remap is off for '%s'", model.name)
+        clear_remap(armature, label)
+        return
+    try:
+        with phase("rigify", label):
+            retarget(armature, model, label, item)
+    except Exception as error:
+        log.error("Rigify remap failed: %s\n%s", error, traceback.format_exc())
+
+
 # Collects warnings logged during one model's sync so its row can show the WARN
 # state.
 class WarningCapture(logging.Handler):

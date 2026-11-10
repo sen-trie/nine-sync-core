@@ -1,4 +1,4 @@
-ADDON_VERSION = (0, 7, 0)
+ADDON_VERSION = (0, 8, 0)
 
 bl_info = {
     "name": "NineSync: PMM Bridge",
@@ -18,7 +18,7 @@ for _name in [n for n in _sys.modules if n.startswith(__name__ + ".")]:
     del _sys.modules[_name]
 
 import bpy
-from bpy.props import PointerProperty
+from bpy.props import BoolProperty, CollectionProperty, IntProperty, PointerProperty
 
 from . import hooks
 from .common.constants import MIN_BLENDER, NINESYNC_NAME
@@ -28,7 +28,7 @@ from .sync.engine import abandon_sync
 from .sync.tempfiles import sweep_stale_temp
 from .ui import CLASSES
 from .ui.preferences import addon_preferences, apply_import_scale
-from .ui.properties import MMDBridgeSettings
+from .ui.properties import MMDBridgeControlName, MMDBridgeFreeBone, MMDBridgeSettings
 from .ui.relink import schedule_relink, settings_outdated
 
 
@@ -63,6 +63,12 @@ def register():
     for cls in CLASSES:
         bpy.utils.register_class(cls)
     bpy.types.Scene.mmd_bridge = PointerProperty(type=MMDBridgeSettings)
+    bpy.types.WindowManager.ninesync_rigify_free = CollectionProperty(type=MMDBridgeFreeBone)
+    bpy.types.WindowManager.ninesync_rigify_target = IntProperty()
+    bpy.types.WindowManager.ninesync_rigify_controls = CollectionProperty(type=MMDBridgeControlName)
+    bpy.types.WindowManager.ninesync_rigify_only_missing = BoolProperty(
+        name="Only Missing", description="List only the bones the PMM moves that no Rigify control follows"
+    )
     hooks.register_core(ADDON_VERSION)
     remove_handlers()
     bpy.app.handlers.load_post.append(ninesync_load_handler)
@@ -95,6 +101,14 @@ def unregister():
     hooks.unregister_core()
     if hasattr(bpy.types.Scene, "mmd_bridge"):
         del bpy.types.Scene.mmd_bridge
+    for name in (
+        "ninesync_rigify_free",
+        "ninesync_rigify_target",
+        "ninesync_rigify_controls",
+        "ninesync_rigify_only_missing",
+    ):
+        if hasattr(bpy.types.WindowManager, name):
+            delattr(bpy.types.WindowManager, name)
     for cls in reversed(CLASSES):
         bpy.utils.unregister_class(cls)
 

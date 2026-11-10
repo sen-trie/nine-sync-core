@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.0
+
+- Support Rigify rigs converted with MMD Tools Append. PMM motion is baked onto the Rigify controls, following each limb's IK/FK switch.
+
 ## 0.7.0
 
 - Sync IK toggle keyframes, using Blender IK contrainsts

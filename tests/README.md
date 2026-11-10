@@ -13,6 +13,7 @@ Run from the repo root. Each file is a standalone script that prints `ok` or `FA
 | `t_review_fixes.py` | Blender or `bpy` | names cut as MMD cuts them, identical fast hashing and morph sampling, IK switch keys, carried bone names, additive accessories, import-format records, parse reuse, UV morph helpers, the undo step |
 | `manual/check_install.py` | Blender | extension zip: install, enable, restart, preferences id, uninstall |
 | `manual/validate_real.py` | Blender, mmd_tools, PMX files | a real sync checked against values from the PMM, resync, 60 fps retime, Clean |
+| `manual/validate_rigify.py` | Blender, mmd_tools, a Rigify-converted `.blend`, a VMD | the Rigify remap on every limb in FK and IK against the plain MMD pose |
 | `manual/check_blend.py` | Blender, mmd_tools | a saved `.blend` opens and re-syncs in memory |
 | `manual/validate_sync_plan.py` | Blender, mmd_tools, PMX files | skips, per-part updates, `.blend` round trip, deleted, switched and edited actions, Force Resync, failure, cancel, malformed PMM, Clean |
 

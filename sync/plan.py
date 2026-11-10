@@ -4,7 +4,7 @@ import struct
 import types
 
 from ..common.constants import ACTION_PREFIX, IMPORT_FORMAT
-from ..common.scene_utils import model_key
+from ..common.scene_utils import find_armature, model_key
 from ..common.timing import phase
 from ..pmm import PmmError
 from .camera import follow_table
@@ -31,6 +31,7 @@ from .motion import (
     vmd_bone_name,
 )
 from .retime import retime_factor
+from .rigify import rigify_signature
 from .scale import current_scale
 from .sync_state import (
     compare_outputs,
@@ -276,6 +277,9 @@ def part_settings(part, scene, settings, root, signature, row):
     frame_range = False
     physics = physics_state(row, settings) if part == "motion" else None
     extra = physics if part == "motion" else bool(settings.uv_morphs)
+    remap = rigify_signature(find_armature(root), row) if part == "motion" else None
+    if remap is not None:
+        extra = (physics, remap)
     current = digest_values(
         "format", IMPORT_FORMAT, part, retime, scale, frame_range, root.name, extra, signature
     )

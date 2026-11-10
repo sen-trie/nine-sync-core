@@ -20,9 +20,24 @@ from .panels.create import NINESYNC_PT_create
 from .panels.main import MMDBRIDGE_PT_main
 from .panels.options import MMDBRIDGE_PT_options
 from .panels.preview import NINESYNC_PT_inspector
+from .panels.remap import (
+    NINESYNC_OT_add_rigify_map,
+    NINESYNC_OT_remove_rigify_map,
+    NINESYNC_OT_close_popup,
+    NINESYNC_OT_edit_rigify_map,
+    NINESYNC_OT_reset_rigify_map,
+    NINESYNC_OT_show_rigify_map,
+    NINESYNC_PT_remap,
+    NINESYNC_PT_show_map,
+    NINESYNC_UL_rigify_free,
+    NINESYNC_UL_rigify_map,
+)
 from .panels.readout import MMDBRIDGE_PT_readout
 from .preferences import NineSyncPreferences
 from .properties import (
+    MMDBridgeControlName,
+    MMDBridgeFreeBone,
+    MMDBridgeRemapSlot,
     MMDBridgeExportItem,
     MMDBridgeExportProp,
     MMDBridgePropColor,
@@ -34,6 +49,11 @@ from .properties import (
 # Registration order matters: property groups before what uses them, parent
 # panels before their children.
 CLASSES = (
+    MMDBridgeControlName,
+    MMDBridgeFreeBone,
+    MMDBridgeRemapSlot,
+    NINESYNC_UL_rigify_map,
+    NINESYNC_UL_rigify_free,
     MMDBridgeTarget,
     MMDBridgeExportItem,
     MMDBridgePropColor,
@@ -54,8 +74,16 @@ CLASSES = (
     NineSyncPreferences,
     NINESYNC_OT_set_import_scale,
     MMDBRIDGE_OT_dismiss_scale_warning,
+    NINESYNC_OT_show_rigify_map,
+    NINESYNC_OT_close_popup,
+    NINESYNC_OT_remove_rigify_map,
+    NINESYNC_OT_add_rigify_map,
+    NINESYNC_PT_show_map,
+    NINESYNC_OT_edit_rigify_map,
+    NINESYNC_OT_reset_rigify_map,
     NINESYNC_PT_create,
     MMDBRIDGE_PT_main,
+    NINESYNC_PT_remap,
     MMDBRIDGE_PT_options,
     MMDBRIDGE_PT_camera,
     MMDBRIDGE_PT_readout,
