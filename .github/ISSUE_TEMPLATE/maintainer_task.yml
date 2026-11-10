@@ -1,0 +1,27 @@
+name: Maintainer task
+description: Maintainer-tracked work, normally linked to a user report in the release tracker
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This form is for maintainers. Users should report problems in the [NineSync release tracker](https://github.com/sen-trie/nine-sync-release/issues/new/choose).
+  - type: input
+    id: release_issue
+    attributes:
+      label: Release tracker issue
+      description: Link to the user report this work comes from, or "none" for internal work.
+      placeholder: https://github.com/sen-trie/nine-sync-release/issues/123
+    validations:
+      required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What is wrong or needs doing, and what was confirmed.
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Reproduction or notes
+      description: Steps, affected versions and any proposed fix. Do not include personal paths or files that cannot be shared.
