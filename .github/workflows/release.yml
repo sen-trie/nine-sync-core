@@ -105,10 +105,9 @@ jobs:
 
       - name: Static checks
         working-directory: ${{ github.event.repository.name }}
-        env:
-          NINESYNC_FX: ${{ github.workspace }}/fx
         run: |
           if [ "${{ steps.info.outputs.component }}" = "core" ]; then
+            export NINESYNC_FX="${{ github.workspace }}/fx"
             test -f "$NINESYNC_FX/hooks.py" || { echo "FX checkout missing"; exit 1; }
             python tests/check_static.py --require-fx
           else
@@ -156,10 +155,9 @@ jobs:
 
       - name: Tests
         working-directory: ${{ github.event.repository.name }}
-        env:
-          NINESYNC_FX: ${{ github.workspace }}/fx
         run: |
           if [ "${{ steps.info.outputs.component }}" = "core" ]; then
+            export NINESYNC_FX="${{ github.workspace }}/fx"
             for t in t_registration t_hook_contract t_animation; do
               "$BLENDER" --background --factory-startup --python "tests/$t.py"
             done
