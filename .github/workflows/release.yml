@@ -4,9 +4,10 @@ name: Release
 # blender_manifest.toml builds, validates and tests the extension on Blender 5.3 or newer, then tags v<version>,
 # publishes the GitHub release with its SHA-256 checksums and notifies Bundled. No owner approval step. A push
 # that leaves the version alone only builds and uploads the zip as a workflow artifact.
-# A manual run publishes the manifest version of "ref" (default: the dispatched commit) when its tag does not
-# exist yet; use it to publish a release that a push did not (set notify=false for a backfill). When the tag
-# exists it only builds and uploads the zip as a workflow artifact.
+# A manual run without "ref" publishes the manifest version of the dispatched commit when its tag does not exist
+# yet; use it to publish a release that a push did not. A run with "ref", or whose tag exists, only builds and
+# uploads the zip as a workflow artifact (GitHub refuses a tag at an older commit whose workflow file differs,
+# so a backfill is published by hand from that artifact).
 on:
   push:
     branches: [master]
@@ -57,6 +58,7 @@ jobs:
         working-directory: ${{ github.event.repository.name }}
         env:
           EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ inputs.ref }}
           BEFORE: ${{ github.event.before }}
         run: |
           python - <<'PY'
@@ -85,8 +87,9 @@ jobs:
               release = bumped and not tag_exists
               print(f"push: version {old or '(none)'} -> {version}, tag exists: {tag_exists}")
           else:
-              release = not tag_exists
-              print(f"manual run: {version}, tag exists: {tag_exists}" + ("" if release else " (build only)"))
+              release = not tag_exists and not os.environ["REF"]
+              print(f"manual run: {version}, tag exists: {tag_exists}, ref given: {bool(os.environ['REF'])}"
+                    + ("" if release else " (build only)"))
 
           with open(os.environ["GITHUB_OUTPUT"], "a") as out:
               out.write(f"version={version}\ncomponent={component}\nsha={sha}\nrelease={str(release).lower()}\n")
