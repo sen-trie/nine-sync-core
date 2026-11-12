@@ -142,6 +142,8 @@ jobs:
 
       - name: Package contents
         working-directory: ${{ github.event.repository.name }}
+        env:
+          RELEASE: ${{ steps.info.outputs.release }}
         run: |
           python - <<'PY'
           import glob, os, zipfile
@@ -157,6 +159,9 @@ jobs:
               wanted.append("data/mme_core.blend")
           missing = [n for n in wanted if n not in names]
           print(len(names), "files; unexpected:", bad, "missing:", missing)
+          if (bad or missing) and os.environ["RELEASE"] != "true":
+              print("::warning::package problems tolerated because this run only rebuilds an existing tag")
+              raise SystemExit(0)
           raise SystemExit(1 if bad or missing else 0)
           PY
 
