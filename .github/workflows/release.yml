@@ -1,73 +1,119 @@
 name: Release
 
-# Builds, validates and smoke-tests the extension zip on Blender 5.3 or newer, then
-# writes SHA-256 checksums. Publishing is a separate job that only runs from a manual
-# dispatch with publish=true and stops at the "release" environment, which the owner
-# must configure with required reviewers. Nothing is tagged or published otherwise.
+# Identical in the Core and FX repositories; keep it byte-identical. A push to master that changes the version in
+# blender_manifest.toml builds, validates and tests the extension on Blender 5.3 or newer, then tags v<version>,
+# publishes the GitHub release with its SHA-256 checksums and notifies Bundled. No owner approval step. A push
+# that leaves the version alone only builds and uploads the zip as a workflow artifact.
+# A manual run publishes the manifest version of "ref" (default: the dispatched commit) when its tag does not
+# exist yet; use it to publish a release that a push did not (set notify=false for a backfill).
 on:
   push:
     branches: [master]
     paths: [blender_manifest.toml]
   workflow_dispatch:
     inputs:
-      publish:
-        description: Publish a release for the manifest version (needs owner approval)
+      ref:
+        description: Commit to build and release (default is the dispatched commit)
+        type: string
+        default: ""
+      notify:
+        description: Notify Bundled after publishing
         type: boolean
-        default: false
+        default: true
 
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ github.repository }}
+  cancel-in-progress: false
+
 env:
-  # Must be 5.3 or newer (the manifest minimum). The step below fails if it is not.
+  # Must be 5.3 or newer (the manifest minimum). The download step fails if it is not.
   BLENDER_VERSION: "5.3.0"
 
 jobs:
   build:
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.version.outputs.version }}
+      version: ${{ steps.info.outputs.version }}
+      component: ${{ steps.info.outputs.component }}
+      sha: ${{ steps.info.outputs.sha }}
+      release: ${{ steps.info.outputs.release }}
     steps:
       - uses: actions/checkout@v4
         with:
-          path: core
+          path: src
+          ref: ${{ inputs.ref || github.sha }}
           fetch-depth: 0
-
-      # Required: the hooks.py identity check must run, so a missing checkout or token
-      # fails the job instead of skipping the check. Set FX_REPO_TOKEN if FX is private.
-      - uses: actions/checkout@v4
-        with:
-          repository: sen-trie/nine-sync-fx
-          path: fx
-          token: ${{ secrets.FX_REPO_TOKEN || github.token }}
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
 
-      - name: Versions agree
-        id: version
-        working-directory: core
+      - name: Version, component and bump detection
+        id: info
+        working-directory: src
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
         run: |
           python - <<'PY'
-          import os, re, tomllib
-          manifest = tomllib.load(open("blender_manifest.toml", "rb"))["version"]
-          found = re.search(r"ADDON_VERSION = \((\d+), (\d+), (\d+)\)", open("common/constants.py").read()
-                            + open("__init__.py").read())
-          code = ".".join(found.groups())
-          assert code == manifest, f"ADDON_VERSION {code} != manifest {manifest}"
-          assert f"## {manifest}" in open("CHANGELOG.md").read(), "CHANGELOG has no entry"
-          open(os.environ["GITHUB_OUTPUT"], "a").write(f"version={manifest}\n")
-          print("version", manifest)
+          import os, re, subprocess, sys, tomllib
+
+          def git(*args):
+              return subprocess.run(["git", *args], capture_output=True, text=True)
+
+          manifest = tomllib.load(open("blender_manifest.toml", "rb"))
+          version = manifest["version"]
+          if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+              sys.exit(f"::error::version {version} is not a stable x.y.z version")
+          component = "fx" if manifest["id"] == "ninesync_fx" else "core"
+          sha = git("rev-parse", "HEAD").stdout.strip()
+          assert "## " + version in open("CHANGELOG.md", encoding="utf8").read(), "CHANGELOG.md has no entry"
+
+          tag_exists = git("rev-parse", "-q", "--verify", f"refs/tags/v{version}").returncode == 0
+          event = os.environ["EVENT_NAME"]
+          if event == "push":
+              old = ""
+              before = os.environ["BEFORE"]
+              shown = git("show", f"{before}:blender_manifest.toml") if set(before) != {"0"} else None
+              if shown is not None and shown.returncode == 0:
+                  old = tomllib.loads(shown.stdout).get("version", "")
+              bumped = old != version
+              release = bumped and not tag_exists
+              print(f"push: version {old or '(none)'} -> {version}, tag exists: {tag_exists}")
+          else:
+              if tag_exists:
+                  sys.exit(f"::error::tag v{version} already exists; nothing to publish")
+              release = True
+              print(f"manual run: publishing {version}")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"version={version}\ncomponent={component}\nsha={sha}\nrelease={str(release).lower()}\n")
+              out.write(f"id={manifest['id']}\nname={manifest['name']}\n")
+          print("component", component, "version", version, "commit", sha, "release", release)
           PY
 
-      - name: Static checks (FX required)
-        working-directory: core
+      # Required for Core: the hooks.py identity check must run, so a missing checkout fails the job.
+      - uses: actions/checkout@v4
+        if: steps.info.outputs.component == 'core'
+        with:
+          repository: sen-trie/nine-sync-fx
+          path: fx
+          token: ${{ secrets.FX_REPO_TOKEN || github.token }}
+
+      - name: Static checks
+        working-directory: src
         env:
           NINESYNC_FX: ${{ github.workspace }}/fx
         run: |
-          test -f "$NINESYNC_FX/hooks.py" || { echo "FX checkout missing"; exit 1; }
-          python tests/check_static.py --require-fx
+          if [ "${{ steps.info.outputs.component }}" = "core" ]; then
+            test -f "$NINESYNC_FX/hooks.py" || { echo "FX checkout missing"; exit 1; }
+            python tests/check_static.py --require-fx
+          else
+            python tools/check_release.py
+          fi
 
       - name: Download Blender 5.3 or newer
         run: |
@@ -79,58 +125,90 @@ jobs:
           sudo apt-get install -y libxi6 libxxf86vm1 libxfixes3 libxrender1 libxkbcommon0 libgl1 libegl1 libsm6
           curl -fsSL "https://download.blender.org/release/Blender${major}.${minor}/blender-${BLENDER_VERSION}-linux-x64.tar.xz" | tar -xJ
           echo "BLENDER=$PWD/blender-${BLENDER_VERSION}-linux-x64/blender" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/blender-profile"
+          echo "BLENDER_USER_RESOURCES=$RUNNER_TEMP/blender-profile" >> "$GITHUB_ENV"
 
       - name: Validate and build
-        working-directory: core
+        working-directory: src
         run: |
           "$BLENDER" --background --factory-startup --command extension validate .
           mkdir -p ../out
           "$BLENDER" --background --factory-startup --command extension build --source-dir . --output-dir ../out
           ls -l ../out
 
-      - name: Runtime smoke tests on Blender
-        working-directory: core
+      - name: Package contents
+        working-directory: src
+        run: |
+          python - <<'PY'
+          import glob, os, zipfile
+          zips = glob.glob("../out/*.zip")
+          assert len(zips) == 1, zips
+          names = zipfile.ZipFile(zips[0]).namelist()
+          bad = [n for n in names if n.startswith(("tests/", "tools/", "docs/", "src/", ".github/", ".git/", "debug-src/"))
+                 or n.endswith((".pyc", "CLAUDE.md"))]
+          wanted = ["LICENSE", "hooks.py", "blender_manifest.toml", "__init__.py"]
+          if os.path.exists("data/mme_core.blend"):
+              wanted.append("data/mme_core.blend")
+          missing = [n for n in wanted if n not in names]
+          print(len(names), "files; unexpected:", bad, "missing:", missing)
+          raise SystemExit(1 if bad or missing else 0)
+          PY
+
+      - name: Tests
+        working-directory: src
         env:
           NINESYNC_FX: ${{ github.workspace }}/fx
         run: |
-          export BLENDER_USER_RESOURCES="$RUNNER_TEMP/blender-profile"
-          mkdir -p "$BLENDER_USER_RESOURCES"
-          for t in t_registration t_hook_contract t_animation; do
-            "$BLENDER" --background --factory-startup --python "tests/$t.py"
-          done
-          python tests/manual/check_install.py "$BLENDER" ../out/ninesync-${{ steps.version.outputs.version }}.zip
+          if [ "${{ steps.info.outputs.component }}" = "core" ]; then
+            for t in t_registration t_hook_contract t_animation; do
+              "$BLENDER" --background --factory-startup --python "tests/$t.py"
+            done
+            python tests/manual/check_install.py "$BLENDER" "../out/${{ steps.info.outputs.id }}-${{ steps.info.outputs.version }}.zip"
+          else
+            python tools/run_tests.py
+          fi
 
       - name: Checksums
         working-directory: out
-        run: |
-          sha256sum *.zip | tee SHA256SUMS.txt
+        run: sha256sum *.zip | tee SHA256SUMS.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ninesync-${{ steps.version.outputs.version }}
+          name: ${{ steps.info.outputs.id }}-${{ steps.info.outputs.version }}
           path: out/*
 
   publish:
     needs: build
-    if: github.event_name == 'workflow_dispatch' && inputs.publish
+    if: needs.build.outputs.release == 'true'
     runs-on: ubuntu-latest
-    # Configure required reviewers on this environment in the repository settings.
-    environment: release
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ needs.build.outputs.sha }}
           fetch-depth: 0
+
+      - name: Read manifest
+        id: manifest
+        run: |
+          python - <<'PY'
+          import os, tomllib
+          m = tomllib.load(open("blender_manifest.toml", "rb"))
+          open(os.environ["GITHUB_OUTPUT"], "a").write(f"id={m['id']}\nname={m['name']}\n")
+          PY
+
       - uses: actions/download-artifact@v4
         with:
-          name: ninesync-${{ needs.build.outputs.version }}
+          name: ${{ steps.manifest.outputs.id }}-${{ needs.build.outputs.version }}
           path: out
+
       - name: Tag must not exist
         run: |
           if git rev-parse -q --verify "refs/tags/v${{ needs.build.outputs.version }}" > /dev/null; then
             echo "tag v${{ needs.build.outputs.version }} already exists"; exit 1
           fi
+
       # Notes are this version's section of CHANGELOG.md.
       - name: Release notes from the changelog
         run: |
@@ -139,31 +217,34 @@ jobs:
             on { print }
           ' CHANGELOG.md | sed '/./,$!d' > notes.md
           test -s notes.md || { echo "CHANGELOG.md has no entry"; exit 1; }
-      - name: Publish release
+          cat notes.md
+
+      - name: Tag and publish release
         env:
           GH_TOKEN: ${{ github.token }}
+          NAME: ${{ steps.manifest.outputs.name }}
         run: |
           gh release create "v${{ needs.build.outputs.version }}" out/* \
-            --target "$GITHUB_SHA" \
-            --title "NineSync: PMM Bridge v${{ needs.build.outputs.version }}" \
+            --target "${{ needs.build.outputs.sha }}" \
+            --title "$NAME v${{ needs.build.outputs.version }}" \
             --notes-file notes.md
 
-  # Runs only after build validation and a successful publish in this same run (a release
-  # created with GITHUB_TOKEN does not trigger other workflows, so this cannot be a
-  # separate "release: published" workflow). It only sends a repository_dispatch; Bundled
-  # decides what to do with it. It never touches Bundled's branches, releases or PRs.
-  # Needs the repository variable BUNDLED_APP_ID and the secret BUNDLED_APP_PRIVATE_KEY of
-  # a GitHub App installed only on sen-trie/nine-sync-release with the single permission
-  # "Contents: write" (required for repository_dispatch).
+  # Runs only after a successful publish in this same run (a release created with GITHUB_TOKEN does not trigger
+  # other workflows, so this cannot be a separate "release: published" workflow). It only sends a
+  # repository_dispatch; Bundled decides what to do with it. It never touches Bundled's branches, releases or PRs.
+  # Needs the repository variable BUNDLED_APP_ID and the secret BUNDLED_APP_PRIVATE_KEY of a GitHub App installed
+  # only on sen-trie/nine-sync-release with the single permission "Contents: write" (required for repository_dispatch).
   notify-bundled:
     needs: [build, publish]
-    if: needs.publish.result == 'success'
+    if: needs.publish.result == 'success' && (github.event_name != 'workflow_dispatch' || inputs.notify)
     runs-on: ubuntu-latest
     permissions:
       contents: read
     env:
       VERSION: ${{ needs.build.outputs.version }}
-      BUNDLED_REPO: sen-trie/nine-sync-release
+      COMPONENT: ${{ needs.build.outputs.component }}
+      COMMIT: ${{ needs.build.outputs.sha }}
+      BUNDLED_REPO: ${{ vars.BUNDLED_REPOSITORY || 'sen-trie/nine-sync-release' }}
     steps:
       - name: Confirm a stable, published release
         id: release
@@ -172,11 +253,11 @@ jobs:
         run: |
           [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "not a stable version: $VERSION"; exit 1; }
           tag="v$VERSION"
-          state=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease,targetCommitish,tagName \
+          state=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease,tagName \
             --jq '"\(.isDraft) \(.isPrerelease) \(.tagName)"')
           [ "$state" = "false false $tag" ] || { echo "release is draft/prerelease/missing: $state"; exit 1; }
           sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq .sha)
-          [ "$sha" = "$GITHUB_SHA" ] || { echo "tag $tag is at $sha, expected $GITHUB_SHA"; exit 1; }
+          [ "$sha" = "$COMMIT" ] || { echo "tag $tag is at $sha, expected $COMMIT"; exit 1; }
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
@@ -196,8 +277,8 @@ jobs:
           TAG: ${{ steps.release.outputs.tag }}
           SHA: ${{ steps.release.outputs.sha }}
         run: |
-          jq -n --arg version "$VERSION" --arg tag "$TAG" --arg commit "$SHA" --arg repo "$GITHUB_REPOSITORY" '{
+          jq -n --arg component "$COMPONENT" --arg version "$VERSION" --arg tag "$TAG" --arg commit "$SHA" --arg repo "$GITHUB_REPOSITORY" '{
             event_type: "component_released",
-            client_payload: {component: "core", repository: $repo, tag: $tag, commit: $commit, version: $version}
+            client_payload: {component: $component, repository: $repo, tag: $tag, commit: $commit, version: $version}
           }' | tee payload.json
           gh api "repos/$BUNDLED_REPO/dispatches" --input payload.json
