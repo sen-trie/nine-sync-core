@@ -43,7 +43,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          path: src
+          path: ${{ github.event.repository.name }}
           ref: ${{ inputs.ref || github.sha }}
           fetch-depth: 0
 
@@ -53,7 +53,7 @@ jobs:
 
       - name: Version, component and bump detection
         id: info
-        working-directory: src
+        working-directory: ${{ github.event.repository.name }}
         env:
           EVENT_NAME: ${{ github.event_name }}
           BEFORE: ${{ github.event.before }}
@@ -104,7 +104,7 @@ jobs:
           token: ${{ secrets.FX_REPO_TOKEN || github.token }}
 
       - name: Static checks
-        working-directory: src
+        working-directory: ${{ github.event.repository.name }}
         env:
           NINESYNC_FX: ${{ github.workspace }}/fx
         run: |
@@ -129,7 +129,7 @@ jobs:
           echo "BLENDER_USER_RESOURCES=$RUNNER_TEMP/blender-profile" >> "$GITHUB_ENV"
 
       - name: Validate and build
-        working-directory: src
+        working-directory: ${{ github.event.repository.name }}
         run: |
           "$BLENDER" --background --factory-startup --command extension validate .
           mkdir -p ../out
@@ -137,7 +137,7 @@ jobs:
           ls -l ../out
 
       - name: Package contents
-        working-directory: src
+        working-directory: ${{ github.event.repository.name }}
         run: |
           python - <<'PY'
           import glob, os, zipfile
@@ -155,7 +155,7 @@ jobs:
           PY
 
       - name: Tests
-        working-directory: src
+        working-directory: ${{ github.event.repository.name }}
         env:
           NINESYNC_FX: ${{ github.workspace }}/fx
         run: |
