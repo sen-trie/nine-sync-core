@@ -142,6 +142,8 @@ jobs:
           import glob, os, zipfile
           zips = glob.glob("../out/*.zip")
           assert len(zips) == 1, zips
+          size = os.path.getsize(zips[0])
+          assert size < 50_000_000, f"zip is {size} bytes; something large was packaged"
           names = zipfile.ZipFile(zips[0]).namelist()
           bad = [n for n in names if n.startswith(("tests/", "tools/", "docs/", "src/", ".github/", ".git/", "debug-src/"))
                  or n.endswith((".pyc", "CLAUDE.md"))]
