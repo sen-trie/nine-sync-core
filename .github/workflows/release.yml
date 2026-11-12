@@ -5,7 +5,8 @@ name: Release
 # publishes the GitHub release with its SHA-256 checksums and notifies Bundled. No owner approval step. A push
 # that leaves the version alone only builds and uploads the zip as a workflow artifact.
 # A manual run publishes the manifest version of "ref" (default: the dispatched commit) when its tag does not
-# exist yet; use it to publish a release that a push did not (set notify=false for a backfill).
+# exist yet; use it to publish a release that a push did not (set notify=false for a backfill). When the tag
+# exists it only builds and uploads the zip as a workflow artifact.
 on:
   push:
     branches: [master]
@@ -84,10 +85,8 @@ jobs:
               release = bumped and not tag_exists
               print(f"push: version {old or '(none)'} -> {version}, tag exists: {tag_exists}")
           else:
-              if tag_exists:
-                  sys.exit(f"::error::tag v{version} already exists; nothing to publish")
-              release = True
-              print(f"manual run: publishing {version}")
+              release = not tag_exists
+              print(f"manual run: {version}, tag exists: {tag_exists}" + ("" if release else " (build only)"))
 
           with open(os.environ["GITHUB_OUTPUT"], "a") as out:
               out.write(f"version={version}\ncomponent={component}\nsha={sha}\nrelease={str(release).lower()}\n")
