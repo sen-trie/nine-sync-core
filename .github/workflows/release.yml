@@ -222,8 +222,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           NAME: ${{ steps.manifest.outputs.name }}
         run: |
+          git tag "v${{ needs.build.outputs.version }}" "${{ needs.build.outputs.sha }}"
+          git push origin "refs/tags/v${{ needs.build.outputs.version }}"
           gh release create "v${{ needs.build.outputs.version }}" out/* \
-            --target "${{ needs.build.outputs.sha }}" \
+            --verify-tag \
             --title "$NAME v${{ needs.build.outputs.version }}" \
             --notes-file notes.md
 
