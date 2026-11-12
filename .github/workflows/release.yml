@@ -110,7 +110,13 @@ jobs:
             test -f "$NINESYNC_FX/hooks.py" || { echo "FX checkout missing"; exit 1; }
             python tests/check_static.py --require-fx
           else
-            python tools/check_release.py
+            if [ -f tools/check_release.py ]; then
+              python tools/check_release.py
+            elif [ "${{ steps.info.outputs.release }}" = "true" ]; then
+              echo "tools/check_release.py is missing"; exit 1
+            else
+              echo "no static check at this ref; build only"
+            fi
           fi
 
       - name: Download Blender 5.3 or newer
@@ -164,7 +170,13 @@ jobs:
             done
             python tests/manual/check_install.py "$BLENDER" "../out/${{ steps.info.outputs.id }}-${{ steps.info.outputs.version }}.zip"
           else
-            python tools/run_tests.py
+            if [ -f tools/run_tests.py ]; then
+              python tools/run_tests.py
+            elif [ "${{ steps.info.outputs.release }}" = "true" ]; then
+              echo "tools/run_tests.py is missing"; exit 1
+            else
+              echo "no test runner at this ref; build only"
+            fi
           fi
 
       - name: Checksums
