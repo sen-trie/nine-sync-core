@@ -127,6 +127,11 @@ class MMDBridgeTarget(PropertyGroup):
         default=True,
     )
     rigify_slots: CollectionProperty(type=MMDBridgeRemapSlot)
+    solve_leg_ik: BoolProperty(
+        name="MMD Leg IK",
+        description="Solve the leg IK the way MMD does and key the thigh and knee as FK, so the knees land where MMD puts them. Blender's IK solver can pick a different knee position on fast leg lifts. This replaces the thigh and knee keys inside the PMM span with one key per frame, so it is off by default",
+        default=False,
+    )
     state: StringProperty(default="NEW")
     status_text: StringProperty()
     # JSON state of the last successful sync per part. It lives on the row so it is

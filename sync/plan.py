@@ -32,7 +32,7 @@ from .motion import (
 )
 from .retime import retime_factor
 from .rigify import rigify_signature
-from .scale import current_scale
+from .scale import current_scale, model_scale
 from .sync_state import (
     compare_outputs,
     part_outputs,
@@ -268,7 +268,7 @@ LEGACY_VERSIONS = ((0, 4, 0), (0, 5, 0))
 # hashes a pre-IMPORT_FORMAT record would hold for the same import.
 def part_settings(part, scene, settings, root, signature, row):
     retime = round(retime_factor(scene, settings), 6)
-    scale = round(current_scale(settings), 6)
+    scale = round(model_scale(settings, find_armature(root)), 6)
     if part == "visible":
         current = digest_values("format", IMPORT_FORMAT, part, retime, root.name, signature)
         legacy = [digest_values(v, retime, root.name, signature) for v in LEGACY_VERSIONS]
@@ -280,6 +280,9 @@ def part_settings(part, scene, settings, root, signature, row):
     remap = rigify_signature(find_armature(root), row) if part == "motion" else None
     if remap is not None:
         extra = (physics, remap)
+    # Added only when on, so records of syncs made without it stay valid.
+    if part == "motion" and getattr(row, "solve_leg_ik", False):
+        extra = (extra, "mmd_leg_ik")
     current = digest_values(
         "format", IMPORT_FORMAT, part, retime, scale, frame_range, root.name, extra, signature
     )

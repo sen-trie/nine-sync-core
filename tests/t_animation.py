@@ -91,6 +91,38 @@ user_track.name = "user"
 user_track.strips.new("mine", 0, bpy.data.actions.new("mine"))
 animation.clear_bridge_nla([owner])
 checks.check("emptied bridge track removed, user track kept", [t.name for t in anim.nla_tracks] == ["user"])
+# rewrite_fcurve can mark the keys it writes (solved leg keys are Breakdowns).
+keyed = bpy.data.objects.new("keyed", None)
+scene.collection.objects.link(keyed)
+keyed.location.x = 1.0
+keyed.keyframe_insert("location", index=0, frame=1)
+key_curve = animation.find_fcurve(keyed, "location", 0)
+animation.rewrite_fcurve(key_curve, [1, 2, 3], [0.0, 1.0, 2.0], "BREAKDOWN")
+checks.check("rewrite_fcurve marks key type", [p.type for p in key_curve.keyframe_points] == ["BREAKDOWN"] * 3)
+animation.rewrite_fcurve(key_curve, [1, 2], [0.0, 1.0])
+checks.check("rewrite_fcurve leaves key type alone by default", [p.type for p in key_curve.keyframe_points] == ["KEYFRAME"] * 2)
+
+# A same-named bridge track that does not hold the clip is dropped; the user's strips stay.
+clips = importlib.import_module("ninesync.sync.clips")
+stale_owner = bpy.data.objects.new("stale", None)
+scene.collection.objects.link(stale_owner)
+stale_anim = stale_owner.animation_data_create()
+kept_clip = bpy.data.actions.new("MMDBridge_kept")
+kept_clip.frame_range = (0, 10)
+kept_clip.use_frame_range = True
+old_clip = bpy.data.actions.new("MMDBridge_old")
+old_clip.frame_range = (0, 10)
+old_clip.use_frame_range = True
+for action in (kept_clip, old_clip):
+    track = stale_anim.nla_tracks.new()
+    track.name = "MMDBridge_x_motion"
+    track.strips.new(action.name, 0, action)
+clips.drop_stale_tracks(stale_anim, "MMDBridge_x_motion", kept_clip)
+left = [s.action.name for t in stale_anim.nla_tracks for s in t.strips]
+checks.check("stale same-named track dropped, the clip's kept", left == ["MMDBridge_kept"], left)
+checks.check("a clip another rig plays is not reused", clips.owned_clip(stale_owner, old_clip, ("none",)) is None)
+checks.check("a clip this rig plays is reused", clips.owned_clip(stale_owner, kept_clip, ("none",)) == kept_clip)
+
 del bpy.types.Action.fcurves
 core.unregister()
 checks.finish()

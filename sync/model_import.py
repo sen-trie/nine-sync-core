@@ -21,6 +21,7 @@ from .clips import (
     clip_track_names,
     find_bridge_clip_any,
     model_label,
+    owned_clip,
     place_clip,
     primary_key_owner,
     release_stash,
@@ -29,11 +30,12 @@ from .mmd_tools_link import mmd_tools_modules, run_importer
 from .morph_keys import ensure_morph_keys
 from .morphs import report_morphs, resolve_morph_names
 from .ik import apply_ik_keys
+from .leg_ik import solve_leg_ik
 from .motion import ik_switches, vmd_bone_name
 from .physics import import_physics_clip
 from .rigify import clear_remap, is_rigify_armature, retarget
 from .plan import vmd_bone_table
-from .scale import current_scale
+from .scale import model_scale
 from .sync_state import forget_parts, rig_layout, write_parts
 from .targets import target_usable
 from .tempfiles import remove_file, write_temp_vmd
@@ -141,7 +143,11 @@ def import_model(root, model, settings, item, parts=ALL_PARTS, rebuild=False):
     arm_track, shape_track, legacy_shape_track, _legacy_arm = clip_track_names(label)
     key_owners = [o for o in owners if hasattr(o, "key_blocks")] if use_clips else []
     primary_keys = primary_key_owner(key_owners, placeholder)
-    arm_clip = item.clip if use_clips and motion else None
+    arm_clip = (
+        owned_clip(armature, item.clip, (arm_track, _legacy_arm))
+        if use_clips and motion
+        else None
+    )
     stash = {}
     sources = {}
     if use_clips:
@@ -164,7 +170,9 @@ def import_model(root, model, settings, item, parts=ALL_PARTS, rebuild=False):
                 and owner == primary_keys
                 and item.shape_clip is not None
             ):
-                found = item.shape_clip
+                found = owned_clip(
+                    owner, item.shape_clip, (shape_track, legacy_shape_track)
+                )
             sources[owner.as_pointer()] = found
     low, high = frame_span(model_frames(model))
     kept = snapshot_outside(owners, low, high, sources if use_clips else None)
@@ -193,7 +201,7 @@ def import_model(root, model, settings, item, parts=ALL_PARTS, rebuild=False):
             with phase("importer", label):
                 run_importer(
                     tmp_path,
-                    current_scale(settings),
+                    model_scale(settings, armature),
                     targets,
                     ACTION_PREFIX + label,
                     False,
@@ -206,7 +214,15 @@ def import_model(root, model, settings, item, parts=ALL_PARTS, rebuild=False):
                 ensure_morph_keys(meshes, model, morph_map, root)
         if motion and armature is not None:
             with phase("ik_keys", label):
-                apply_ik_keys(armature, model, vmd_bone_table(armature))
+                table = vmd_bone_table(armature)
+                apply_ik_keys(armature, model, table)
+                # A converted Rigify rig needs the solved legs too: its MMD bones have their
+                # IK at influence 0, so they show the FK keys, and the controls are baked from them.
+                if getattr(item, "solve_leg_ik", False):
+                    try:
+                        solve_leg_ik(armature, model, table, model_scale(settings, armature))
+                    except Exception as error:
+                        log.error("MMD leg IK failed: %s\n%s", error, traceback.format_exc())
         restored = restore_points(kept)
         tag_actions(plain_owners, label)
         log.info("restored %d preserved key(s) for '%s'", restored, model.name)

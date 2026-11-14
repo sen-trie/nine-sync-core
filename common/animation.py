@@ -52,7 +52,7 @@ def create_fcurve(owner, data_path, index, group, frame):
 
 # Replaces every key with linear ones. Used for shape keys the bridge computes
 # itself.
-def rewrite_fcurve(fcurve, frames, values):
+def rewrite_fcurve(fcurve, frames, values, key_type=None):
     points = fcurve.keyframe_points
     try:
         points.clear()
@@ -62,6 +62,8 @@ def rewrite_fcurve(fcurve, frames, values):
     for frame, value in zip(frames, values):
         point = points.insert(frame, value, options={"FAST"})
         point.interpolation = "LINEAR"
+        if key_type is not None:
+            point.type = key_type
     fcurve.update()
 
 
@@ -84,6 +86,10 @@ def snapshot_outside(owners, low, high, sources=None, keep_all=None):
             continue
         for fcurve in iter_fcurves(action, slot):
             if fcurve.data_path.startswith("constraints["):
+                continue
+            # The bridge keys the IK constraints' influence itself (IK switches, solved legs);
+            # keeping its old keys from outside the span would stretch the action's range.
+            if fcurve.data_path.endswith('.constraints["IK"].influence'):
                 continue
             points = []
             everything = keep_all is not None and keep_all(fcurve.data_path)
@@ -312,6 +318,9 @@ def collect_owners(objects):
 def reset_animation(targets, keep_keys=False):
     for obj in targets:
         if obj.animation_data:
+            # NLA tweak mode makes the action read-only; leave it so the import can proceed.
+            if obj.animation_data.use_tweak_mode:
+                obj.animation_data.use_tweak_mode = False
             obj.animation_data.action = None
         data = getattr(obj, "data", None)
         if obj.type in {"CAMERA", "LIGHT"} and data is not None and data.animation_data:

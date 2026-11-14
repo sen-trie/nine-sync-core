@@ -39,6 +39,17 @@ def find_bridge_clip_any(owner, track_names):
     return None
 
 
+# The remembered clip, but only if this owner really plays it. A row's stored clip can
+# belong to a model it was pointed at before; remapping that one would hijack the other
+# rig's strip and leave a duplicate same-named track here.
+def owned_clip(owner, clip, track_names):
+    anim = owner.animation_data
+    if clip is not None and anim is not None:
+        if anim.action == clip or strips_using(anim, clip):
+            return clip
+    return find_bridge_clip_any(owner, track_names)
+
+
 # The shape key set with the most blocks, i.e. the body mesh. It owns the
 # user-selectable Shapekey Clip; the morph placeholder is skipped.
 def primary_key_owner(key_owners, placeholder):
@@ -51,11 +62,29 @@ def primary_key_owner(key_owners, placeholder):
     return max(pool, key=lambda k: len(k.key_blocks))
 
 
+# Removes same-named tracks left behind by an older placement: any that do not hold the
+# clip and carry only bridge actions (or nothing). The user's own strips are never touched.
+def drop_stale_tracks(anim, track_name, clip):
+    for track in list(anim.nla_tracks):
+        if track.name != track_name:
+            continue
+        if any(s.action == clip for s in track.strips):
+            continue
+        if all(s.action is not None and is_bridge_action(s.action) for s in track.strips):
+            anim.nla_tracks.remove(track)
+            log.info("removed stale NLA track '%s'", track_name)
+
+
 # Puts the action on the named NLA track (reused or new) at its first frame. If the
 # existing track rejects it, retries on a fresh one.
 def add_clip_strip(anim, action, track_name):
     start = int(math.floor(action.frame_range[0]))
-    reuse = next((t for t in anim.nla_tracks if t.name == track_name), None)
+    same = [t for t in anim.nla_tracks if t.name == track_name]
+    # Empty duplicates left by an earlier failed placement are dropped.
+    for extra in same[1:]:
+        if not extra.strips:
+            anim.nla_tracks.remove(extra)
+    reuse = same[0] if same else None
     candidates = [reuse] if reuse is not None else []
     candidates.append(None)
     for track in candidates:
@@ -108,6 +137,7 @@ def place_clip(owner, clip, track_name, clip_name, active_before, keep_active=Fa
         clip = fresh
         log.info("clip '%s' created", clip.name)
     existing = strips_using(anim, clip)
+    drop_stale_tracks(anim, track_name, clip)
     for _track, strip in existing:
         bind_slot(strip, clip)
         fit_strip(strip, clip)

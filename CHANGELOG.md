@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.1
+
+- Optional MMD Leg IK switch under each PMX model. Replicates MMD's CCD IK algorithm and bake the movement of supporting FK chain.
+
 ## 0.8.0
 
 - Support Rigify rigs converted with MMD Tools Append. PMM motion is baked onto the Rigify controls, following each limb's IK/FK switch.

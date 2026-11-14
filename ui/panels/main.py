@@ -107,6 +107,9 @@ class MMDBRIDGE_PT_main(Panel):
                 shape_row = box.row(align=True)
                 shape_row.label(text="", icon="SHAPEKEY_DATA")
                 shape_row.prop(item, "shape_clip", text="Shapekey")
+                ik_row = box.row(align=True)
+                ik_row.label(text="", icon="CON_KINEMATIC")
+                ik_row.prop(item, "solve_leg_ik", text="MMD Leg IK")
                 if settings.use_physics_vmd:
                     physics_row = box.row(align=True)
                     physics_row.label(text="", icon="PHYSICS")

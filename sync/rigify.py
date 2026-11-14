@@ -5,7 +5,7 @@ import bpy
 from ..common.animation import iter_fcurves, remove_action
 from ..common.constants import ACTION_PREFIX, CLIP_TRACK_NAME
 from ..common.logger import log
-from ..common.rigify_map import BIND_PROPERTY, CONTROLS, LIMB_OWNERS, RIGIFY_FORMAT
+from ..common.rigify_map import BIND_PROPERTY, CONTROLS, LIMB_OWNERS, MMD_IK_TARGETS, RIGIFY_FORMAT
 from ..pmm import bone_track_moves
 from .motion import vmd_bone_name
 from .clips import add_clip_strip
@@ -110,6 +110,8 @@ def row_status(rig, modes, row):
     if row.bone is None or row.bone not in rig.pose.bones:
         return "no bone"
     mode = modes.get(row.group)
+    if row.name_j in MMD_IK_TARGETS:
+        return "active"
     if mode is not None and row.kind != "any" and (row.kind == "ik") != (mode == "IK"):
         return "inactive"
     return "active"
@@ -117,13 +119,22 @@ def row_status(rig, modes, row):
 
 # (control, MMD bone) pairs to carry, parents first, for the limbs as they are switched.
 # A control follows one MMD bone: when two are given the same control, the first keeps it.
-def transfer_pairs(rig, item=None):
+def transfer_pairs(rig, item=None, fk_groups=()):
     modes = limb_modes(rig)
+    for group in fk_groups:
+        if group in modes:
+            modes[group] = "FK"
     pairs = {}
     for row in resolved_rows(rig, item):
         if row_status(rig, modes, row) == "active":
             pairs.setdefault(row.control, row.bone)
-    return sorted(pairs.items(), key=lambda kv: len(rig.pose.bones[kv[0]].parent_recursive))
+    return sorted(pairs.items(), key=lambda kv: bake_order(rig, kv[0]))
+
+
+# Where a control goes in the bake: parents first, and tweak controls after every other one,
+# because a tweak sits under helper bones that the FK and IK controls move.
+def bake_order(rig, control):
+    return ("_tweak." in control, len(rig.pose.bones[control].parent_recursive))
 
 
 # Controls that two or more carried rows share: a conflict, as a control can only follow
@@ -306,14 +317,21 @@ def clear_remap(rig, label):
                 remove_action(action)
 
 
-# Key frames of the moving tracks plus the middle of every gap, so a straight line
-# between baked frames stays close to the curve MMD draws.
+# Key frames of the moving tracks plus the frames between them, so a straight line between
+# baked frames stays close to the curve MMD draws. A short gap gets every frame: the legs
+# swing along an arc that their IK solves, and a line across even half a step cuts it, which
+# showed as knees and feet off by tens of degrees. A long gap (a hold, usually) gets a frame
+# every few.
+BAKE_DENSE_GAP = 6
+BAKE_SPARSE_STEP = 2
+
+
 def bake_frames(model):
     keyed = sorted({k.frame for keys in model.bones if bone_track_moves(keys) for k in keys})
     frames = set(keyed)
     for a, b in zip(keyed, keyed[1:]):
-        if b - a >= 2:
-            frames.add((a + b) // 2)
+        step = 1 if b - a <= BAKE_DENSE_GAP else BAKE_SPARSE_STEP
+        frames.update(range(a + step, b, step))
     return sorted(frames)
 
 
@@ -337,11 +355,27 @@ def key_control(pose_bone, frame):
 # rest pose is applied to its control from that control's own rest pose. Moving, not
 # copying, the pose is what keeps this right when the conversion re-rolled the bones.
 # Controls are set parents first with a depsgraph update between levels, as their
-# parents are driven by other controls. Which controls are used follows each limb's
-# IK/FK switch as set. The keys go to a bridge action on its own NLA track; the
+# parents are driven by other controls, tweak controls last. Which controls are used
+# follows each limb's IK/FK switch as set, except MMD's leg IK targets, which are always
+# carried (see MMD_IK_TARGETS). The keys go to a bridge action on its own NLA track; the
 # binds are restored. Returns the number of baked frames.
+def leg_ik_constraints(rig):
+    found = []
+    for pose_bone in rig.pose.bones:
+        for constraint in pose_bone.constraints:
+            target = rig.pose.bones.get(constraint.subtarget) if constraint.type == "IK" else None
+            if target is not None and target.mmd_bone.name_j in MMD_IK_TARGETS:
+                found.append(constraint)
+    return found
+
+
 def retarget(rig, model, label, item=None):
-    pairs = transfer_pairs(rig, item)
+    # Rigify's own leg IK picks its own knee, like Blender's IK on a plain rig, so with the
+    # solved MMD legs the legs run in FK for the baked frames: the switch is keyed to FK and
+    # the FK controls follow the MMD bones, which already carry MMD's solved pose.
+    solved = bool(getattr(item, "solve_leg_ik", False)) and bool(model.constraints)
+    fk_groups = tuple(g for g in ("LEG_L", "LEG_R") if g in limb_modes(rig)) if solved else ()
+    pairs = transfer_pairs(rig, item, fk_groups)
     frames = bake_frames(model)
     if not pairs or not frames:
         log.warning("Rigify remap for '%s': nothing to carry over", label)
@@ -368,24 +402,39 @@ def retarget(rig, model, label, item=None):
     physics = scene.rigidbody_world
     physics_on = physics.enabled if physics is not None else False
     action = bpy.data.actions.new(ACTION_PREFIX + label + "_rigify")
+    switched = {}
+    muted = {}
     try:
         for obj in meshes:
             obj.hide_viewport = True
         if physics is not None:
             physics.enabled = False
         anim.action = action
-        set_append_properties(rig, {k: 0.0 for k in saved})
         rest = {n: rig.data.bones[n].matrix_local.copy() for n, _m in pairs}
         mmd_rest_inverse = {m: rig.data.bones[m].matrix_local.inverted() for _n, m in pairs}
         levels = {}
         for name, mmd_name in pairs:
-            levels.setdefault(len(rig.pose.bones[name].parent_recursive), []).append((name, mmd_name))
+            levels.setdefault(bake_order(rig, name), []).append((name, mmd_name))
         layers = [levels[k] for k in sorted(levels)]
         layer = bpy.context.view_layer
         # Makes the depsgraph the active one, so evaluated poses reach the objects headless.
         bpy.context.evaluated_depsgraph_get()
+        set_append_properties(rig, {k: 0.0 for k in saved})
+        # Unbound, the rig's MMD leg IK is driven back on (influence 1 - bind), which would
+        # have Blender re-solve the knees the solver already placed; mute it for the bake.
+        if solved:
+            for constraint in leg_ik_constraints(rig):
+                muted[constraint] = constraint.mute
+                constraint.mute = True
+        switches = [rig.pose.bones[LIMB_OWNERS[g]] for g in fk_groups]
+        for bone in switches:
+            switched[bone.name] = bone["IK_FK"]
+            bone["IK_FK"] = 1.0
         for frame in frames:
             scene.frame_set(frame)
+            if frame in (frames[0], frames[-1]):
+                for bone in switches:
+                    bone.keyframe_insert('["IK_FK"]', frame=frame, group=bone.name)
             moves = {m: rig.pose.bones[m].matrix @ mmd_rest_inverse[m] for _n, m in pairs}
             for layer_pairs in layers:
                 for name, mmd_name in layer_pairs:
@@ -403,6 +452,10 @@ def retarget(rig, model, label, item=None):
         if physics is not None:
             physics.enabled = physics_on
         set_append_properties(rig, saved)
+        for name, value in switched.items():
+            rig.pose.bones[name]["IK_FK"] = value
+        for constraint, value in muted.items():
+            constraint.mute = value
         anim.action = before
         scene.frame_set(original_frame)
     if add_clip_strip(anim, action, track_name) is None:

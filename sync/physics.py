@@ -5,7 +5,7 @@ from ..common.constants import ACTION_PREFIX, CLIP_TRACK_NAME
 from ..common.logger import log
 from .clips import find_bridge_clip, place_clip, release_stash
 from .mmd_tools_link import run_importer
-from .scale import current_scale
+from .scale import model_scale
 
 
 # Experimental. Layers a baked physics VMD above the PMM clip on its own NLA track.
@@ -35,7 +35,7 @@ def import_physics_clip(item, armature, settings, label):
         anim.action = None
         run_importer(
             path,
-            current_scale(settings),
+            model_scale(settings, armature),
             [armature],
             ACTION_PREFIX + label + "_physics",
             False,

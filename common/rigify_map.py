@@ -5,7 +5,7 @@
 # control or neither, so a limb's switch (IK_FK on its parent bone) picks which are used.
 # No bpy here.
 
-RIGIFY_FORMAT = 3
+RIGIFY_FORMAT = 10
 
 BIND_PROPERTY = "mmd_append_bind_mmd_rigify"
 
@@ -16,6 +16,13 @@ LIMB_OWNERS = {
     "LEG_L": "thigh_parent.L",
     "LEG_R": "thigh_parent.R",
 }
+
+# MMD's leg IK bones. The bound rig still runs MMD's IK on each knee, aimed at these bones,
+# which copy Rigify's foot and toe IK controls; so those controls are carried in FK mode
+# too, or the knee solves toward a foot control nobody moved.
+MMD_IK_TARGETS = frozenset(
+    ("左足ＩＫ", "右足ＩＫ", "左つま先ＩＫ", "右つま先ＩＫ", "左足IK親", "右足IK親")
+)
 
 CONTROLS = (
     # Not in that table: a limb in IK mode follows through its IK controls: the hand, and the base of the chain.
@@ -78,15 +85,26 @@ CONTROLS = (
     ('左足', 'thigh_fk.L', 'LEG_L', 'fk'),
     ('左ひざ', 'shin_fk.L', 'LEG_L', 'fk'),
     ('左足首', 'foot_fk.L', 'LEG_L', 'fk'),
-    ('左足ＩＫ', 'foot_ik.L', 'LEG_L', 'ik'),
+    ('左足首', 'foot_ik.L', 'LEG_L', 'ik'),
     ('左足先EX', 'toe.L', 'LEG_L', 'any'),
     ('右足', 'thigh_fk.R', 'LEG_R', 'fk'),
     ('右ひざ', 'shin_fk.R', 'LEG_R', 'fk'),
     ('右足首', 'foot_fk.R', 'LEG_R', 'fk'),
-    ('右足ＩＫ', 'foot_ik.R', 'LEG_R', 'ik'),
+    ('右足首', 'foot_ik.R', 'LEG_R', 'ik'),
     ('右足先EX', 'toe.R', 'LEG_R', 'any'),
     ('左つま先ＩＫ', 'mmd_append_toe_ik.L', 'LEG_L', 'ik'),
     ('右つま先ＩＫ', 'mmd_append_toe_ik.R', 'LEG_R', 'ik'),
+    # Not in that table: the first tweak of each limb segment. Rigify aims it with a Damped Track and
+    # smooths the segments, so an MMD bone on its DEF bone loses the roll and part of the bend that the
+    # FK or IK control carries; setting the tweak to the MMD bone's pose restores both.
+    ('左腕', 'upper_arm_tweak.L', 'ARM_L', 'any'),
+    ('右腕', 'upper_arm_tweak.R', 'ARM_R', 'any'),
+    ('左ひじ', 'forearm_tweak.L', 'ARM_L', 'any'),
+    ('右ひじ', 'forearm_tweak.R', 'ARM_R', 'any'),
+    ('左足', 'thigh_tweak.L', 'LEG_L', 'any'),
+    ('右足', 'thigh_tweak.R', 'LEG_R', 'any'),
+    ('左ひざ', 'shin_tweak.L', 'LEG_L', 'any'),
+    ('右ひざ', 'shin_tweak.R', 'LEG_R', 'any'),
     ('左肩C', 'mmd_append_shoulder_cancel.L', 'NONE', 'any'),
     ('左肩P', 'mmd_append_shoulder_parent.L', 'NONE', 'any'),
     ('右肩C', 'mmd_append_shoulder_cancel.R', 'NONE', 'any'),
