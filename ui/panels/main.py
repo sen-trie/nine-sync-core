@@ -1,7 +1,6 @@
 from bpy.types import Panel
 
 from ...common.constants import (
-    LOG_TEXT_NAME,
     NINESYNC_CATEGORY,
     NINESYNC_MAIN_LABEL,
     PMM_FPS,
@@ -87,35 +86,35 @@ class MMDBRIDGE_PT_main(Panel):
         header.operator("ninesync.scan", text="", icon="FILE_REFRESH", emboss=False)
         if box is not None and not len(settings.targets):
             box.label(text="Press the refresh icon to read the PMM")
+        crowded = len(settings.targets) > 3
         for item in (settings.targets if box is not None else ()):
             state = item_state(item)
-            row = box.row(align=True)
-            row.prop(item, "enabled", text="")
-            row.label(text="", icon=status_icon(state))
-            row.label(text=item.pmm_name)
-            row.prop(item, "target", text="")
+            # One collapsible panel per PMM model, titled with the MMD model's name; the
+            # tick and the status stay visible in the header while it is closed.
+            header, body = box.panel("ninesync_model_" + item.key, default_closed=crowded)
+            header.prop(item, "enabled", text="")
+            header.label(text=item.pmm_name, icon=status_icon(state))
+            if body is None:
+                continue
+            body.prop(item, "target", text="Blender")
             note = item_status_text(item)
             if note:
-                note_row = box.row()
+                note_row = body.row()
                 note_row.alert = state == "ERROR"
                 note_row.scale_y = 0.85
                 note_row.label(text=note)
             if item.target is not None:
-                clip_row = box.row(align=True)
+                clip_row = body.row(align=True)
                 clip_row.label(text="", icon="NLA")
                 clip_row.prop(item, "clip", text="Motion")
-                shape_row = box.row(align=True)
+                shape_row = body.row(align=True)
                 shape_row.label(text="", icon="SHAPEKEY_DATA")
                 shape_row.prop(item, "shape_clip", text="Shapekey")
-                ik_row = box.row(align=True)
+                ik_row = body.row(align=True)
                 ik_row.label(text="", icon="CON_KINEMATIC")
                 ik_row.prop(item, "solve_leg_ik", text="MMD Leg IK")
                 if settings.use_physics_vmd:
-                    physics_row = box.row(align=True)
+                    physics_row = body.row(align=True)
                     physics_row.label(text="", icon="PHYSICS")
                     physics_row.prop(item, "physics_vmd", text="")
         draw_fx_notice(layout, settings)
-        tools = layout.row(align=True)
-        tools.operator("ninesync.clean", icon="TRASH")
-        tools.operator("ninesync.copy_report", icon="COPYDOWN")
-        layout.label(text="Log: Text Editor > %s" % LOG_TEXT_NAME)

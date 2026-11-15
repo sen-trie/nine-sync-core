@@ -216,7 +216,7 @@ checks.check("rigify table drives each control once", len(controls) == len(set(c
 checks.check("a bone in both modes has one IK and one FK control", all(len({r[3] for r in rigify_map.CONTROLS if r[0] == n}) == len([r for r in rigify_map.CONTROLS if r[0] == n]) for n in {r[0] for r in rigify_map.CONTROLS}))
 checks.check("rigify table rows are complete", all(len(r) == 4 and r[1] and r[3] in ("ik", "fk", "any") for r in rigify_map.CONTROLS))
 checks.check("limb groups all have a switch bone", {r[2] for r in rigify_map.CONTROLS if r[2].startswith(("ARM", "LEG"))} <= set(rigify_map.LIMB_OWNERS))
-checks.check("leg IK control is an IK row, leg FK control an FK row", ("左足ＩＫ", "foot_ik.L", "LEG_L", "ik") in rigify_map.CONTROLS and ("左足", "thigh_fk.L", "LEG_L", "fk") in rigify_map.CONTROLS)
+checks.check("leg IK control is an IK row, leg FK control an FK row", ("左足首", "foot_ik.L", "LEG_L", "ik") in rigify_map.CONTROLS and ("左足", "thigh_fk.L", "LEG_L", "fk") in rigify_map.CONTROLS)
 fake = bpy.data.objects.new("fake_rig", bpy.data.armatures.new("fake_rig"))
 bpy.context.scene.collection.objects.link(fake)
 bpy.context.view_layer.objects.active = fake

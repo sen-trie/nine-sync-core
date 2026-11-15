@@ -2,7 +2,7 @@ import hashlib
 import struct
 import types
 
-from ..pmm import REST_EPSILON, bone_key_moves, bone_track_moves, encode_name
+from ..pmm import REST_EPSILON, bone_key_moves, bone_track_moves, encode_name, outside_parent_keys
 
 
 BONE_KEY = struct.Struct("<i3d4d")
@@ -13,6 +13,8 @@ LIGHT_KEY = struct.Struct("<i3d3d")
 VISIBILITY_TRACK = "visibility"
 # Name the IK switches go under in a motion record's per-track digests.
 IK_TRACK = "IK switches"
+BONE_MORPH_TRACK = "Bone morphs"
+OUTSIDE_TRACK = "Outside parents"
 
 
 # Hash of canonical parsed tracks, not raw file bytes: re-saving a PMM or changing an
@@ -122,6 +124,28 @@ def ik_fingerprint(model):
         return ""
     names = [model.bone_names[model.constraints[i]] if 0 <= model.constraints[i] < len(model.bone_names) else str(i) for i in sorted(switches)]
     return digest_values(names, [switches[i] for i in sorted(switches)])
+
+
+# The bones of a model that MMD binds to another model's bone at some frame, with the
+# bindings over time. Empty when no slot is ever bound.
+def outside_bindings(model):
+    found = {}
+    for bone in model.outside_parents:
+        keys = outside_parent_keys(model, bone)
+        if any(parent is not None for _frame, parent in keys):
+            found[bone] = keys
+    return found
+
+
+# Hash of those bindings for the motion fingerprint, or "" when there are none, which
+# leaves the fingerprints of PMMs without them as they were.
+def outside_fingerprint(model):
+    found = outside_bindings(model)
+    if not found:
+        return ""
+    return digest_values(
+        [(model.bone_names[b] if 0 <= b < len(model.bone_names) else b, found[b]) for b in sorted(found)]
+    )
 
 
 # A short stable hash of any repr-able values, for settings and rig signatures.

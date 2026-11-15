@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.2
+
+- Bake MMD bone morphs into bone keyframes and sync outside-parent bindings within and between models, including retiming.
+- Improve leg IK and bone-bound camera accuracy.
+
 ## 0.8.1
 
 - Optional MMD Leg IK switch under each PMX model. Replicates MMD's CCD IK algorithm and bake the movement of supporting FK chain.

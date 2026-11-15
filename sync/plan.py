@@ -6,7 +6,7 @@ import types
 from ..common.constants import ACTION_PREFIX, IMPORT_FORMAT
 from ..common.scene_utils import find_armature, model_key
 from ..common.timing import phase
-from ..pmm import PmmError
+from ..pmm import PmmError, encode_name
 from .camera import follow_table
 from .clips import model_label
 from .mmd_tools_link import mmd_tools_version
@@ -17,7 +17,10 @@ from .motion import (
     digest_values,
     fingerprint_and_digests,
     ik_fingerprint,
+    outside_fingerprint,
+    BONE_MORPH_TRACK,
     IK_TRACK,
+    OUTSIDE_TRACK,
     keys_fingerprint,
     morph_track_moves,
     pack_bone_key,
@@ -31,6 +34,8 @@ from .motion import (
     vmd_bone_name,
 )
 from .retime import retime_factor
+from .outside_parent import outside_targets
+from .bone_morphs import bone_morph_fingerprint
 from .rigify import rigify_signature
 from .scale import current_scale, model_scale
 from .sync_state import (
@@ -156,12 +161,42 @@ def bone_name_table(armature):
     return table
 
 
+# The name a bone's track carries in the VMD when its own is over 15 bytes: the start of
+# the name and the bone's PMX index, so two bones that share a start stay apart and the
+# PMM's own cut name (which can end in half a character) is never what is matched.
+def bone_aliases(armature):
+    found = {}
+    for bone in armature.pose.bones:
+        mmd_bone = getattr(bone, "mmd_bone", None)
+        name = mmd_bone.name_j if mmd_bone is not None else ""
+        index = getattr(mmd_bone, "bone_id", -1) if mmd_bone is not None else -1
+        if not name or index < 0 or len(name.encode("cp932", "replace")) <= 15:
+            continue
+        suffix = "~%d" % index
+        stem = encode_name(name, 15 - len(suffix)).rstrip(b"\x00")
+        found[index] = stem.decode("cp932", "replace") + suffix
+    return found
+
+
+# The alias keys of a vmd_bone_table by the PMX index they end in.
+def table_aliases(table):
+    found = {}
+    for key in table:
+        head, mark, tail = key.rpartition("~")
+        if mark and tail.isdigit():
+            found[int(tail)] = key
+    return found
+
+
 # bone_name_table plus, for each bone whose name a VMD cannot hold whole (over 15 bytes,
 # or characters cp932 lacks), the name the VMD carries instead, when no other bone
 # carries the same one. The importer looks VMD names up in this table, so those bones
 # get their motion; MMD itself keys bones by index and never loses them.
 def vmd_bone_table(armature):
     table = bone_name_table(armature)
+    by_id = {getattr(b.mmd_bone, "bone_id", -1): b for b in armature.pose.bones if getattr(b, "mmd_bone", None) is not None}
+    for index, alias in bone_aliases(armature).items():
+        table[alias] = by_id[index]
     carried = {}
     for name, bone in table.items():
         short = vmd_bone_name(name)
@@ -197,10 +232,11 @@ def map_bones(model, table):
         mappable_keys=0,
         lost_keys=0,
     )
-    for name, keys in zip(model.bone_names, model.bones):
+    aliases = table_aliases(table)
+    for index, (name, keys) in enumerate(zip(model.bone_names, model.bones)):
         moves = bone_track_moves(keys)
         report.animated += 1 if moves else 0
-        lookup = vmd_bone_name(name)
+        lookup = aliases.get(index) or vmd_bone_name(name)
         if lookup in table:
             report.matched += 1
             report.renamed += 1 if lookup != name else 0
@@ -395,6 +431,16 @@ def plan_part(part, item, model, row, root, layout, scene, settings, signature, 
         if ik:
             plan.fingerprint = digest_values(plan.fingerprint, ik)
             plan.tracks[IK_TRACK] = ik[:8]
+        outside = outside_fingerprint(model) if part == "motion" else ""
+        if outside:
+            outside = digest_values(outside, outside_targets(model, settings))
+            plan.fingerprint = digest_values(plan.fingerprint, outside)
+            plan.tracks[OUTSIDE_TRACK] = outside[:8]
+        # Bone morphs are baked into the bones' keys, so their weights belong to the motion.
+        morphs = bone_morph_fingerprint(root, model) if part == "motion" else ""
+        if morphs:
+            plan.fingerprint = digest_values(plan.fingerprint, morphs)
+            plan.tracks[BONE_MORPH_TRACK] = morphs[:8]
     plan.frame_range = track_range(tracks)
     plan.keys = sum(len(k) for k in tracks)
     plan.settings, plan.legacy_settings = part_settings(part, scene, settings, root, signature, row)

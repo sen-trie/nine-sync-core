@@ -235,14 +235,19 @@ class MMDBridgeSettings(PropertyGroup):
         default=False,
     )
     follow_camera: BoolProperty(
-        name="Follow Bone",
-        description="Make the camera follow the model and bone stored in each PMM camera keyframe",
+        name="Sync Constraints",
+        description="Make the camera follow the model and bone stored in each PMM camera keyframe, and the model that bone is bound to through MMD's outside parent (a controller riding on another model)",
+        default=True,
+    )
+    sync_model_constraints: BoolProperty(
+        name="Sync Model Constraints",
+        description="Bind the bones MMD binds to another model's bone (outside parent), such as a weapon riding on the body or a controller on a model",
         default=True,
     )
     follow_rotation: BoolProperty(
         name="Follow Bone Rotation",
         description="Also inherit the bone rotation, not only its position",
-        default=False,
+        default=True,
     )
     inspect_model: EnumProperty(
         name="Model",

@@ -33,6 +33,7 @@ from .panels.remap import (
     NINESYNC_UL_rigify_map,
 )
 from .panels.readout import MMDBRIDGE_PT_readout
+from .panels.tools import NINESYNC_PT_tools
 from .preferences import NineSyncPreferences
 from .properties import (
     MMDBridgeControlName,
@@ -89,4 +90,5 @@ CLASSES = (
     MMDBRIDGE_PT_readout,
     MMDBRIDGE_PT_audio,
     NINESYNC_PT_inspector,
+    NINESYNC_PT_tools,
 )

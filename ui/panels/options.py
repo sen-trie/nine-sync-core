@@ -22,5 +22,6 @@ class MMDBRIDGE_PT_options(Panel):
         row.prop(settings, "scale")
         layout.prop(settings, "uv_morphs")
         layout.prop(settings, "sync_visibility")
+        layout.prop(settings, "sync_model_constraints")
         layout.separator()
         layout.prop(settings, "use_physics_vmd")

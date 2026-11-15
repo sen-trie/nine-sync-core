@@ -10,6 +10,7 @@ Run from the repo root. Each file is a standalone script that prints `ok` or `FA
 | `t_animation.py` | Blender or `bpy` | slotted actions, user-key snapshots, light keys, NLA cleanup |
 | `t_sync_plan.py` | Blender or `bpy` | fingerprints, summaries, the plan decision table, records, preview errors, progress and driver exit paths, timings |
 | `t_selective_sync.py` | Blender or `bpy` | display-track parsing, camera and light planned and imported independently (with stand-in importers), model visibility keys, NLA ownership and removal |
+| `t_leg_ik.py` | `bpy` | signed interpolation bytes, free slerp, leg IK solve with model limits, append bones, bone-morph baking |
 | `t_review_fixes.py` | Blender or `bpy` | names cut as MMD cuts them, identical fast hashing and morph sampling, IK switch keys, carried bone names, additive accessories, import-format records, parse reuse, UV morph helpers, the undo step |
 | `manual/check_install.py` | Blender | extension zip: install, enable, restart, preferences id, uninstall |
 | `manual/validate_real.py` | Blender, mmd_tools, PMX files | a real sync checked against values from the PMM, resync, 60 fps retime, Clean |

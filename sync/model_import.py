@@ -29,12 +29,14 @@ from .clips import (
 from .mmd_tools_link import mmd_tools_modules, run_importer
 from .morph_keys import ensure_morph_keys
 from .morphs import report_morphs, resolve_morph_names
+from .bone_morphs import apply_bone_morphs
 from .ik import apply_ik_keys
 from .leg_ik import solve_leg_ik
 from .motion import ik_switches, vmd_bone_name
+from .outside_parent import apply_outside_parents
 from .physics import import_physics_clip
 from .rigify import clear_remap, is_rigify_armature, retarget
-from .plan import vmd_bone_table
+from .plan import bone_aliases, table_aliases, vmd_bone_table
 from .scale import model_scale
 from .sync_state import forget_parts, rig_layout, write_parts
 from .targets import target_usable
@@ -57,8 +59,12 @@ def diagnose_bones(root, model):
         )
         return
     table = vmd_bone_table(armature)
-    matched = [n for n in model.bone_names if vmd_bone_name(n) in table]
-    unmatched = [n for n in model.bone_names if vmd_bone_name(n) not in table]
+    aliases = table_aliases(table)
+    reached = [
+        (aliases.get(i) or vmd_bone_name(n)) in table for i, n in enumerate(model.bone_names)
+    ]
+    matched = [n for n, ok in zip(model.bone_names, reached) if ok]
+    unmatched = [n for n, ok in zip(model.bone_names, reached) if not ok]
     log.info(
         "armature '%s': %d/%d PMM bones reach a bone through the VMD",
         armature.name,
@@ -128,7 +134,11 @@ def import_model(root, model, settings, item, parts=ALL_PARTS, rebuild=False):
         report_morphs(model, morph_map, morph_available)
     with phase("vmd_build", label):
         data = build_vmd(
-            model, morph_map, bones=motion, morphs=shape
+            model,
+            morph_map,
+            bones=motion,
+            morphs=shape,
+            aliases=bone_aliases(armature) if armature is not None else None,
         )
     if shape:
         try:
@@ -216,6 +226,10 @@ def import_model(root, model, settings, item, parts=ALL_PARTS, rebuild=False):
             with phase("ik_keys", label):
                 table = vmd_bone_table(armature)
                 apply_ik_keys(armature, model, table)
+                try:
+                    apply_outside_parents(armature, model, table, settings, vmd_bone_table)
+                except Exception as error:
+                    log.error("outside parents failed: %s\n%s", error, traceback.format_exc())
                 # A converted Rigify rig needs the solved legs too: its MMD bones have their
                 # IK at influence 0, so they show the FK keys, and the controls are baked from them.
                 if getattr(item, "solve_leg_ik", False):
@@ -223,6 +237,10 @@ def import_model(root, model, settings, item, parts=ALL_PARTS, rebuild=False):
                         solve_leg_ik(armature, model, table, model_scale(settings, armature))
                     except Exception as error:
                         log.error("MMD leg IK failed: %s\n%s", error, traceback.format_exc())
+                try:
+                    apply_bone_morphs(armature, root, model)
+                except Exception as error:
+                    log.error("bone morphs failed: %s\n%s", error, traceback.format_exc())
         restored = restore_points(kept)
         tag_actions(plain_owners, label)
         log.info("restored %d preserved key(s) for '%s'", restored, model.name)

@@ -35,6 +35,7 @@ def retime_project(project, factor):
         model.morphs = [retime_keys(keys, factor) for keys in model.morphs]
         model.visibility = retime_keys(model.visibility, factor, True)
         model.ik_keys = retime_keys(model.ik_keys, factor, True)
+        model.outside_keys = retime_keys(model.outside_keys, factor, True)
         model.last_frame = int(round(model.last_frame * factor))
     if project.play_range is not None:
         project.play_range = project.play_range._replace(

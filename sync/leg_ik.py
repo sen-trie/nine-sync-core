@@ -5,6 +5,7 @@ from mathutils import Matrix, Quaternion, Vector
 
 from ..common.animation import create_fcurve, find_fcurve, rewrite_fcurve
 from ..common.logger import log
+from ..pmm import curve_values
 from .motion import ik_switches, vmd_bone_name
 
 
@@ -12,10 +13,13 @@ from .motion import ik_switches, vmd_bone_name
 # conjugating its matrix with this one.
 SWAP = Matrix(((1.0, 0.0, 0.0), (0.0, 0.0, 1.0), (0.0, 1.0, 0.0)))
 KNEE_AXIS = Vector((1.0, 0.0, 0.0))
-# MMD's IK loop: its usual pass count, and the widest turn one step may make (the PMX
-# limit most models carry, 2.0 radians).
+# MMD's IK loop defaults, used when a rig carries no value of its own: the usual pass
+# count, and the widest turn one step may make (2.0 radians). find_leg_chains reads the
+# model's own PMX values.
 IK_ITERATIONS = 40
 IK_STEP_LIMIT = 2.0
+# Past this many passes a leg that has not closed on its target never will.
+IK_ITERATIONS_MAX = 255
 
 
 def swapped(vector):
@@ -25,7 +29,7 @@ def swapped(vector):
 # MMD's bezier of one interpolation curve: the eased share of the way (0-1) at time t,
 # found by bisection on the curve's x.
 def bezier_ease(x1, y1, x2, y2, t):
-    x1, y1, x2, y2 = x1 / 127.0, y1 / 127.0, x2 / 127.0, y2 / 127.0
+    x1, y1, x2, y2 = (v / 127.0 for v in curve_values(x1, y1, x2, y2))
     low, high = 0.0, 1.0
     for _ in range(24):
         s = (low + high) / 2.0
@@ -36,6 +40,20 @@ def bezier_ease(x1, y1, x2, y2, t):
             high = s
     s = (low + high) / 2.0
     return 3 * (1 - s) ** 2 * s * y1 + 3 * (1 - s) * s * s * y2 + s ** 3
+
+
+# Quaternion slerp along the shortest arc that, unlike Quaternion.slerp, accepts a share
+# outside 0-1: a curve with an undershooting control value eases past either end.
+def slerp_free(qa, qb, t):
+    if qa.dot(qb) < 0.0:
+        qb = Quaternion((-qb.w, -qb.x, -qb.y, -qb.z))
+    if 0.0 <= t <= 1.0:
+        return qa.slerp(qb, t)
+    delta = qa.inverted() @ qb
+    angle = delta.angle
+    if angle < 1e-9:
+        return qa.copy()
+    return qa @ Quaternion(delta.axis, angle * t)
 
 
 # One PMM bone track read the way MMD plays it: location and rotation at any frame, the
@@ -65,7 +83,7 @@ class KeyTrack:
             for i in range(3)
         )
         qb = Quaternion((nxt.rotation[3], nxt.rotation[0], nxt.rotation[1], nxt.rotation[2]))
-        return loc * self.scale, qa.slerp(qb, bezier_ease(*curve[12:16], t))
+        return loc * self.scale, slerp_free(qa, qb, bezier_ease(*curve[12:16], t))
 
 
 def bone_path(pose_bone):
@@ -74,6 +92,25 @@ def bone_path(pose_bone):
         path.append(pose_bone)
         pose_bone = pose_bone.parent
     return path[::-1]
+
+
+# A bone's own local move at a frame: its keyed location and rotation plus MMD's append
+# (付与) transform, which hands on a share of another bone's move (the waist-cancel and
+# twist bones of standard rigs). The source's own append counts too; IK results do not.
+def bone_local(bone, tracks, frame, depth=0):
+    track = tracks.get(bone.name)
+    loc, quat = track.at(frame) if track is not None else (Vector(), Quaternion())
+    mmd = getattr(bone, "mmd_bone", None)
+    if mmd is not None and depth < 8 and (mmd.has_additional_rotation or mmd.has_additional_location):
+        source = bone.id_data.pose.bones.get(mmd.additional_transform_bone)
+        if source is not None and source is not bone:
+            source_loc, source_quat = bone_local(source, tracks, frame, depth + 1)
+            share = mmd.additional_transform_influence
+            if mmd.has_additional_rotation:
+                quat = quat @ slerp_free(Quaternion(), source_quat, share)
+            if mmd.has_additional_location:
+                loc = loc + source_loc * share
+    return loc, quat
 
 
 # World position and rotation of the last bone of a chain, in MMD's axes, from the PMM
@@ -85,8 +122,7 @@ def chain_pose(path, tracks, frame):
     before = rot
     for bone in path:
         rest = swapped(bone.bone.head_local)
-        track = tracks.get(bone.name)
-        loc, quat = track.at(frame) if track is not None else (Vector(), Quaternion())
+        loc, quat = bone_local(bone, tracks, frame)
         if parent_rest is None:
             pos = rest + loc
         else:
@@ -103,7 +139,9 @@ def chain_pose(path, tracks, frame):
 # (see silence_constraint). Running MMD's loop (see solve) and baking its result as FK,
 # with the constraints off over those frames, matches MMD's legs where Blender's does not.
 class LegChain:
-    def __init__(self, thigh, knee, ik_bone, switch_index, knee_range, ankle=None, toe_bone=None):
+    def __init__(self, thigh, knee, ik_bone, switch_index, knee_range, ankle=None, toe_bone=None, iterations=IK_ITERATIONS, step_limit=IK_STEP_LIMIT):
+        self.iterations = iterations
+        self.step_limit = step_limit
         self.ankle = ankle
         self.toe_path = bone_path(toe_bone) if toe_bone is not None else None
         self.toe_vector = swapped(ankle.bone.tail_local - ankle.bone.head_local) if ankle is not None else None
@@ -142,7 +180,7 @@ class LegChain:
             knee_pos = hip + thigh_world @ self.thigh_vector
             return knee_pos, thigh_world, knee_world, knee_pos + knee_world @ self.shin_vector
 
-        for iteration in range(IK_ITERATIONS):
+        for iteration in range(self.iterations):
             for link in ("knee", "thigh"):
                 knee_pos, thigh_world, knee_world, ankle = reach(thigh, knee)
                 if link == "knee":
@@ -158,7 +196,7 @@ class LegChain:
                 step = math.acos(max(-1.0, min(1.0, to_ankle.dot(to_target))))
                 if step < 1e-5:
                     continue
-                step = min(step, IK_STEP_LIMIT)
+                step = min(step, self.step_limit)
                 if link == "thigh":
                     turn = to_ankle.cross(to_target)
                     if turn.length > 1e-12:
@@ -229,6 +267,25 @@ def knee_limits(knee):
     return -high, -low
 
 
+# The PMX loop count and per-step angle limit of one IK, as mmd_tools stored them: the
+# constraint's iterations carry the loop count times the model's loop factor, and the
+# angle sits on the bone that owns the constraint (or on the IK bone for a custom IK).
+def ik_parameters(armature, knee, ik_bone, constraint):
+    iterations, step_limit = IK_ITERATIONS, IK_STEP_LIMIT
+    try:
+        root = armature.parent
+        factor = max(1, int(root.mmd_root.ik_loop_factor)) if root is not None else 1
+        iterations = max(1, min(IK_ITERATIONS_MAX, int(round(constraint.iterations / factor))))
+        custom = any(c.name.startswith("mmd_ik_limit_custom") for c in ik_bone.constraints)
+        owner = ik_bone if custom else knee
+        step_limit = float(owner.mmd_bone.ik_rotation_constraint)
+        if step_limit <= 0.0:
+            step_limit = IK_STEP_LIMIT
+    except (AttributeError, ReferenceError, TypeError, ValueError):
+        pass
+    return iterations, step_limit
+
+
 # The leg chains of a model: each IK the PMM lists whose Blender constraint is a
 # two-bone chain on a knee that bends about X only. Foot IKs of one bone and rigs that
 # do not follow mmd_tools' setup are left to Blender's own solver.
@@ -258,7 +315,8 @@ def find_leg_chains(armature, model, table):
                             toe_bone = armature.pose.bones.get(sub.subtarget)
                             ankle = child if toe_bone is not None else None
                             toe_ik = sub if toe_bone is not None else None
-                chain = LegChain(knee.parent, knee, ik_bone, index, limits, ankle, toe_bone)
+                iterations, step_limit = ik_parameters(armature, knee, ik_bone, constraint)
+                chain = LegChain(knee.parent, knee, ik_bone, index, limits, ankle, toe_bone, iterations, step_limit)
                 chain.ik_constraints = [c for c in (constraint, toe_ik) if c is not None]
                 chains.append(chain)
     return chains
@@ -385,12 +443,24 @@ def solve_leg_ik(armature, model, table, scale):
                 if ankle_curves is not None:
                     solved_ankle.append(keyed[chain.ankle.name][offset])
                 continue
-            local, bend = chain.solve(tracks, frame)
+            try:
+                local, bend = chain.solve(tracks, frame)
+                ankle_basis = None
+                if ankle_curves is not None:
+                    thigh_world = chain_pose(chain.thigh_path, tracks, frame)[2] @ local
+                    ankle_basis = basis_quaternion(chain.ankle, chain.solve_ankle(tracks, frame, thigh_world, bend))
+            except (ValueError, ZeroDivisionError, ArithmeticError) as error:
+                # One bad frame keeps its keyed pose rather than losing the whole leg.
+                log.warning("leg IK: frame %d of '%s' left as keyed (%s)", frame, chain.thigh.name, error)
+                solved_thigh.append(keyed[chain.thigh.name][offset])
+                solved_knee.append(keyed[chain.knee.name][offset])
+                if ankle_curves is not None:
+                    solved_ankle.append(keyed[chain.ankle.name][offset])
+                continue
             solved_thigh.append(basis_quaternion(chain.thigh, local))
             solved_knee.append(basis_quaternion(chain.knee, Quaternion((1.0, 0.0, 0.0), bend)))
             if ankle_curves is not None:
-                thigh_world = chain_pose(chain.thigh_path, tracks, frame)[2] @ local
-                solved_ankle.append(basis_quaternion(chain.ankle, chain.solve_ankle(tracks, frame, thigh_world, bend)))
+                solved_ankle.append(ankle_basis)
         outputs = [(thigh_curves, solved_thigh), (knee_curves, solved_knee)]
         if ankle_curves is not None:
             outputs.append((ankle_curves, solved_ankle))

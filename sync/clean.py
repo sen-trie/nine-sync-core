@@ -23,6 +23,7 @@ from ..common.scene_utils import find_rig_root
 from .audio import sequence_strips
 from .ik import restore_ik_influence
 from .mmd_tools_link import mmd_tools_modules
+from .outside_parent import remove_outside_constraints
 from .rigs import remove_rig
 from .uv_morphs import clear_uv_channels
 from .visibility import VISIBILITY_PATHS
@@ -97,6 +98,8 @@ def clean_model_animation(root, counts):
     # Likewise an IK the clip switched off would stay off.
     if switched:
         restore_ik_influence(armature)
+    if armature is not None:
+        remove_outside_constraints(armature)
     # Without its keys a mesh keeps the hide state of the current frame, and nothing
     # would show it again, so models the bridge hid are shown whatever the pose option.
     for owner in hidden:

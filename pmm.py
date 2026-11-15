@@ -126,6 +126,13 @@ class IkKey(NamedTuple):
     states: Tuple[int, ...]
 
 
+# The (model, bone) each outside-parent slot of a model is bound to at one display key.
+# model is -1 while the slot is unbound.
+class OutsideKey(NamedTuple):
+    frame: int
+    parents: Tuple[Tuple[int, int], ...]
+
+
 class PmmModel:
     __slots__ = (
         "index",
@@ -141,6 +148,8 @@ class PmmModel:
         "last_frame",
         "constraints",
         "outside_parents",
+        "outside_keys",
+        "outside_bones",
         "opaque",
         "frame_rows",
         "morph_panels",
@@ -160,6 +169,8 @@ class PmmModel:
         self.last_frame = 0
         self.constraints = []
         self.outside_parents = []
+        self.outside_keys = []
+        self.outside_bones = {}
         self.opaque = None
         self.frame_rows = 2
         self.morph_panels = (-1, -1, -1, -1)
@@ -409,20 +420,23 @@ def read_morph_track(reader, morph_count):
 
 # A display keyframe: [index], frame, previous, next, visible, one IK switch per
 # constraint, (model, bone) per outside parent, selected. Returns (index, frame, next,
-# visible, IK states).
+# visible, IK states, outside parents).
 def read_model_keyframe(reader, constraint_count, outside_count, with_index):
     index = reader.i32() if with_index else 0
     frame, _previous, next_index = reader.unpack(MODEL_KEY_HEAD)
     visible = reader.u8()
     states = tuple(1 if b else 0 for b in reader.raw(constraint_count))
-    reader.skip(outside_count * 8 + 1)
-    return index, frame, next_index, 1 if visible else 0, states
+    values = struct.unpack("<%di" % (outside_count * 2), reader.raw(outside_count * 8))
+    reader.skip(1)
+    parents = tuple((values[i], values[i + 1]) for i in range(0, len(values), 2))
+    return index, frame, next_index, 1 if visible else 0, states, parents
 
 
 # The display track as a frame-ordered chain, walked like the bone tracks: the chain
-# order, not the record order, is what MMD plays. Returns (visibility keys, IK keys).
-def read_display_track(reader, constraint_count, outside_count):
-    _index, frame, next_index, visible, states = read_model_keyframe(
+# order, not the record order, is what MMD plays. Returns (visibility keys, IK keys,
+# outside-parent keys).
+def read_display_chain(reader, constraint_count, outside_count):
+    _index, frame, next_index, visible, states, parents = read_model_keyframe(
         reader, constraint_count, outside_count, False
     )
     additional = {}
@@ -431,6 +445,7 @@ def read_display_track(reader, constraint_count, outside_count):
         additional[entry[0]] = entry[1:]
     keys = [VisibilityKey(frame, visible)]
     ik_keys = [IkKey(frame, states)]
+    outside = [OutsideKey(frame, parents)]
     seen = set()
     cursor = next_index
     while cursor != 0 and cursor not in seen:
@@ -438,11 +453,41 @@ def read_display_track(reader, constraint_count, outside_count):
         if entry is None:
             break
         seen.add(cursor)
-        frame, next_index, visible, states = entry
+        frame, next_index, visible, states, parents = entry
         keys.append(VisibilityKey(frame, visible))
         ik_keys.append(IkKey(frame, states))
+        outside.append(OutsideKey(frame, parents))
         cursor = next_index
-    return normalize_keys(keys), normalize_keys(ik_keys)
+    return normalize_keys(keys), normalize_keys(ik_keys), normalize_keys(outside)
+
+
+def read_display_track(reader, constraint_count, outside_count):
+    return read_display_chain(reader, constraint_count, outside_count)[:2]
+
+
+# What one bone's outside-parent slot is bound to over time: (frame, (model, bone)) per
+# display key, with None while it is unbound. Empty when the bone has no slot.
+def outside_parent_keys(model, bone):
+    if bone < 0 or bone not in model.outside_parents:
+        return []
+    slot = model.outside_parents.index(bone)
+    keys = []
+    for key in model.outside_keys:
+        pair = key.parents[slot] if slot < len(key.parents) else (-1, 0)
+        keys.append((key.frame, pair if pair[0] >= 0 else None))
+    return keys
+
+
+# Names the bone behind every (model, bone) an outside-parent key points at, in the
+# model that owns the key, so a sync can find the parent's bone without the project.
+def link_outside_bones(models):
+    by_index = {m.index: m for m in models}
+    for model in models:
+        for key in model.outside_keys:
+            for parent_model, parent_bone in key.parents:
+                parent = by_index.get(parent_model)
+                if parent is not None and 0 <= parent_bone < len(parent.bone_names):
+                    model.outside_bones[(parent_model, parent_bone)] = parent.bone_names[parent_bone]
 
 
 def read_visibility_track(reader, constraint_count, outside_count):
@@ -476,7 +521,7 @@ def read_model(reader):
     model.last_frame = reader.i32()
     model.bones = read_bone_track(reader, bone_count)
     model.morphs = read_morph_track(reader, morph_count)
-    model.visibility, model.ik_keys = read_display_track(
+    model.visibility, model.ik_keys, model.outside_keys = read_display_chain(
         reader, constraint_count, outside_count
     )
     bone_state = reader.raw(bone_count * BONE_STATE_SIZE)
@@ -589,6 +634,7 @@ def parse_pmm(data):
     for _ in range(model_count):
         project.models.append(read_model(reader))
     models_end = reader.pos
+    link_outside_bones(project.models)
     try:
         project.camera_keys = read_scene_track(
             reader, CAMERA_INITIAL, CAMERA_ADDITIONAL, build_camera_payload, CameraKey
@@ -672,6 +718,23 @@ def encode_name(name, limit=NAME_LIMIT):
     return out.ljust(limit, b"\x00")
 
 
+# One curve's control values as MMD reads them. The bytes are signed chars, so a stored
+# 211 is -45 and a stored 134 is -122 (measured: MMD put a bone at 2.5 % of the way
+# where reading 211 as 127 would put it at 62 %). The y values may undershoot or
+# overshoot, the x values must stay inside the key span, so they are clamped to 0-127.
+def curve_values(x1, y1, x2, y2):
+    def signed(v):
+        v = int(v) & 0xFF
+        return v - 256 if v > 127 else v
+
+    return (
+        max(0, min(127, signed(x1))),
+        signed(y1),
+        max(0, min(127, signed(x2))),
+        signed(y2),
+    )
+
+
 # A PMM stores x1 y1 x2 y2 per curve (X, Y, Z, rotation); a VMD row wants all x1,
 # then all y1, x2 and y2, repeated in four shifted copies. Cached: a file holds only a
 # few distinct curves, and this ran once per bone key.
@@ -679,18 +742,16 @@ def interpolation_to_vmd(source):
     return vmd_interpolation_row(bytes(source))
 
 
-# The cached conversion, keyed by the curve bytes.
+# The cached conversion, keyed by the curve bytes. A VMD stores the same signed chars.
 @functools.lru_cache(maxsize=4096)
 def vmd_interpolation_row(source):
     row = bytearray(16)
     for curve in range(4):
-        x1, y1, x2, y2 = (
-            min(int(v), 127) for v in source[curve * 4 : curve * 4 + 4]
-        )
+        x1, y1, x2, y2 = curve_values(*source[curve * 4 : curve * 4 + 4])
         row[curve] = x1
-        row[4 + curve] = y1
+        row[4 + curve] = y1 & 0xFF
         row[8 + curve] = x2
-        row[12 + curve] = y2
+        row[12 + curve] = y2 & 0xFF
     out = bytearray(64)
     for shift in range(4):
         for k in range(16 - shift):
@@ -713,12 +774,15 @@ def bone_track_moves(keys):
     return len(keys) > 1 or any(bone_key_moves(k) for k in keys)
 
 
-def build_vmd(model, morph_map=None, bones=True, morphs=True):
+# aliases maps a bone index to the name its track carries in the VMD, for bones whose own
+# name the VMD cannot hold; the importer is given the same names to find them by.
+def build_vmd(model, morph_map=None, bones=True, morphs=True, aliases=None):
     chunks = [struct.pack("<30s20s", VMD_SIGNATURE, encode_name(model.name, 20))]
     bone_frames = []
     tracks = list(zip(model.bone_names, model.bones)) if bones else []
-    for name, keys in tracks:
-        packed_name = encode_name(name)
+    aliases = aliases or {}
+    for index, (name, keys) in enumerate(tracks):
+        packed_name = encode_name(aliases.get(index, name))
         for key in keys:
             bone_frames.append(
                 BONE_FRAME.pack(
@@ -780,6 +844,15 @@ def camera_interpolation_from_vmd(source):
     return bytes(out)
 
 
+# For a key bound to a model's bone the look-at z duplicates the distance (a bound PMM
+# stores both equal), and MMD counts it once: the eye orbits the bone at that distance and
+# looks at it. Left in, the look-at z would add the same offset a second time.
+def bound_look_at(key):
+    if key.parent_model < 0:
+        return key.look_at
+    return (key.look_at[0], key.look_at[1], 0.0)
+
+
 def build_scene_vmd(camera_keys):
     chunks = [
         struct.pack("<30s20s", VMD_SIGNATURE, encode_name("scene", 20)),
@@ -791,7 +864,7 @@ def build_scene_vmd(camera_keys):
             CAMERA_FRAME.pack(
                 key.frame,
                 key.distance,
-                *key.look_at,
+                *bound_look_at(key),
                 *key.angle,
                 camera_interpolation_to_vmd(key.interpolation),
                 max(0, key.fov),

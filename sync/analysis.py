@@ -63,6 +63,7 @@ def input_token(scene):
         settings.sync_light,
         settings.follow_camera,
         settings.follow_rotation,
+        settings.sync_model_constraints,
         settings.sync_visibility,
         settings.scene_record,
         len(bpy.data.actions),

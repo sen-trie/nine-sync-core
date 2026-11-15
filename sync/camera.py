@@ -6,6 +6,7 @@ from ..common.logger import log
 from ..common.scene_utils import find_armature, model_key, pose_bone_name
 from ..pmm import build_scene_vmd
 from .mmd_tools_link import run_importer
+from .outside_parent import rest_rotation_inverse
 from .rigs import ensure_camera_rig
 from .scale import current_scale
 from .tempfiles import remove_file, write_temp_vmd
@@ -110,7 +111,9 @@ def apply_follow(root, project, plan, settings):
         constraint.use_scale_y = False
         constraint.use_scale_z = False
         constraint.set_inverse_pending = False
-        constraint.inverse_matrix = Matrix.Identity(4)
+        constraint.inverse_matrix = (
+            rest_rotation_inverse(armature, bone) if settings.follow_rotation else Matrix.Identity(4)
+        )
         constraint.influence = 1.0
         path = 'constraints["%s"].influence' % constraint.name
         for key in keys:
