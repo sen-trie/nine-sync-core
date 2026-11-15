@@ -19,6 +19,8 @@ core = load("ninesync")
 core.register()
 pmm = importlib.import_module("ninesync.pmm")
 motion = importlib.import_module("ninesync.sync.motion")
+bone_print = lambda model: motion.digest_tracks(model.bone_names, model.bones, motion.pack_bone_key)
+visibility_print = lambda model: motion.digest_tracks([motion.VISIBILITY_TRACK], [model.visibility], motion.pack_visibility_key)
 plan_mod = importlib.import_module("ninesync.sync.plan")
 state = importlib.import_module("ninesync.sync.sync_state")
 elements = importlib.import_module("ninesync.sync.scene_elements")
@@ -49,7 +51,7 @@ data = (
     + b"END"
 )
 reader = pmm.Reader(data)
-track = pmm.read_visibility_track(reader, 2, 1)
+track = pmm.read_display_chain(reader, 2, 1)[0]
 checks.check("display track follows the chain", [(k.frame, k.visible) for k in track] == [(0, 1), (10, 0), (20, 1)], track)
 checks.check("display track consumes its bytes", data[reader.pos:] == b"END", reader.pos)
 looped = (
@@ -57,9 +59,9 @@ looped = (
     + struct.pack("<i", 1)
     + display_record(5, 0, 1, 1, 0, 0, index=1)
 )
-checks.check("a looping chain ends", len(pmm.read_visibility_track(pmm.Reader(looped), 0, 0)) == 2)
+checks.check("a looping chain ends", len(pmm.read_display_chain(pmm.Reader(looped), 0, 0)[0]) == 2)
 try:
-    pmm.read_visibility_track(pmm.Reader(data[:20]), 2, 1)
+    pmm.read_display_chain(pmm.Reader(data[:20]), 2, 1)[0]
     checks.check("truncated display track fails", False)
 except pmm.PmmError:
     checks.check("truncated display track fails", True)
@@ -87,9 +89,9 @@ def make_model(name="m", shown=((0, 1),)):
 hidden = make_model(shown=((0, 1), (10, 0)))
 checks.check("shown-only track does not hide", not motion.visibility_hides(make_model().visibility))
 checks.check("hidden key hides", motion.visibility_hides(hidden.visibility))
-checks.check("visibility fingerprint repeats", motion.visibility_fingerprint(hidden) == motion.visibility_fingerprint(make_model(shown=((0, 1), (10, 0)))))
-checks.check("visibility change detected", motion.visibility_fingerprint(hidden) != motion.visibility_fingerprint(make_model(shown=((0, 1), (11, 0)))))
-checks.check("bone fingerprint ignores visibility", motion.motion_fingerprint(hidden) == motion.motion_fingerprint(make_model()))
+checks.check("visibility fingerprint repeats", visibility_print(hidden) == visibility_print(make_model(shown=((0, 1), (10, 0)))))
+checks.check("visibility change detected", visibility_print(hidden) != visibility_print(make_model(shown=((0, 1), (11, 0)))))
+checks.check("bone fingerprint ignores visibility", bone_print(hidden) == bone_print(make_model()))
 blink = make_model(shown=((0, 1), (30, 0), (31, 1)))
 project = pmm.PmmProject()
 project.models = [blink]
@@ -379,8 +381,8 @@ pairs = lambda keys: [(k.frame, k.visible) for k in keys]
 scene.render.fps, scene.render.fps_base = 30, 1.0
 raw = writer.write_visibility_track(vis_keys((0, 0), (10, 1), (25, 0)), 2) + b"END"
 reader = pmm.Reader(raw)
-checks.check("display track written as MMD reads it", pairs(pmm.read_visibility_track(reader, 2, 0)) == [(0, 0), (10, 1), (25, 0)] and raw[reader.pos:] == b"END")
-checks.check("empty track writes one shown key", pairs(pmm.read_visibility_track(pmm.Reader(writer.write_visibility_track([], 1)), 1, 0)) == [(0, 1)])
+checks.check("display track written as MMD reads it", pairs(pmm.read_display_chain(reader, 2, 0)[0]) == [(0, 0), (10, 1), (25, 0)] and raw[reader.pos:] == b"END")
+checks.check("empty track writes one shown key", pairs(pmm.read_display_chain(pmm.Reader(writer.write_visibility_track([], 1)), 1, 0)[0]) == [(0, 1)])
 template = open(kagamine, "rb").read()
 base = pmm.parse_pmm(template)
 written = base.models[0]
@@ -392,9 +394,9 @@ out = pmm.parse_pmm(writer.build_pmm(template, [written], base.camera_keys))
 checks.check("outside parent slots written", out.models[0].outside_parents == [-1, 0, 2] and pairs(out.models[0].visibility) == [(0, 1), (40, 0), (90, 1)], out.models[0].outside_parents)
 empty = pmm.parse_pmm(writer.build_pmm(template, [], base.camera_keys))
 checks.check("Create PMM without models writes a camera-only project", empty.models == [] and len(empty.camera_keys) == len(base.camera_keys))
-checks.check("an unkeyed shown model exports no keys", export.collect_visibility(scene, settings, root) == [])
+checks.check("an unkeyed shown model exports no keys", export.collect_visibility(scene, root) == [])
 visibility.apply_visibility(meshes, make_model("vis", shown=((0, 0), (10, 1), (20, 0))), label)
-checks.check("synced visibility exports back", pairs(export.collect_visibility(scene, settings, root)) == [(0, 0), (10, 1), (20, 0)], pairs(export.collect_visibility(scene, settings, root)))
+checks.check("synced visibility exports back", pairs(export.collect_visibility(scene, root)) == [(0, 0), (10, 1), (20, 0)], pairs(export.collect_visibility(scene, root)))
 visibility.remove_visibility(meshes, label)
 for mesh in meshes:
     mesh.hide_viewport = mesh.hide_render = False
@@ -403,11 +405,11 @@ meshes[0].hide_render = True
 meshes[0].keyframe_insert("hide_render", frame=6)
 meshes[0].hide_render = False
 meshes[0].keyframe_insert("hide_render", frame=9)
-checks.check("one hidden mesh leaves the model shown", export.collect_visibility(scene, settings, root) == [])
+checks.check("one hidden mesh leaves the model shown", export.collect_visibility(scene, root) == [])
 meshes[1].hide_viewport = True
-checks.check("user keys plus a hidden mesh export the hidden span", pairs(export.collect_visibility(scene, settings, root)) == [(0, 1), (6, 0), (9, 1)], pairs(export.collect_visibility(scene, settings, root)))
+checks.check("user keys plus a hidden mesh export the hidden span", pairs(export.collect_visibility(scene, root)) == [(0, 1), (6, 0), (9, 1)], pairs(export.collect_visibility(scene, root)))
 scene.render.fps = 60
-checks.check("export retimes to 30 fps", pairs(export.collect_visibility(scene, settings, root)) == [(0, 1), (3, 0), (4, 1)] or pairs(export.collect_visibility(scene, settings, root)) == [(0, 1), (3, 0), (5, 1)], pairs(export.collect_visibility(scene, settings, root)))
+checks.check("export retimes to 30 fps", pairs(export.collect_visibility(scene, root)) == [(0, 1), (3, 0), (4, 1)] or pairs(export.collect_visibility(scene, root)) == [(0, 1), (3, 0), (5, 1)], pairs(export.collect_visibility(scene, root)))
 scene.render.fps = 30
 checks.check("frame put back after reading", scene.frame_current == 0, scene.frame_current)
 meshes[0].animation_data.action = user_action

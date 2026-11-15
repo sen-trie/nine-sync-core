@@ -1,4 +1,4 @@
-import bpy, importlib, math, os, struct, tempfile, time
+import bpy, importlib, os, struct, tempfile, time
 from mathutils import Vector
 # Rigify remap check for a model converted with MMD Tools Append, every limb in FK and
 # IK. Needs a .blend with the converted rig and a real VMD. Run in a throwaway profile

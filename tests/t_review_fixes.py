@@ -6,7 +6,7 @@ import sys
 import types
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from support import REPO, Checks, load, stage
+from support import REPO, Checks, load, sample_morph, stage
 
 import bpy
 
@@ -75,7 +75,6 @@ names = ["a", "b", "c"]
 tracks = [[bone_key(0), bone_key(5, 1.0)], [bone_key(0)], []]
 whole, table = motion.fingerprint_and_digests(names, tracks, motion.pack_bone_key)
 checks.check("one-pass fingerprint equals digest_tracks", whole == motion.digest_tracks(names, tracks, motion.pack_bone_key))
-checks.check("one-pass track digests equal track_digests", table == motion.track_digests(names, tracks, motion.pack_bone_key))
 
 # P6: vectorised morph sampling is bit-identical to the loop, key frames included.
 bad = 0
@@ -84,7 +83,7 @@ for _ in range(400):
     keys = [pmm.MorphKey(f, struct.unpack("<f", struct.pack("<f", rng.uniform(-1, 1)))[0]) for f in frames]
     probe = sorted(set(frames) | set(rng.sample(range(-5, 310), 25)))
     for frame, value in zip(probe, morph_keys.sample_morph_many(keys, probe)):
-        bad += float(value) != morph_keys.sample_morph(keys, frame)
+        bad += float(value) != sample_morph(keys, frame)
 checks.check("vectorised morph sampling is bit-identical", bad == 0, bad)
 
 # C1: IK switches read from the display track.
@@ -99,7 +98,7 @@ data = (
     + display_record(20, 2, 0, 1, (1, 1), index=1)
     + display_record(10, 0, 1, 1, (0, 1), index=2)
 )
-shown, ik_keys = pmm.read_display_track(pmm.Reader(data), 2, 0)
+shown, ik_keys, _outside = pmm.read_display_chain(pmm.Reader(data), 2, 0)
 checks.check("IK states follow the chain", [(k.frame, k.states) for k in ik_keys] == [(0, (1, 1)), (10, (0, 1)), (20, (1, 1))], ik_keys)
 ik_model = pmm.PmmModel()
 ik_model.bone_names = ["leg", "左足ＩＫ", "右足ＩＫ"]
@@ -135,7 +134,7 @@ solver = arm.pose.bones["knee"].constraints.new("IK")
 solver.target, solver.subtarget, solver.chain_count = arm, "左足ＩＫ", 2
 limit = arm.pose.bones["thigh"].constraints.new("LIMIT_ROTATION")
 arm.animation_data_create().action = bpy.data.actions.new("MMDBridge_test_motion")
-switched = ik.ik_switch_constraints(arm, arm.pose.bones["左足ＩＫ"])
+switched = ik.ik_switch_table(arm).get("左足ＩＫ", [])
 checks.check("IK switch reaches IK and chain limits", switched == [solver, limit], switched)
 table = plan_mod.vmd_bone_table(arm)
 keyed = ik.apply_ik_keys(arm, ik_model, table)

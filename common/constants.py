@@ -94,9 +94,6 @@ MMD_TOOLS_URL = "https://extensions.blender.org/add-ons/mmd-tools/"
 FX_URL = ""
 
 
-CORE_URL = ""
-
-
 WRAP_MARGIN = 40
 
 

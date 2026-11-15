@@ -444,7 +444,7 @@ def plan_part(part, item, model, row, root, layout, scene, settings, signature, 
     plan.frame_range = track_range(tracks)
     plan.keys = sum(len(k) for k in tracks)
     plan.settings, plan.legacy_settings = part_settings(part, scene, settings, root, signature, row)
-    current = part_outputs(row, layout, settings, part, label, not check_edits) if row is not None else []
+    current = part_outputs(row, layout, part, label, not check_edits) if row is not None else []
     plan.destination, plan.exists = describe_destination(part, current, label)
     saved = None
     note = "Not synced yet"
@@ -536,7 +536,7 @@ def plan_model(model, row, scene, settings, source, force, check_edits=True):
 # and that has no such keys needs nothing.
 def plan_visibility(item, model, row, root, layout, scene, settings, record, force, check_edits=True):
     label = model_label(model)
-    owned = row is not None and bool(part_outputs(row, layout, settings, "visible", label, True))
+    owned = row is not None and bool(part_outputs(row, layout, "visible", label, True))
     if not visibility_hides(model.visibility) and not owned:
         return
     if not layout.meshes:

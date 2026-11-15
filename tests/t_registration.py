@@ -40,7 +40,6 @@ def state_while_on(on, label):
     checks.check("%s: core state" % label, hooks.core_installed() == core_on and scene_core == core_on)
     checks.check("%s: fx state" % label, hooks.fx_installed() == fx_on and scene_fx == fx_on)
     checks.check("%s: core panels" % label, all(hasattr(bpy.types, p) == core_on for p in CORE_PANELS))
-    checks.check("%s: no warning panel" % label, not hasattr(bpy.types, "NINESYNC_PT_legacy"))
     if core_on:
         relink = importlib.import_module("ninesync.ui.relink")
         checks.check("%s: settings not stale" % label, not relink.settings_outdated(bpy.context.scene))

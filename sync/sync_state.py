@@ -103,7 +103,7 @@ def active_action(owner):
 
 
 # The actions a part writes to, found the way import_model finds them.
-def part_outputs(row, layout, settings, part, label, lazy=False):
+def part_outputs(row, layout, part, label, lazy=False):
     if part == "visible":
         found = [(m, find_visibility_action(m, label)) for m in layout.meshes]
         return [output_entry(m, action, lazy) for m, action in found if action is not None]
@@ -172,7 +172,7 @@ def write_parts(row, entry, layout, settings, label, names):
             "keys": planned.keys,
             "range": planned.frame_range,
             "tracks": planned.tracks,
-            "outputs": part_outputs(row, layout, settings, name, label),
+            "outputs": part_outputs(row, layout, name, label),
         }
     row.sync_record = json.dumps(record, sort_keys=True, ensure_ascii=False)
 

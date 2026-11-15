@@ -15,7 +15,7 @@ from ..pmm import PmmError, parse_pmm
 from .analysis import clear_analysis, content_digest, parsed_copy
 from .audio import describe_audio, import_audio
 from .model_import import sync_target
-from .plan import BLOCKED, PART_LABELS, SKIP, build_plan, parse_checked
+from .plan import BLOCKED, PART_LABELS, build_plan, parse_checked
 from .progress import SyncProgress
 from .retime import retime_factor, retime_project
 from .scale import current_scale
@@ -25,7 +25,7 @@ from .targets import refresh_targets
 from .tempfiles import sweep_stale_temp
 
 
-_last_sync = {"digest": None, "failed": 0}
+_last_sync = {"digest": None}
 _active = {"driver": None}
 
 
@@ -232,7 +232,6 @@ def sync_steps(scene, run):
         model = by_key.get(entry.key)
         if row is not None and model is not None:
             apply_entry(run, entry, row, model, settings)
-    _last_sync["failed"] = run.failed
     yield from run.tick(0.82, "Updating camera and light")
     with phase("camera_light"):
         upgrade_scene_settings(settings, plan.source, plan.scene)

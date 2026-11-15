@@ -2,7 +2,7 @@ import hashlib
 import struct
 import types
 
-from ..pmm import REST_EPSILON, bone_key_moves, bone_track_moves, encode_name, outside_parent_keys
+from ..pmm import REST_EPSILON, bone_track_moves, encode_name, outside_parent_keys
 
 
 BONE_KEY = struct.Struct("<i3d4d")
@@ -67,26 +67,9 @@ def keys_fingerprint(keys, pack_key):
     return digest_tracks([""], [keys], pack_key)
 
 
-def motion_fingerprint(model):
-    return digest_tracks(model.bone_names, model.bones, pack_bone_key)
-
-
-def shape_fingerprint(model):
-    return digest_tracks(model.morph_names, model.morphs, pack_morph_key)
-
-
-def visibility_fingerprint(model):
-    return digest_tracks([VISIBILITY_TRACK], [model.visibility], pack_visibility_key)
-
-
-# Per-track hashes, saved with a sync so the next preview can name what changed. Eight
-# hex digits only have to tell one revision of a track from the next.
-def track_digests(names, tracks, pack_key):
-    return fingerprint_and_digests(names, tracks, pack_key)[1]
-
-
-# digest_tracks and track_digests in one pass, packing each key once. The hashes are
-# the same as computing the two apart.
+# digest_tracks plus per-track hashes, saved with a sync so the next preview can name
+# what changed, in one pass that packs each key once. Eight hex digits only have to tell
+# one revision of a track from the next.
 def fingerprint_and_digests(names, tracks, pack_key):
     whole = hashlib.sha256()
     whole.update(struct.pack("<I", len(tracks)))

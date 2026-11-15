@@ -6,24 +6,9 @@ from .morphs import expand_group_morph, group_morph_table, uv_morph_table
 from .uv_morphs import uv_key_name
 
 
-# Linear weight at a frame, clamped to the first and last key.
-def sample_morph(keys, frame):
-    if frame <= keys[0].frame:
-        return keys[0].weight
-    if frame >= keys[-1].frame:
-        return keys[-1].weight
-    for a, b in zip(keys, keys[1:]):
-        if a.frame <= frame <= b.frame:
-            span = b.frame - a.frame
-            if span == 0:
-                return a.weight
-            return a.weight + (b.weight - a.weight) * (frame - a.frame) / span
-    return keys[-1].weight
-
-
-# sample_morph at many frames at once. Same segment choice (the first one that holds
-# the frame) and the same float operations in the same order, so every value is
-# bit-identical to the loop, without its cost of keys times frames.
+# Linear weight at many frames at once, clamped to the first and last key. Bit-identical
+# to the scalar loop (see sample_morph in tests/support.py), without its cost of keys
+# times frames.
 def sample_morph_many(keys, frames):
     at = numpy.asarray(frames, dtype=numpy.float64)
     key_frames = numpy.array([k.frame for k in keys], dtype=numpy.float64)

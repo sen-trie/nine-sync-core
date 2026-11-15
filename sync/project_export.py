@@ -150,7 +150,7 @@ def anchored(keys):
 
 # Maps the exporter's frame numbers to PMM frames: it subtracts min(1, frame_start),
 # and sync multiplies PMM frames by the retime factor.
-def to_pmm_frames(keys, scene, settings, hold_cuts=False):
+def to_pmm_frames(keys, scene, hold_cuts=False):
     offset = min(1, scene.frame_start)
     shifted = [k._replace(frame=k.frame + offset) for k in keys]
     factor = export_factor(scene)
@@ -193,7 +193,7 @@ def visibility_key_frames(meshes):
 # every mesh is hidden there, in the viewport or in renders. The timeline is stepped to
 # each keyed frame so NLA and the active action combine as Blender plays them, then put
 # back. Unkeyed meshes give one key: their current state.
-def collect_visibility(scene, settings, root):
+def collect_visibility(scene, root):
     layout = rig_layout(root)
     meshes = list(layout.meshes) if layout is not None else []
     if not meshes:
@@ -257,13 +257,13 @@ def collect_model(scene, settings, index, root, path):
                         k._replace(interpolation=interpolation_from_vmd(k.interpolation))
                         for k in keys
                     ]
-                    model.bones[slot] = anchored(to_pmm_frames(keys, scene, settings))
+                    model.bones[slot] = anchored(to_pmm_frames(keys, scene))
             for name, keys in morphs.items():
                 slot = by_morph.get(name)
                 if slot is not None:
-                    model.morphs[slot] = anchored(to_pmm_frames(keys, scene, settings))
+                    model.morphs[slot] = anchored(to_pmm_frames(keys, scene))
     if settings.export_animation and settings.export_visibility:
-        model.visibility = collect_visibility(scene, settings, root)
+        model.visibility = collect_visibility(scene, root)
     log.info(
         "export model %d '%s': %d bones, %d morphs, %d bone keys, %d morph keys, visibility %s",
         index,
@@ -351,7 +351,7 @@ def create_pmm(scene, settings, out_path):
     rig_root = settings.export_camera_object if settings.export_animation else None
     if rig_root is not None:
         _, _, cameras = export_vmd(settings, camera=rig_root)
-        camera_keys = anchored(to_pmm_frames(cameras, scene, settings, True))
+        camera_keys = anchored(to_pmm_frames(cameras, scene, True))
         log.info("export camera '%s': %d key(s)", rig_root.name, len(camera_keys))
     factor = export_factor(scene)
     play_range = (

@@ -27,10 +27,6 @@ def ik_switch_table(armature):
     return table
 
 
-def ik_switch_constraints(armature, ik_bone):
-    return ik_switch_table(armature).get(ik_bone.name, [])
-
-
 def set_constant(fcurve):
     for point in fcurve.keyframe_points:
         point.interpolation = "CONSTANT"

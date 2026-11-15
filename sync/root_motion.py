@@ -59,7 +59,7 @@ def combined_poses(scene, root, bones, frames):
 # Writes one bone's keys. Quaternions stay on the side of their neighbour so a key
 # pair never turns the long way round. Scale is keyed only when it differs from rest,
 # since it exists for Blender alone: a PMM has no bone scale.
-def write_bone_keys(bone, samples, interpolation):
+def write_bone_keys(bone, samples):
     stretched = any(
         max(abs(s - 1.0) for s in scale) > 1e-3 for _, (_, _, scale) in samples
     )
@@ -123,7 +123,7 @@ def convert_root_motion(scene, root):
     root.scale = (1.0, 1.0, 1.0)
     stretched = False
     for bone in bones:
-        stretched = write_bone_keys(bone, poses[bone.name], root_keys) or stretched
+        stretched = write_bone_keys(bone, poses[bone.name]) or stretched
     match_interpolation(armature, bones, root_keys)
     scene.frame_set(scene.frame_current)
     bpy.context.view_layer.update()

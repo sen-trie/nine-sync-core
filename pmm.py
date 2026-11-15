@@ -461,10 +461,6 @@ def read_display_chain(reader, constraint_count, outside_count):
     return normalize_keys(keys), normalize_keys(ik_keys), normalize_keys(outside)
 
 
-def read_display_track(reader, constraint_count, outside_count):
-    return read_display_chain(reader, constraint_count, outside_count)[:2]
-
-
 # What one bone's outside-parent slot is bound to over time: (frame, (model, bone)) per
 # display key, with None while it is unbound. Empty when the bone has no slot.
 def outside_parent_keys(model, bone):
@@ -488,10 +484,6 @@ def link_outside_bones(models):
                 parent = by_index.get(parent_model)
                 if parent is not None and 0 <= parent_bone < len(parent.bone_names):
                     model.outside_bones[(parent_model, parent_bone)] = parent.bone_names[parent_bone]
-
-
-def read_visibility_track(reader, constraint_count, outside_count):
-    return read_display_track(reader, constraint_count, outside_count)[0]
 
 
 # Besides the keys, read_model keeps the bytes the writer cannot derive (editor

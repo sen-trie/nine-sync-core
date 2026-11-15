@@ -61,7 +61,7 @@ def model_owner_sets(root):
 
 # Collects what the bridge animated (bones, shape keys) and the actions to delete,
 # detaching them first. Only these channels are reset later.
-def clean_model_animation(root, counts):
+def clean_model_animation(root):
     armature, _meshes, owners = model_owner_sets(root)
     bones = set()
     shape_values = []
@@ -201,9 +201,7 @@ def run_clean(scene, settings, options):
                     item.clip = None
                 if item.shape_clip is not None and is_bridge_action(item.shape_clip):
                     item.shape_clip = None
-                armature, bones, shape_values, doomed = clean_model_animation(
-                    root, counts
-                )
+                armature, bones, shape_values, doomed = clean_model_animation(root)
                 seen = set()
                 for action in doomed:
                     try:

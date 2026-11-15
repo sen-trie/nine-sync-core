@@ -5,6 +5,7 @@ import sys
 import tempfile
 
 
+STAGED = []
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 SKIP = shutil.ignore_patterns(
@@ -30,6 +31,7 @@ def fx_folder():
 # and symlinks need elevated rights on Windows.
 def stage(*modules):
     root = tempfile.mkdtemp(prefix="ninesync_pkgs_")
+    STAGED.append(root)
     sources = {"ninesync": REPO, "ninesync_fx": fx_folder()}
     for module in modules:
         source = sources[module]
@@ -38,6 +40,22 @@ def stage(*modules):
         shutil.copytree(source, os.path.join(root, module), ignore=SKIP)
     sys.path.insert(0, root)
     return root
+
+
+# Linear morph weight at a frame, clamped to the first and last key: the scalar reference
+# that morph_keys.sample_morph_many must match bit for bit.
+def sample_morph(keys, frame):
+    if frame <= keys[0].frame:
+        return keys[0].weight
+    if frame >= keys[-1].frame:
+        return keys[-1].weight
+    for a, b in zip(keys, keys[1:]):
+        if a.frame <= frame <= b.frame:
+            span = b.frame - a.frame
+            if span == 0:
+                return a.weight
+            return a.weight + (b.weight - a.weight) * (frame - a.frame) / span
+    return keys[-1].weight
 
 
 # Imports a staged add-on. Wheels older than 5.3 need the floor lowered on the package
@@ -64,5 +82,8 @@ class Checks:
     def finish(self):
         print("%d failed" % len(self.failed))
         sys.stdout.flush()
+        # os._exit skips atexit, so the staged copies go here.
+        for root in STAGED:
+            shutil.rmtree(root, ignore_errors=True)
         # sys.exit does not set Blender's own exit code under --python, so leave hard.
         os._exit(1 if self.failed else 0)

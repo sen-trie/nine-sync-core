@@ -65,20 +65,10 @@ def set_interpolation(armature, path, kind, low=None, high=None):
         fcurve.update()
 
 
-# The binding that holds at a frame: the last key at or before it, or the first key.
-def binding_at(keys, frame):
-    current = keys[0][1]
-    for key_frame, pair in keys:
-        if key_frame > frame:
-            break
-        current = pair
-    return current
-
-
 # One Child Of constraint on a parentless bone, keyed on where the PMM binds it. A bone
 # without a parent has nothing of its own to cancel, so the constraint is exact and
 # stays live when the parent model's motion changes.
-def constrain_bone(armature, own, name, pair, parent_armature, parent, keys):
+def constrain_bone(armature, own, pair, parent_armature, parent, keys):
     constraint = own.constraints.new(type="CHILD_OF")
     constraint.name = "%s_%d_%d" % (PARENT_PREFIX, pair[0], pair[1])
     constraint.target = parent_armature
@@ -214,7 +204,7 @@ def apply_outside_parents(armature, model, table, settings, bone_table):
                 )
                 continue
             if own.parent is None:
-                constrain_bone(armature, own, name, pair, parent_armature, parent, keys)
+                constrain_bone(armature, own, pair, parent_armature, parent, keys)
                 written += 1
                 how = "constraint"
             else:

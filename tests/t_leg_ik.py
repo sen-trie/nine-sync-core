@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from support import Checks, load, stage
 
 import bpy
-from mathutils import Quaternion, Vector
+from mathutils import Quaternion
 
 
 stage("ninesync")
