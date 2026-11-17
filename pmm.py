@@ -461,8 +461,14 @@ def read_display_chain(reader, constraint_count, outside_count):
     return normalize_keys(keys), normalize_keys(ik_keys), normalize_keys(outside)
 
 
+# The model index MMD records for a bone released from its own parent and placed in the
+# model's frame (-1 is "no outside parent", the bone keeps its own parent).
+OUTSIDE_FREE = -2
+
+
 # What one bone's outside-parent slot is bound to over time: (frame, (model, bone)) per
-# display key, with None while it is unbound. Empty when the bone has no slot.
+# display key, with None while it is unbound and (OUTSIDE_FREE, 0) while it is released.
+# Empty when the bone has no slot.
 def outside_parent_keys(model, bone):
     if bone < 0 or bone not in model.outside_parents:
         return []
@@ -470,7 +476,12 @@ def outside_parent_keys(model, bone):
     keys = []
     for key in model.outside_keys:
         pair = key.parents[slot] if slot < len(key.parents) else (-1, 0)
-        keys.append((key.frame, pair if pair[0] >= 0 else None))
+        if pair[0] >= 0:
+            keys.append((key.frame, pair))
+        elif pair[0] == OUTSIDE_FREE:
+            keys.append((key.frame, (OUTSIDE_FREE, 0)))
+        else:
+            keys.append((key.frame, None))
     return keys
 
 

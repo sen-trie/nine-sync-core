@@ -1,9 +1,11 @@
 import bpy
+from mathutils import Matrix
 
 from ..common.animation import find_fcurve
 from ..common.constants import FOLLOW_PREFIX
 from ..common.logger import log
 from ..common.scene_utils import find_armature
+from ..pmm import OUTSIDE_FREE
 from .motion import outside_bindings, vmd_bone_name
 
 PARENT_PREFIX = FOLLOW_PREFIX + "Parent"
@@ -101,11 +103,57 @@ def bound_frames(keys, pair, last):
 # shows the key itself as "relative place"). Rest rolls are taken out of both bones
 # because MMD's bone axes are the world's.
 def bound_matrix(armature, parent_armature, parent, own):
+    own_roll = rest_rotation_inverse(armature, own.name).inverted()
+    if parent is None:
+        # Released into the model's frame the key is an offset from the bone's own rest
+        # head (checked against MMD's camera view), unlike a bound bone's key.
+        rest_head = Matrix.Translation(own.bone.head_local)
+        return armature.matrix_world @ rest_head @ own_roll @ own.matrix_basis
     posed = parent_armature.matrix_world @ parent.matrix
     parent_roll = rest_rotation_inverse(parent_armature, parent.name)
     frame = posed @ parent_roll
-    own_roll = rest_rotation_inverse(armature, own.name).inverted()
     return frame @ own_roll @ own.matrix_basis
+
+
+# MMD does not blend between two bone keys that sit under different outside-parent
+# states (a bone released from its parent, bound, or back to normal): it holds the first
+# key's pose until the second. The importer blends them, so the first key is made
+# constant here.
+def hold_across_changes(armature, own, keys, states):
+    def state_at(frame):
+        found = None
+        for key_frame, state in states:
+            if key_frame > frame:
+                break
+            found = state
+        return found
+
+    frames = [key.frame for key in keys]
+    paths = (own.path_from_id("location"), own.path_from_id("rotation_quaternion"))
+    for first, second in zip(frames, frames[1:]):
+        if second - first > 1 and state_at(first) != state_at(second):
+            for path in paths:
+                set_interpolation(armature, path, "CONSTANT", first, first)
+
+
+# MMD takes a bone out of its parent one frame after the outside-parent key that releases
+# it: on that key's own frame the bone is still where its previous key left it, and the
+# released pose starts on the next frame. The key on that frame is therefore replaced by
+# the previous key's pose.
+def hold_release_frame(armature, own, frame, before):
+    for path, count in ((own.path_from_id("location"), 3), (own.path_from_id("rotation_quaternion"), 4)):
+        values = []
+        for index in range(count):
+            fcurve = find_fcurve(armature, path, index)
+            values.append(fcurve.evaluate(before) if fcurve is not None else None)
+        if None in values:
+            continue
+        if count == 3:
+            own.location = values
+        else:
+            own.rotation_quaternion = values
+        armature.keyframe_insert(data_path=path, frame=frame)
+        set_interpolation(armature, path, "LINEAR", frame, frame)
 
 
 # Solves what a bone with a parent has to do: MMD drops the bone's own parent while it
@@ -167,6 +215,7 @@ def apply_outside_parents(armature, model, table, settings, bone_table):
         return 0
     tables = {}
     jobs = []
+    releases = []
     written = 0
     for bone_index, keys in bindings.items():
         if not 0 <= bone_index < len(model.bone_names):
@@ -176,7 +225,19 @@ def apply_outside_parents(armature, model, table, settings, bone_table):
         if own is None:
             log.warning("outside parent of '%s' skipped: no such bone on '%s'", name, armature.name)
             continue
+        if 0 <= bone_index < len(model.bones):
+            hold_across_changes(armature, own, model.bones[bone_index], keys)
         for pair in sorted({parent for _frame, parent in keys if parent is not None}):
+            if pair[0] == OUTSIDE_FREE:
+                if own.parent is not None:
+                    free = bound_frames(keys, pair, model.last_frame)
+                    earlier = [k.frame for k in model.bones[bone_index] if free and k.frame < free[0]]
+                    if free and earlier:
+                        releases.append((own, free[0], max(earlier)))
+                        free = free[1:]
+                    jobs.append((own, armature, None, set(free)))
+                    log.info("outside parent: '%s' released from its parent (solved keys)", name)
+                continue
             if pair[0] == model.index:
                 parent_armature = armature
             else:
@@ -220,4 +281,6 @@ def apply_outside_parents(armature, model, table, settings, bone_table):
             )
     if jobs:
         written += solve_bound_bones(armature, jobs)
+    for own, frame, before in releases:
+        hold_release_frame(armature, own, frame, before)
     return written

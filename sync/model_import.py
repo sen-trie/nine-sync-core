@@ -184,6 +184,19 @@ def import_model(root, model, settings, item, parts=ALL_PARTS, rebuild=False):
                     owner, item.shape_clip, (shape_track, legacy_shape_track)
                 )
             sources[owner.as_pointer()] = found
+    # Two owners can end up playing one clip (a remap that hijacked a strip). Replacing a
+    # clip remaps and deletes it, so only one owner may keep it as its source; the primary
+    # shape owner wins and the others get a clip of their own.
+    claimed = set()
+    ordered = sorted(sources, key=lambda ptr: 0 if primary_keys is not None and stash[ptr][0] == primary_keys else 1)
+    for ptr in ordered:
+        clip = sources[ptr]
+        if clip is None:
+            continue
+        if clip.as_pointer() in claimed:
+            sources[ptr] = None
+        else:
+            claimed.add(clip.as_pointer())
     low, high = frame_span(model_frames(model))
     kept = snapshot_outside(owners, low, high, sources if use_clips else None)
     log.info(

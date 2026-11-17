@@ -2,7 +2,7 @@
 
 ## 0.8.2
 
-- Bake MMD bone morphs into bone keyframes and sync outside-parent bindings within and between models, including retiming.
+- Bake MMD bone morphs into bone keyframes and sync outside-parent bindings within and between models.
 - Improve leg IK and bone-bound camera accuracy.
 
 ## 0.8.1

@@ -6,13 +6,12 @@ import types
 from ..common.constants import ACTION_PREFIX, IMPORT_FORMAT
 from ..common.scene_utils import find_armature, model_key
 from ..common.timing import phase
-from ..pmm import PmmError, encode_name
+from ..pmm import PmmError, bone_key_moves, encode_name
 from .camera import follow_table
 from .clips import model_label
 from .mmd_tools_link import mmd_tools_version
 from .morphs import group_morph_table, resolve_morph_names
 from .motion import (
-    bone_key_moves,
     bone_track_moves,
     digest_values,
     fingerprint_and_digests,
