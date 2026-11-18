@@ -312,11 +312,7 @@ class SyncDriver:
         except SyncCancelled:
             self.outcome = "cancelled"
             done = self.run.synced + self.run.skipped
-            settings.status = "Cancelled after %d of %d model(s) at %s" % (
-                done,
-                self.run.total,
-                time.strftime("%H:%M:%S"),
-            )
+            settings.status = "Cancelled after %d of %d model(s)" % (done, self.run.total)
             log.info("sync cancelled after %d model(s)", done)
             self.scene.frame_set(self.scene.frame_current)
         except (PmmError, OSError) as error:

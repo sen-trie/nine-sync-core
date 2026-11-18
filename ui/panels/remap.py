@@ -16,6 +16,7 @@ from ...sync.rigify import (
     missing_mmd_bones,
     mmd_label,
     pmm_moving_bones,
+    remap_on,
     shared_controls,
     slot_key,
     slot_tag,
@@ -437,9 +438,12 @@ class NINESYNC_PT_remap(Panel):
         for row in rigify_rows(settings):
             box = layout.box()
             box.label(text=row.pmm_name, icon="ARMATURE_DATA")
-            box.prop(row, "rigify_remap")
+            box.prop(row, "rigify_mode")
             col = box.column()
-            col.enabled = row.rigify_remap
+            col.enabled = remap_on(row)
+            clip_row = col.row(align=True)
+            clip_row.label(text="", icon="NLA")
+            clip_row.prop(row, "rigify_clip", text="Clip")
             index = list(settings.targets).index(row)
             buttons = col.row(align=True)
             buttons.operator("ninesync.show_rigify_map", icon="OUTLINER").index = index

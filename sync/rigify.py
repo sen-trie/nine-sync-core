@@ -1,23 +1,65 @@
+import hashlib
+import math
 from typing import NamedTuple
 
 import bpy
+import numpy as np
 
 from ..common.animation import iter_fcurves, remove_action
 from ..common.constants import ACTION_PREFIX, CLIP_TRACK_NAME
 from ..common.logger import log
+from ..common.scene_utils import find_armature
 from ..common.rigify_map import BIND_PROPERTY, CONTROLS, LIMB_OWNERS, MMD_IK_TARGETS, RIGIFY_FORMAT
 from ..pmm import bone_track_moves
 from .motion import vmd_bone_name
-from .clips import add_clip_strip
+from .clips import owned_clip, place_clip
+
+TORSO_MMD_NAME = "上半身"
 
 
 # A rig made by MMD Tools Append's Rigify conversion: a Rigify rig that still holds the
 # MMD bones, with the bind switch on its torso bone. Same test that add-on uses.
-def is_rigify_armature(armature):
+def is_converted_rig(armature):
     if armature is None or armature.type != "ARMATURE" or not armature.data.get("rig_id"):
         return False
     torso = armature.pose.bones.get("torso")
     return torso is not None and BIND_PROPERTY in torso
+
+
+# The "MMD compatibility focused" conversion hands the MMD names (mmd_bone.name_j) to the
+# Rigify controls themselves, so the plain PMX-mapped import already keys the controls. The
+# "Rigify focused" one leaves the names on the MMD bones, which then follow the DEF bones.
+# So the bone the name 上半身 points at tells them apart: a control with no copy of a
+# DEF/ORG bone on it is the first kind.
+def is_mmd_focused_rig(armature):
+    if not is_converted_rig(armature):
+        return False
+    bone = next(
+        (pb for pb in armature.pose.bones if getattr(getattr(pb, "mmd_bone", None), "name_j", "") == TORSO_MMD_NAME),
+        None,
+    )
+    if bone is None:
+        return False
+    return not any(
+        getattr(c, "subtarget", "").startswith(("DEF-", "ORG-")) for c in bone.constraints
+    )
+
+
+def is_rigify_armature(armature):
+    return is_converted_rig(armature)
+
+
+# Whether the remap runs for a target row: the choice stored on the row's Remap dropdown,
+# else a legacy .blend that had the old checkbox off, else the kind of rig, as the MMD
+# focused one needs nothing carried over. Reads only, so the plan can call it.
+def remap_default(row):
+    if row.is_property_set("rigify_remap") and not row.rigify_remap:
+        return False
+    return not is_mmd_focused_rig(find_armature(row.target) if row.target is not None else None)
+
+
+def remap_on(row):
+    return row.rigify_mode == "RIGIFY"
 
 
 # What a Rigify target adds to a motion part's hash, so a new table, an edited mapping or
@@ -26,7 +68,7 @@ def is_rigify_armature(armature):
 def rigify_signature(armature, row):
     if not is_rigify_armature(armature):
         return None
-    if row is not None and not row.rigify_remap:
+    if row is not None and not remap_on(row):
         return ("rigify", "off")
     edits = tuple(sorted((s.bone, s.control) for s in row.rigify_slots if s.control != s.base)) if row is not None else ()
     return ("rigify", RIGIFY_FORMAT, edits)
@@ -335,7 +377,7 @@ def bake_frames(model):
     return sorted(frames)
 
 
-def key_control(pose_bone, frame):
+def control_paths(pose_bone):
     mode = pose_bone.rotation_mode
     rotation = (
         "rotation_quaternion"
@@ -344,8 +386,146 @@ def key_control(pose_bone, frame):
         if mode == "AXIS_ANGLE"
         else "rotation_euler"
     )
-    for path in ("location", rotation, "scale"):
-        pose_bone.keyframe_insert(path, frame=frame, group=pose_bone.name)
+    return ("location", rotation, "scale")
+
+
+# Version of the baked-key layout; part of the signature that decides whether an earlier
+# bake can be reused frame by frame.
+BAKE_VERSION = 1
+BAKE_SIGNATURE_KEY = "ninesync_bake_sig"
+BAKE_HASHES_KEY = "ninesync_bake_hashes"
+# Past this share of changed frames a full bake is as cheap as patching.
+BAKE_PATCH_LIMIT = 0.7
+
+LINEAR = bpy.types.Keyframe.bl_rna.properties["interpolation"].enum_items["LINEAR"].value
+
+
+# What the baked keys depend on besides the per-frame motion: the controls and their
+# sources, the limb modes, the frame list and every rest pose involved.
+def bake_signature(rig, pairs, fk_groups, solved, frames, rest):
+    digest = hashlib.blake2b(digest_size=10)
+    digest.update(repr((BAKE_VERSION, RIGIFY_FORMAT, pairs, fk_groups, solved, frames)).encode())
+    digest.update(repr([rig.pose.bones[n].rotation_mode for n, _m in pairs]).encode())
+    digest.update(np.round(np.array([rest[n] for n, _m in pairs], dtype=np.float64), 5).tobytes())
+    return digest.hexdigest()
+
+
+# Fingerprint of everything the controls are computed from in one frame.
+def moves_hash(moves, sources):
+    array = np.round(np.array([moves[m] for m in sources], dtype=np.float64), 6)
+    return hashlib.blake2b(array.tobytes(), digest_size=6).hexdigest()
+
+
+# The values of an earlier bake, {(bone, path, index): array}, or None when it cannot be
+# reused: no stored fingerprint, a different signature or a curve that does not line up.
+def earlier_bake(clip, signature, frames, pairs, rig):
+    if clip is None or clip.get(BAKE_SIGNATURE_KEY) != signature or not clip.slots:
+        return None, None
+    hashes = str(clip.get(BAKE_HASHES_KEY, "")).split(",")
+    if len(hashes) != len(frames):
+        return None, None
+    curves = {(fc.data_path, fc.array_index): fc for fc in iter_fcurves(clip, clip.slots[0])}
+    values = {}
+    for name, _m in pairs:
+        for path in control_paths(rig.pose.bones[name]):
+            size = len(getattr(rig.pose.bones[name], path))
+            for index in range(size):
+                fc = curves.get((f'pose.bones["{name}"].{path}', index))
+                if fc is None or len(fc.keyframe_points) != len(frames):
+                    return None, None
+                co = np.empty(2 * len(frames))
+                fc.keyframe_points.foreach_get("co", co)
+                if not np.array_equal(co[0::2], frames):
+                    return None, None
+                values[(name, path, index)] = co[1::2].copy()
+    return values, hashes
+
+
+# A patched span can land a turn away from its neighbours, which a straight line between
+# keys would unwind; euler angles and quaternions are brought next to the previous key.
+def keep_continuous(values):
+    for (name, path, index), column in values.items():
+        if path == "rotation_euler":
+            for i in range(1, len(column)):
+                column[i] += 2 * math.pi * round((column[i - 1] - column[i]) / (2 * math.pi))
+    quats = {}
+    for (name, path, index), column in values.items():
+        if path == "rotation_quaternion":
+            quats.setdefault(name, {})[index] = column
+    for columns in quats.values():
+        stack = np.array([columns[i] for i in range(4)])
+        for i in range(1, stack.shape[1]):
+            if np.dot(stack[:, i - 1], stack[:, i]) < 0:
+                stack[:, i] = -stack[:, i]
+        for k in range(4):
+            columns[k][:] = stack[k]
+
+
+# Bones in the chains of Rigify's own IK constraints (not MMD's leg IK, which is muted for
+# the bake): a constraint-driven pose cannot be read back for their roots.
+def ik_chain_bones(rig):
+    found = set()
+    for pose_bone in rig.pose.bones:
+        for constraint in pose_bone.constraints:
+            if constraint.type != "IK" or constraint.target is not rig:
+                continue
+            target = rig.pose.bones.get(constraint.subtarget)
+            if target is not None and target.mmd_bone.name_j in MMD_IK_TARGETS:
+                continue
+            bone = pose_bone
+            for _ in range(constraint.chain_count or 99):
+                if bone is None:
+                    break
+                found.add(bone.name)
+                bone = bone.parent
+    return found
+
+
+# A control's local transform as the constraint left it, in its own rotation mode and
+# turned toward its previous value so a straight line between keys does not spin.
+def constrained_values(rig, pose_bone, previous):
+    basis = rig.convert_space(pose_bone=pose_bone, matrix=pose_bone.matrix, from_space="POSE", to_space="LOCAL")
+    location, quaternion, scale = basis.decompose()
+    mode = pose_bone.rotation_mode
+    before = previous.get(pose_bone.name)
+    if mode in ("QUATERNION", "AXIS_ANGLE"):
+        if before is not None:
+            quaternion.make_compatible(before)
+        previous[pose_bone.name] = quaternion
+        if mode == "QUATERNION":
+            rotation = tuple(quaternion)
+        else:
+            axis, angle = quaternion.to_axis_angle()
+            rotation = (angle, *axis)
+    else:
+        euler = quaternion.to_euler(mode) if before is None else quaternion.to_euler(mode, before)
+        previous[pose_bone.name] = euler
+        rotation = tuple(euler)
+    return {"location": tuple(location), control_paths(pose_bone)[1]: rotation, "scale": tuple(scale)}
+
+
+# Writes the baked values straight into a new action: one slot, one layer, a curve per
+# channel, all points set in one call, far cheaper than a keyframe_insert per channel.
+def write_bake(rig, action, values, frames, switches):
+    slot = action.slots.new(id_type="OBJECT", name=rig.name)
+    bag = action.layers.new("Retargeted").strips.new(type="KEYFRAME").channelbag(slot, ensure=True)
+    count = len(frames)
+
+    def curve(path, index, group, column):
+        fc = bag.fcurves.new(data_path=path, index=index, group_name=group)
+        fc.keyframe_points.add(len(column))
+        co = np.empty(2 * len(column))
+        co[0::2] = frames if len(column) == count else (frames[0], frames[-1])
+        co[1::2] = column
+        fc.keyframe_points.foreach_set("co", co)
+        fc.keyframe_points.foreach_set("interpolation", [LINEAR] * len(column))
+        fc.update()
+
+    for (name, path, index), column in values.items():
+        curve(f'pose.bones["{name}"].{path}', index, name, column)
+    for bone in switches:
+        curve(f'pose.bones["{bone.name}"]["IK_FK"]', 0, bone.name, (1.0, 1.0))
+    return slot
 
 
 # Moves a Rigify rig converted with MMD Tools Append the way the PMM moves the model. The
@@ -369,6 +549,76 @@ def leg_ik_constraints(rig):
     return found
 
 
+# The pairs in groups that can be set together: a control goes after every carried control its
+# pose is computed from, through its parent chain and through constraint targets, helper
+# bones included. Parent depth alone would cost a depsgraph update per helper level.
+def bake_levels(rig, pairs):
+    carried = {name for name, _mmd in pairs}
+    bones = rig.pose.bones
+
+    def inputs(bone):
+        names = {bone.parent.name} if bone.parent else set()
+        for constraint in bone.constraints:
+            if getattr(constraint, "target", None) is rig:
+                names.add(getattr(constraint, "subtarget", ""))
+                names.add(getattr(constraint, "pole_subtarget", ""))
+            if constraint.type == "ARMATURE":
+                names.update(t.subtarget for t in constraint.targets if t.target is rig)
+        return [n for n in names if n and n in bones and n != bone.name]
+
+    reach = {}
+
+    def carried_inputs(name, stack):
+        if name not in reach:
+            found = set()
+            if name not in stack:
+                for n in inputs(bones[name]):
+                    if n in carried:
+                        found.add(n)
+                    found |= carried_inputs(n, stack | {name})
+            reach[name] = found
+        return reach[name]
+
+    level = {}
+
+    def level_of(name):
+        if name not in level:
+            level[name] = 0
+            level[name] = 1 + max((level_of(n) for n in carried_inputs(name, frozenset()) if n != name), default=0)
+        return level[name]
+
+    groups = {}
+    for name, mmd_name in pairs:
+        groups.setdefault(level_of(name), []).append((name, mmd_name))
+    return [groups[k] for k in sorted(groups)]
+
+
+# Each depsgraph update costs about 14 ms in a busy scene and about 4 ms with the rig
+# alone, and the bake needs one per level per frame, so it runs in a scene of its own
+# holding only the rig and its parents. Needs a window to switch; without one (background
+# mode) the bake stays in the scene. Returns (home scene, bake scene) or None.
+def enter_bake_scene(rig):
+    window = bpy.context.window
+    if window is None:
+        return None
+    home = window.scene
+    work = bpy.data.scenes.new("NineSync_bake")
+    work.render.fps = home.render.fps
+    work.render.fps_base = home.render.fps_base
+    obj = rig
+    while obj is not None:
+        work.collection.objects.link(obj)
+        obj = obj.parent
+    window.scene = work
+    return home, work
+
+
+def leave_bake_scene(stage):
+    home, work = stage
+    bpy.context.window.scene = home
+    bpy.data.scenes.remove(work)
+
+
 def retarget(rig, model, label, item=None):
     # Rigify's own leg IK picks its own knee, like Blender's IK on a plain rig, so with the
     # solved MMD legs the legs run in FK for the baked frames: the switch is keyed to FK and
@@ -390,32 +640,42 @@ def retarget(rig, model, label, item=None):
     scene = bpy.context.scene
     track_name = CLIP_TRACK_NAME + "_" + label + "_rigify"
     anim = rig.animation_data or rig.animation_data_create()
-    clear_remap(rig, label)
+    clip = owned_clip(rig, getattr(item, "rigify_clip", None), (track_name,))
+    if clip is None:
+        clear_remap(rig, label)
     before = anim.action
     saved = append_properties(rig)
     original_frame = scene.frame_current
-    meshes = [
-        o
-        for o in (rig.parent.children_recursive if rig.parent is not None else rig.children_recursive)
-        if o.type == "MESH" and not o.hide_viewport
-    ]
-    physics = scene.rigidbody_world
-    physics_on = physics.enabled if physics is not None else False
     action = bpy.data.actions.new(ACTION_PREFIX + label + "_rigify")
+    slot = None
     switched = {}
     muted = {}
+    follow = {}
+    meshes = []
+    physics = None
+    physics_on = False
+    stage = None
     try:
-        for obj in meshes:
-            obj.hide_viewport = True
-        if physics is not None:
-            physics.enabled = False
-        anim.action = action
+        stage = enter_bake_scene(rig)
+        if stage is None:
+            meshes = [
+                o
+                for o in (rig.parent.children_recursive if rig.parent is not None else rig.children_recursive)
+                if o.type == "MESH" and not o.hide_viewport
+            ]
+            physics = scene.rigidbody_world
+            physics_on = physics.enabled if physics is not None else False
+            for obj in meshes:
+                obj.hide_viewport = True
+            if physics is not None:
+                physics.enabled = False
+        work = stage[1] if stage is not None else scene
         rest = {n: rig.data.bones[n].matrix_local.copy() for n, _m in pairs}
         mmd_rest_inverse = {m: rig.data.bones[m].matrix_local.inverted() for _n, m in pairs}
-        levels = {}
-        for name, mmd_name in pairs:
-            levels.setdefault(bake_order(rig, name), []).append((name, mmd_name))
-        layers = [levels[k] for k in sorted(levels)]
+        sources = sorted({m for _n, m in pairs})
+        signature = bake_signature(rig, pairs, fk_groups, solved, frames, rest)
+        earlier, earlier_hashes = earlier_bake(clip, signature, frames, pairs, rig)
+        layers = bake_levels(rig, pairs)
         layer = bpy.context.view_layer
         # Makes the depsgraph the active one, so evaluated poses reach the objects headless.
         bpy.context.evaluated_depsgraph_get()
@@ -430,23 +690,82 @@ def retarget(rig, model, label, item=None):
         for bone in switches:
             switched[bone.name] = bone["IK_FK"]
             bone["IK_FK"] = 1.0
-        for frame in frames:
-            scene.frame_set(frame)
-            if frame in (frames[0], frames[-1]):
-                for bone in switches:
-                    bone.keyframe_insert('["IK_FK"]', frame=frame, group=bone.name)
-            moves = {m: rig.pose.bones[m].matrix @ mmd_rest_inverse[m] for _n, m in pairs}
-            for layer_pairs in layers:
-                for name, mmd_name in layer_pairs:
-                    rig.pose.bones[name].matrix = moves[mmd_name] @ rest[name]
+        def moves_at(frame):
+            work.frame_set(frame)
+            return {m: rig.pose.bones[m].matrix @ mmd_rest_inverse[m] for m in sources}
+
+        # With an earlier bake of the same shape, only frames whose source motion changed
+        # are baked again and spliced in; the rest of its keys are carried over.
+        todo = list(range(len(frames)))
+        hashes = [None] * len(frames)
+        values = None
+        if earlier is not None:
+            hashes = [moves_hash(moves_at(f), sources) for f in frames]
+            todo = [i for i, h in enumerate(hashes) if h != earlier_hashes[i]]
+            if len(todo) <= BAKE_PATCH_LIMIT * len(frames):
+                values = earlier
+            else:
+                todo = list(range(len(frames)))
+        if values is None:
+            values = {
+                (name, path, index): np.zeros(len(frames))
+                for name, _m in pairs
+                for path in control_paths(rig.pose.bones[name])
+                for index in range(len(getattr(rig.pose.bones[name], path)))
+            }
+        # In a scene of its own most controls follow an empty through a Copy Transforms
+        # constraint, solved in one update; the roots of Rigify's own IK chains are set by
+        # matrix in levels instead, as a constraint does not reproduce their pose.
+        roots = ik_chain_bones(rig) & {n for n, _m in pairs} if stage is not None else set()
+        followers = [(n, m) for n, m in pairs if n not in roots] if stage is not None else []
+        root_layers = bake_levels(rig, [(n, m) for n, m in pairs if n in roots]) if roots else []
+        if stage is not None:
+            for name, _m in followers:
+                empty = bpy.data.objects.new("NineSync_bake_" + name, None)
+                work.collection.objects.link(empty)
+                constraint = rig.pose.bones[name].constraints.new("COPY_TRANSFORMS")
+                constraint.name = "NineSync_bake"
+                constraint.target = empty
+                follow[name] = (empty, constraint)
+            rig.update_tag()
+            layer.update()
+        previous = {}
+        world = rig.matrix_world
+        for i in todo:
+            moves = moves_at(frames[i])
+            hashes[i] = moves_hash(moves, sources)
+            if stage is not None:
+                for name, mmd_name in followers:
+                    follow[name][0].matrix_world = world @ (moves[mmd_name] @ rest[name])
                 layer.update()
+                for layer_pairs in root_layers:
+                    for name, mmd_name in layer_pairs:
+                        rig.pose.bones[name].matrix = moves[mmd_name] @ rest[name]
+                    layer.update()
+            else:
+                for layer_pairs in layers:
+                    for name, mmd_name in layer_pairs:
+                        rig.pose.bones[name].matrix = moves[mmd_name] @ rest[name]
+                    layer.update()
             for name, _m in pairs:
-                key_control(rig.pose.bones[name], frame)
-        for fcurve in iter_fcurves(action, anim.action_slot if hasattr(anim, "action_slot") else None):
-            for point in fcurve.keyframe_points:
-                point.interpolation = "LINEAR"
-            fcurve.update()
+                bone = rig.pose.bones[name]
+                if name in follow:
+                    read = constrained_values(rig, bone, previous)
+                else:
+                    read = {path: getattr(bone, path) for path in control_paths(bone)}
+                for path, sequence in read.items():
+                    for index, value in enumerate(sequence):
+                        values[(name, path, index)][i] = value
+        if earlier is not None and todo:
+            keep_continuous(values)
+        slot = write_bake(rig, action, values, frames, switches)
+        action[BAKE_SIGNATURE_KEY] = signature
+        action[BAKE_HASHES_KEY] = ",".join(hashes)
+        log.info("Rigify remap '%s': %d of %d frame(s) baked", label, len(todo), len(frames))
     finally:
+        for name, (empty, constraint) in follow.items():
+            rig.pose.bones[name].constraints.remove(constraint)
+            bpy.data.objects.remove(empty)
         for obj in meshes:
             obj.hide_viewport = False
         if physics is not None:
@@ -457,7 +776,15 @@ def retarget(rig, model, label, item=None):
         for constraint, value in muted.items():
             constraint.mute = value
         anim.action = before
+        if stage is not None:
+            leave_bake_scene(stage)
         scene.frame_set(original_frame)
-    if add_clip_strip(anim, action, track_name) is None:
-        log.warning("Rigify remap for '%s': could not add its NLA strip", label)
+    # Same placement as the motion clip: a chosen clip gets the new keys swapped in, so its
+    # strips and references survive; otherwise the keys become a clip on their own track.
+    anim.action = action
+    if slot is not None:
+        anim.action_slot = slot
+    placed = place_clip(rig, clip, track_name, ACTION_PREFIX + label + "_rigify", before)
+    if item is not None:
+        item.rigify_clip = placed
     return len(frames)

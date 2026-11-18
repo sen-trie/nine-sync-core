@@ -14,6 +14,7 @@ from bpy.types import PropertyGroup
 from ..common.constants import ACTION_PREFIX
 from ..common.logger import log
 from ..sync.analysis import current_analysis
+from ..sync.rigify import remap_default
 
 
 _inspect_items = []
@@ -59,9 +60,28 @@ def on_target_changed(self, context):
         self.clip = None
     if self.shape_clip is not None:
         self.shape_clip = None
+    if self.rigify_clip is not None:
+        self.rigify_clip = None
     self.state = "NEW"
     self.status_text = ""
     self.sync_record = ""
+
+
+RIGIFY_MODES = (
+    ("NOTHING", "Nothing", "Leave the motion on the MMD bones, as an MMD focused rig takes it there"),
+    ("RIGIFY", "Rigify focused", "Carry the PMM motion over onto the Rigify controls"),
+)
+
+
+# Stored as a plain int on the row once the user picks one; until then the value comes
+# from the rig, so an MMD focused target reads Nothing without being touched.
+def rigify_mode_get(self):
+    stored = self.get("rigify_mode_v")
+    return stored if stored is not None else int(remap_default(self))
+
+
+def rigify_mode_set(self, value):
+    self["rigify_mode_v"] = value
 
 
 # One mapping slot of the Rigify Remap editor: the MMD bone (Blender name), fixed, and the
@@ -121,10 +141,20 @@ class MMDBridgeTarget(PropertyGroup):
         type=bpy.types.Action,
         poll=clip_poll,
     )
-    rigify_remap: BoolProperty(
-        name="Rigify Remap",
-        description="For a Rigify rig converted with MMD Tools Append: carry the PMM motion over onto the Rigify controls",
-        default=True,
+    # The old checkbox, kept only so a .blend that turned it off still reads as off.
+    rigify_remap: BoolProperty(options={"HIDDEN"}, default=True)
+    rigify_mode: EnumProperty(
+        name="Remap",
+        description="For a Rigify rig converted with MMD Tools Append. Until chosen, it follows the kind of rig: Nothing for an MMD focused one, whose imported keys already land on the controls",
+        items=RIGIFY_MODES,
+        get=rigify_mode_get,
+        set=rigify_mode_set,
+    )
+    rigify_clip: PointerProperty(
+        name="Rigify Clip",
+        description="Action that receives the Rigify controls' keys from the remap on every sync. Leave empty to create a new clip on its own NLA track",
+        type=bpy.types.Action,
+        poll=clip_poll,
     )
     rigify_slots: CollectionProperty(type=MMDBridgeRemapSlot)
     solve_leg_ik: BoolProperty(

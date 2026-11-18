@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.3
+
+- Rigify Remap is now a dropdown that recognises MMD-compatibility rigs, with a separate Clip selector under it.
+- Reworked Rigify retargeting algorithm, using empty and constraint baking.
+
 ## 0.8.2
 
 - Bake MMD bone morphs into bone keyframes and sync outside-parent bindings within and between models.

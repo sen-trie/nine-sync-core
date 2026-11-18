@@ -1,4 +1,4 @@
-ADDON_VERSION = (0, 8, 2)
+ADDON_VERSION = (0, 8, 3)
 
 bl_info = {
     "name": "NineSync: PMM Bridge",

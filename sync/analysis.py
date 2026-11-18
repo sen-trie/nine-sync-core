@@ -46,6 +46,7 @@ def input_token(scene):
             row.target.name if row.target else "",
             row.clip.name if row.clip else "",
             row.shape_clip.name if row.shape_clip else "",
+            row.rigify_clip.name if row.rigify_clip else "",
             row.physics_vmd,
             row.sync_record,
         )

@@ -228,6 +228,7 @@ checks.check("rig_id without the bind switch is not converted", not rigify.is_ri
 fake.pose.bones["torso"][rigify_map.BIND_PROPERTY] = 1.0
 checks.check("rig_id and the bind switch is a converted rig", rigify.is_rigify_armature(fake))
 checks.check("None is not a rig", not rigify.is_rigify_armature(None))
+checks.check("a converted rig without mapped names is not MMD focused", rigify.is_converted_rig(fake) and not rigify.is_mmd_focused_rig(fake))
 checks.check("kinds from names", [rigify.infer_kind(n) for n in ("foot_ik.L", "thigh_fk.R", "head")] == ["ik", "fk", "any"])
 checks.check("limbs from names", [rigify.infer_group(n) for n in ("foot_ik.L", "upper_arm_fk.R", "head")] == ["LEG_L", "ARM_R", "TORSO"])
 checks.check("no edits leaves a rig's hash unchanged", rigify.rigify_signature(None, None) is None)

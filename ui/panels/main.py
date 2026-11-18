@@ -52,7 +52,6 @@ class MMDBRIDGE_PT_main(Panel):
         if running:
             state = progress_state()
             layout.progress(factor=state["fraction"], type="BAR", text=state["text"])
-            layout.label(text="Esc cancels after the current step")
         else:
             draw_wrapped(layout, settings.status)
         if fps_differs(context.scene):

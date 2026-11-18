@@ -35,7 +35,7 @@ from .leg_ik import solve_leg_ik
 from .motion import ik_switches, vmd_bone_name
 from .outside_parent import apply_outside_parents
 from .physics import import_physics_clip
-from .rigify import clear_remap, is_rigify_armature, retarget
+from .rigify import clear_remap, is_rigify_armature, remap_on, retarget
 from .plan import bone_aliases, table_aliases, vmd_bone_table
 from .scale import model_scale
 from .sync_state import forget_parts, rig_layout, write_parts
@@ -305,7 +305,7 @@ def import_model(root, model, settings, item, parts=ALL_PARTS, rebuild=False):
 # the Rigify controls drive them. The motion is carried over onto the controls from the
 # MMD bones the plain import just keyed. Failing here leaves the plain import in place.
 def remap_rigify(armature, model, item, label):
-    if not item.rigify_remap:
+    if not remap_on(item):
         log.info("Rigify remap is off for '%s'", model.name)
         clear_remap(armature, label)
         return

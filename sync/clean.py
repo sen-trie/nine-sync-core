@@ -201,6 +201,8 @@ def run_clean(scene, settings, options):
                     item.clip = None
                 if item.shape_clip is not None and is_bridge_action(item.shape_clip):
                     item.shape_clip = None
+                if item.rigify_clip is not None and is_bridge_action(item.rigify_clip):
+                    item.rigify_clip = None
                 armature, bones, shape_values, doomed = clean_model_animation(root)
                 seen = set()
                 for action in doomed:
