@@ -13,6 +13,7 @@ from ..common.rigify_map import BIND_PROPERTY, CONTROLS, LIMB_OWNERS, MMD_IK_TAR
 from ..pmm import bone_track_moves
 from .motion import vmd_bone_name
 from .clips import owned_clip, place_clip
+from .frames import internal_frames
 
 TORSO_MMD_NAME = "上半身"
 
@@ -691,7 +692,8 @@ def retarget(rig, model, label, item=None):
             switched[bone.name] = bone["IK_FK"]
             bone["IK_FK"] = 1.0
         def moves_at(frame):
-            work.frame_set(frame)
+            with internal_frames():
+                work.frame_set(frame)
             return {m: rig.pose.bones[m].matrix @ mmd_rest_inverse[m] for m in sources}
 
         # With an earlier bake of the same shape, only frames whose source motion changed
@@ -778,7 +780,8 @@ def retarget(rig, model, label, item=None):
         anim.action = before
         if stage is not None:
             leave_bake_scene(stage)
-        scene.frame_set(original_frame)
+        with internal_frames():
+            scene.frame_set(original_frame)
     # Same placement as the motion clip: a chosen clip gets the new keys swapped in, so its
     # strips and references survive; otherwise the keys become a clip on their own track.
     anim.action = action

@@ -6,6 +6,7 @@ import sys
 
 from ..common.constants import MMD_TOOLS_URL
 from ..common.logger import log
+from .frames import internal_frames
 
 
 # Oldest mmd_tools this bridge is tested against. mmd_tools is a separate extension that the user installs
@@ -173,23 +174,26 @@ def run_importer(tmp_path, scale, targets, action_name, detect_changes, bone_map
     root_logger.addHandler(collector)
     root_logger.setLevel(logging.INFO)
     try:
-        scene.frame_current = 0
-        importer = importer_mod.VMDImporter(
-            **{k: v for k, v in wanted.items() if k in accepted}
-        )
-        assign_params = inspect.signature(importer.assign).parameters
-        for obj in targets:
-            log.debug("assign -> %s (%s)", obj.name, obj.type)
-            if "action_name" in assign_params:
-                importer.assign(obj, action_name)
-            else:
-                importer.assign(obj)
+        # The frame is parked at 0 for the importer; FX's frame handler must not treat that as user navigation.
+        with internal_frames():
+            scene.frame_current = 0
+            importer = importer_mod.VMDImporter(
+                **{k: v for k, v in wanted.items() if k in accepted}
+            )
+            assign_params = inspect.signature(importer.assign).parameters
+            for obj in targets:
+                log.debug("assign -> %s (%s)", obj.name, obj.type)
+                if "action_name" in assign_params:
+                    importer.assign(obj, action_name)
+                else:
+                    importer.assign(obj)
     finally:
         root_logger.removeHandler(collector)
         for handler in previous_handlers:
             root_logger.addHandler(handler)
         root_logger.setLevel(previous_level)
-        scene.frame_current = original_frame
+        with internal_frames():
+            scene.frame_current = original_frame
     for line in collector.summary:
         log.info("mmd_tools: %s", line)
     if collector.warnings:

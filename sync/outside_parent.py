@@ -7,6 +7,7 @@ from ..common.logger import log
 from ..common.scene_utils import find_armature
 from ..pmm import OUTSIDE_FREE
 from .motion import outside_bindings, vmd_bone_name
+from .frames import internal_frames
 
 PARENT_PREFIX = FOLLOW_PREFIX + "Parent"
 
@@ -170,7 +171,8 @@ def solve_bound_bones(armature, jobs):
     previous = scene.frame_current
     try:
         for frame in frames:
-            scene.frame_set(frame)
+            with internal_frames():
+                scene.frame_set(frame)
             for own, parent_armature, parent, job_frames in jobs:
                 if frame not in job_frames:
                     continue
@@ -189,7 +191,8 @@ def solve_bound_bones(armature, jobs):
                     rotation.negate()
                 wanted[own.name][frame] = (location, rotation)
     finally:
-        scene.frame_set(previous)
+        with internal_frames():
+            scene.frame_set(previous)
     for own, _pa, _pb, _frames in jobs:
         own.rotation_mode = "QUATERNION"
         paths = (own.path_from_id("location"), own.path_from_id("rotation_quaternion"))

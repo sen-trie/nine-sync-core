@@ -3,6 +3,7 @@ import bpy
 from ..common.animation import iter_fcurves
 from ..common.logger import log
 from .mmd_tools_link import mmd_module
+from .frames import internal_frames
 
 
 # Bones a root transform can move onto: mmd_tools adds parentless helper bones to a
@@ -46,13 +47,15 @@ def combined_poses(scene, root, bones, frames):
     poses = {b.name: [] for b in bones}
     try:
         for frame in frames:
-            scene.frame_set(frame)
+            with internal_frames():
+                scene.frame_set(frame)
             for bone in bones:
                 moved = root.matrix_world @ bone.matrix
                 basis = bone.bone.matrix_local.inverted() @ moved
                 poses[bone.name].append((frame, basis.decompose()))
     finally:
-        scene.frame_set(saved)
+        with internal_frames():
+            scene.frame_set(saved)
     return poses
 
 

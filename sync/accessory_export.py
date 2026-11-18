@@ -11,6 +11,7 @@ from ..common.scene_utils import scene_fps
 from ..pmm import AccessoryKey, PmmAccessory, PmmError
 from ..x_writer import XMaterial, XMesh, build_x_text
 from .scale import export_scale
+from .frames import internal_frames
 
 
 DEFAULT_MATERIAL = XMaterial((0.8, 0.8, 0.8, 1.0), (0.0, 0.0, 0.0))
@@ -172,13 +173,15 @@ def sample_objects(scene, wanted):
     samples = {obj: [] for obj in wanted}
     try:
         for frame in sorted(set().union(*wanted.values())):
-            scene.frame_set(frame)
+            with internal_frames():
+                scene.frame_set(frame)
             for obj, frames in wanted.items():
                 if frame in frames:
                     hidden = obj.hide_viewport or obj.hide_render
                     samples[obj].append((frame, obj.matrix_world.copy(), not hidden))
     finally:
-        scene.frame_set(saved)
+        with internal_frames():
+            scene.frame_set(saved)
     return samples
 
 
@@ -247,7 +250,8 @@ def collect_accessories(scene, settings, objects, pmm_path):
         for item in settings.export_props
     }
     saved = scene.frame_current
-    scene.frame_set(scene.frame_start)
+    with internal_frames():
+        scene.frame_set(scene.frame_start)
     try:
         depsgraph = bpy.context.evaluated_depsgraph_get()
         rest = {
@@ -257,7 +261,8 @@ def collect_accessories(scene, settings, objects, pmm_path):
             obj: x_mesh(obj, depsgraph, rest[obj], unit, palettes.get(obj, {})) for obj in objects
         }
     finally:
-        scene.frame_set(saved)
+        with internal_frames():
+            scene.frame_set(saved)
     samples = sample_objects(scene, wanted)
     taken = set()
     accessories = []

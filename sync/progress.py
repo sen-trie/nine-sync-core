@@ -13,6 +13,20 @@ def reset_progress():
     _state.update(active=False, fraction=0.0, text="")
 
 
+# For work inside one tick (a hook's ctx.progress): updates what the panel bar reads.
+# It never starts or ends a Blender progress session; Core's SyncProgress owns that.
+# Redrawing waits for the next tick.
+def note_progress(fraction, text=""):
+    try:
+        fraction = float(fraction)
+    except (TypeError, ValueError):
+        return
+    if _state["active"]:
+        _state["fraction"] = max(_state["fraction"], min(max(fraction, 0.0), 1.0))
+        if text:
+            _state["text"] = str(text)
+
+
 # Blender's cursor progress, the status bar text and the panel bar, driven as one. The
 # fraction only ever rises, and end() is safe to call twice from a finally block.
 class SyncProgress:

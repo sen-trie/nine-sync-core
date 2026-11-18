@@ -79,6 +79,8 @@ class MMDBRIDGE_OT_sync_now(Operator):
         changed = run.imported or run.synced or run.failed
         if driver.outcome == "cancelled":
             self.report({"WARNING"}, status)
+        elif driver.ok and run.hook_failed:
+            self.report({"WARNING"}, status)
         else:
             self.report({"INFO"} if driver.ok else {"ERROR"}, status)
         return {"FINISHED"} if driver.ok or changed else {"CANCELLED"}

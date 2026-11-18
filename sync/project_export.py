@@ -30,6 +30,7 @@ from .scale import export_scale
 from .sync_state import rig_layout
 from .targets import refresh_targets, target_usable
 from .tempfiles import remove_file, temp_vmd_path
+from .frames import internal_frames
 
 
 def template_path():
@@ -203,11 +204,13 @@ def collect_visibility(scene, root):
     keys = []
     try:
         for frame in frames:
-            scene.frame_set(frame)
+            with internal_frames():
+                scene.frame_set(frame)
             hidden = all(any(getattr(m, p) for p in VISIBILITY_PATHS) for m in meshes)
             keys.append(VisibilityKey(frame, 0 if hidden else 1))
     finally:
-        scene.frame_set(current, subframe=subframe)
+        with internal_frames():
+            scene.frame_set(current, subframe=subframe)
     factor = export_factor(scene)
     if abs(factor - 1.0) > 1e-6:
         keys = retime_keys(keys, 1.0 / factor, True)

@@ -16,7 +16,8 @@ from .analysis import clear_analysis, content_digest, parsed_copy
 from .audio import describe_audio, import_audio
 from .model_import import sync_target
 from .plan import BLOCKED, PART_LABELS, build_plan, parse_checked
-from .progress import SyncProgress
+from .hook_phase import hook_steps
+from .progress import SyncProgress, note_progress
 from .retime import retime_factor, retime_project
 from .scale import current_scale
 from .scene_elements import import_scene_elements
@@ -48,6 +49,8 @@ class SyncRun:
         self.skipped = 0
         self.blocked = 0
         self.keys = 0
+        self.hook_failed = 0
+        self.hook_warnings = []
 
     # Hands control back to the caller, then honours a cancel made meanwhile.
     def tick(self, fraction, text):
@@ -100,7 +103,7 @@ def log_scene_keys(project):
 
 # Builds the ctx handed to post_sync hooks. Built after retiming; its fields are
 # part of hooks.API_VERSION.
-def hook_context(scene, project, path, settings):
+def hook_context(scene, project, path, settings, run=None):
     targets = {}
     for item in settings.targets:
         if item.target is not None:
@@ -114,6 +117,8 @@ def hook_context(scene, project, path, settings):
         retimed=True,
         integrated=True,
         core_version=addon_version(),
+        progress=note_progress,
+        cancelled=(lambda: run.cancelled) if run is not None else (lambda: False),
     )
 
 
@@ -242,11 +247,11 @@ def sync_steps(scene, run):
             len(project.accessories),
         )
     yield from run.tick(0.88, "Running add-on hooks")
-    context = hook_context(scene, project, path, settings)
+    context = hook_context(scene, project, path, settings, run)
     with phase("hooks"):
-        for result in hooks.run("post_sync", context):
-            if isinstance(result, int):
-                run.imported += result
+        yield from hook_steps(run, context, SyncCancelled, 0.88, 0.94)
+    if run.hook_failed:
+        log.warning("%d hook item(s) failed; see the lines above", run.hook_failed)
     yield from run.tick(0.94, "Updating audio")
     try:
         with phase("audio"):
@@ -282,6 +287,8 @@ def status_line(run):
         parts.append("%d blocked" % run.blocked)
     if run.failed:
         parts.append("%d model(s) failed" % run.failed)
+    if run.hook_failed:
+        parts.append("%d accessory/effect item(s) failed" % run.hook_failed)
     return "%s at %s" % (", ".join(parts), time.strftime("%H:%M:%S"))
 
 
