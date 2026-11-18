@@ -7,6 +7,7 @@ Run from the repo root. Each file is a standalone script that prints `ok` or `FA
 | `check_static.py` | Python 3.11+ | import layers, no FX imports, version consistency, current copy, `hooks.py` byte identity |
 | `t_registration.py` | Blender or `bpy` | core alone, FX alone, both, every load and unload order, reload cycles, nothing left behind |
 | `t_integration_contract.py` | Blender or `bpy` | foreign-copy guard in both orders, aborted registration, preferences owner (standalone and a stand-in bundle), shared keys after File > Open, hook results, generator hooks and cancel, the internal-frame flag |
+| `t_log_redaction.py` | Blender or `bpy` | home-folder redaction in the `NineSyncLog` text: separators, boundaries, case, fail-open, saved and reopened log, trim |
 | `t_hook_contract.py` | Blender or `bpy` | registry behaviour, `sync()` order, `ctx` fields, retimed keys |
 | `t_animation.py` | Blender or `bpy` | slotted actions, user-key snapshots, light keys, NLA cleanup |
 | `t_sync_plan.py` | Blender or `bpy` | fingerprints, summaries, the plan decision table, records, preview errors, progress and driver exit paths, timings |
@@ -27,6 +28,7 @@ FX is found through `NINESYNC_FX` or a sibling folder `nine-sync-fx` / `ninesync
 python tests/check_static.py
 blender --background --factory-startup --python tests/t_registration.py
 blender --background --factory-startup --python tests/t_hook_contract.py
+blender --background --factory-startup --python tests/t_log_redaction.py
 blender --background --factory-startup --python tests/t_animation.py
 blender --background --factory-startup --python tests/t_integration_contract.py
 blender --background --factory-startup --python tests/t_sync_plan.py
