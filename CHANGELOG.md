@@ -1,13 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.9.0
 
-- Core refuses to register next to another active Core (standalone or combined) instead of replacing its operators; a refused copy's disable no longer touches the active one, and a failed registration rolls back.
-- Preferences are read through one accessor that finds the combined extension's union class or Core's own, so the import scale works in the combined build.
-- `shared["import_scale"]` is republished after every file load and preference change.
-- Hooks may return a dict (`imported`, `failed`, `warnings`) or be generators; failures show in the sync status and Esc is heard between a generator hook's steps. `ctx` gains optional `progress` and `cancelled`.
-- `shared["internal_frames"]` is set while Core steps frames for its own solves, bakes and exports.
-- The `NineSyncLog` text saved in the `.blend` replaces the home folder (and Blender's user profile folder when it lies elsewhere) with `~`, so the account name is not stored. Logs already saved are not rewritten.
+- Back-end improvements to integration, preferences and logging.
 
 ## 0.8.3
 

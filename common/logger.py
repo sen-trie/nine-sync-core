@@ -74,7 +74,7 @@ class TextBlockHandler(logging.Handler):
             if len(text.lines) > LOG_TEXT_MAX_LINES:
                 kept = text.as_string().splitlines()[-(LOG_TEXT_MAX_LINES * 2 // 3):]
                 text.from_string("\n".join(kept) + "\n")
-            text.write(self.format(record) + "\n")
+            text.write(redact_home(self.format(record)) + "\n")
         except Exception:
             pass
 
