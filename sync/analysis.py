@@ -2,6 +2,7 @@ import bpy
 import hashlib
 import os
 import types
+from bpy.app.translations import pgettext_iface as iface_, pgettext_n as n_
 
 from ..common.scene_utils import model_key
 from ..pmm import PmmError, copy_project, parse_pmm
@@ -82,14 +83,14 @@ def analyze(scene):
     _cache["result"] = result
     path = bpy.path.abspath(settings.filepath)
     if not settings.filepath:
-        result.error = "No PMM selected"
+        result.error = iface_("No PMM selected")
         return result
     try:
         with open(path, "rb") as handle:
             data = handle.read()
         project = parse_checked(data, parse_pmm)
     except (PmmError, OSError) as error:
-        result.error = "Could not read the PMM: %s" % error
+        result.error = iface_("Could not read the PMM: %s") % error
         return result
     _cache["parsed"] = (content_digest(data), copy_project(project))
     for model in project.models:
@@ -97,9 +98,9 @@ def analyze(scene):
         summary.key = model_key(model)
         result.summaries.append(summary)
     if project.scene_error:
-        result.scene_tracks.append("Camera and light could not be read")
+        result.scene_tracks.append(iface_("Camera and light could not be read"))
     else:
-        for name, keys in (("Camera", project.camera_keys), ("Light", project.light_keys)):
+        for name, keys in ((n_("Camera"), project.camera_keys), (n_("Light"), project.light_keys)):
             result.scene_tracks.append(describe_track(name, keys))
     factor = retime_factor(scene, settings)
     if factor != 1.0:
@@ -111,8 +112,8 @@ def analyze(scene):
 def describe_track(name, keys):
     span = track_range([keys])
     if span is None:
-        return "%s: no keys" % name
-    return "%s: %d key(s), frames %d-%d" % (name, len(keys), span[0], span[1])
+        return iface_("%s: no keys") % iface_(name)
+    return iface_("%s: %d key(s), frames %d-%d") % (iface_(name), len(keys), span[0], span[1])
 
 
 # The cached analysis, with .stale set when an input changed since it was built.

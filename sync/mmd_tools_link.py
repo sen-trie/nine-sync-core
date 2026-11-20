@@ -3,6 +3,7 @@ import importlib
 import inspect
 import logging
 import sys
+from bpy.app.translations import pgettext_iface as iface_, pgettext_n as n_
 
 from ..common.constants import MMD_TOOLS_URL
 from ..common.logger import log
@@ -30,6 +31,7 @@ REQUIRED_API = (
 )
 
 _status_cache = {}
+_notice = ["", ()]
 
 
 # The VMD import operator is the one hard dependency; its presence means mmd_tools
@@ -75,29 +77,43 @@ def mmd_tools_status():
     operator = getattr(bpy.types, "MMD_TOOLS_OT_import_vmd", None)
     if operator is None:
         _status_cache.clear()
+        _notice[:] = [n_("mmd_tools is not installed or enabled"), ()]
         return "missing", "mmd_tools is not installed or enabled"
     key = (operator.__module__, id(operator))
     if key in _status_cache:
         return _status_cache[key]
     result = ("ok", "")
+    notice = ["", ()]
     version = mmd_tools_version_tuple()
     wanted = ".".join(str(v) for v in MMD_TOOLS_MIN_VERSION)
     if version is not None and version < MMD_TOOLS_MIN_VERSION:
-        result = ("incompatible", "mmd_tools %s is too old; update it to %s or newer" % (".".join(map(str, version)), wanted))
+        notice = [n_("mmd_tools %s is too old; update it to %s or newer"), (".".join(map(str, version)), wanted)]
+        result = ("incompatible", notice[0] % notice[1])
     else:
         for name, attributes in REQUIRED_API:
             try:
                 module = mmd_module(name)
             except Exception as error:
-                result = ("incompatible", "mmd_tools has no usable module '%s' (%s); this version is not supported, use %s or newer" % (name, error, wanted))
+                notice = [n_("mmd_tools has no usable module '%s' (%s); this version is not supported, use %s or newer"), (name, error, wanted)]
+                result = ("incompatible", notice[0] % notice[1])
                 break
             absent = [a for a in attributes if not hasattr(module, a)]
             if absent:
-                result = ("incompatible", "mmd_tools '%s' lacks %s; this version is not supported, use %s or newer" % (name, ", ".join(absent), wanted))
+                notice = [n_("mmd_tools '%s' lacks %s; this version is not supported, use %s or newer"), (name, ", ".join(absent), wanted)]
+                result = ("incompatible", notice[0] % notice[1])
                 break
     _status_cache.clear()
     _status_cache[key] = result
+    _notice[:] = notice
     return result
+
+
+# The message of mmd_tools_status() in the UI language. The English text stays what the log and the
+# support report show.
+def mmd_tools_notice():
+    mmd_tools_status()
+    msgid, args = _notice
+    return iface_(msgid) % args if args else iface_(msgid)
 
 
 # True only when mmd_tools is enabled and passes the version and API checks.
@@ -110,7 +126,7 @@ def missing_dependencies():
     state, detail = mmd_tools_status()
     if state == "ok":
         return []
-    return [("mmd_tools", detail, MMD_TOOLS_URL)]
+    return [("mmd_tools", mmd_tools_notice(), MMD_TOOLS_URL)]
 
 
 # The importer, model and utils modules the bridge drives directly.

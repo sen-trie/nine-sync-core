@@ -23,6 +23,7 @@ from bpy.props import BoolProperty, CollectionProperty, IntProperty, PointerProp
 from . import hooks
 from .common.constants import MIN_BLENDER, NINESYNC_NAME
 from .common.logger import log, setup_logging
+from .i18n import translations
 from .sync.analysis import clear_analysis
 from .sync.engine import abandon_sync
 from .sync.frames import clear_internal_frames
@@ -99,6 +100,8 @@ def register():
             "NineSync needs Blender %d.%d or newer (this is %s)"
             % (MIN_BLENDER[0], MIN_BLENDER[1], bpy.app.version_string)
         )
+    # After the refusals above, so a copy that refuses never leaves a dictionary behind.
+    translations.register(__name__)
     try:
         setup_logging()
         for cls in active_classes():
@@ -167,6 +170,7 @@ def teardown():
             bpy.utils.unregister_class(cls)
         except (RuntimeError, ValueError):
             pass
+    translations.unregister(__name__)
 
 
 # A copy that refused to register (or was never registered) owns nothing, so disabling it

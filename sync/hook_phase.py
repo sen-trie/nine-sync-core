@@ -1,4 +1,5 @@
 import traceback
+from bpy.app.translations import pgettext_iface as iface_
 
 from .. import hooks
 from ..common.logger import log
@@ -95,7 +96,7 @@ def hook_steps(run, context, cancelled_error, first, last):
                         break
                     fraction, text = read_step(step)
                     shown = base + span * (fraction if fraction is not None else 0.0)
-                    yield from run.tick(shown, text or "Running %s" % owner)
+                    yield from run.tick(shown, text or iface_("Running %s") % owner)
                 generator = None
             outcome = read_result(owner, result)
         except cancelled_error:

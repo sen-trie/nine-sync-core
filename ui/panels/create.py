@@ -1,6 +1,7 @@
 import os
 
 from bpy.types import Panel
+from bpy.app.translations import pgettext_iface as iface_
 
 from ...common.constants import NINESYNC_CATEGORY
 from ...sync.mmd_tools_link import mmd_tools_available
@@ -28,14 +29,14 @@ class NINESYNC_PT_create(Panel):
         if not os.path.isfile(template_path()):
             box = layout.box()
             box.alert = True
-            draw_wrapped(box, "assets/kagamine.pmm is missing, so Create PMM cannot run.")
+            draw_wrapped(box, iface_("assets/kagamine.pmm is missing, so Create PMM cannot run."))
         layout.operator("ninesync.spawn_camera", icon="CAMERA_DATA")
         split = layout.split(factor=0.55)
         split.enabled = settings.export_animation
         split.label(text="MMD Camera")
         split.prop(settings, "export_camera_object", text="")
         header, box = layout.panel("ninesync_export_models", default_closed=False)
-        header.label(text="MMD Armatures (%d)" % len(settings.export_items))
+        header.label(text=iface_("MMD Armatures (%d)") % len(settings.export_items))
         header.operator("ninesync.refresh_export", text="", icon="FILE_REFRESH", emboss=False)
         if box is not None:
             if not len(settings.export_items):
@@ -53,7 +54,7 @@ class NINESYNC_PT_create(Panel):
                 path_row.label(text="", icon="FILE")
                 path_row.prop(item, "pmx_path", text="")
         header, box = layout.panel("ninesync_export_props", default_closed=False)
-        header.label(text="Props (.x) (%d)" % len(settings.export_props))
+        header.label(text=iface_("Props (.x) (%d)") % len(settings.export_props))
         if box is not None:
             box.operator("ninesync.add_export_props", icon="ADD")
             for index, item in enumerate(settings.export_props):

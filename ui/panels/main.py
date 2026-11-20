@@ -1,4 +1,5 @@
 from bpy.types import Panel
+from bpy.app.translations import pgettext_iface as iface_
 
 from ...common.constants import (
     NINESYNC_CATEGORY,
@@ -34,7 +35,7 @@ class MMDBRIDGE_PT_main(Panel):
         if settings_outdated(context.scene):
             box = layout.box()
             box.alert = True
-            draw_wrapped(box, STALE_SETTINGS_MESSAGE)
+            draw_wrapped(box, iface_(STALE_SETTINGS_MESSAGE))
             schedule_relink()
             return
         settings = context.scene.mmd_bridge
@@ -57,7 +58,7 @@ class MMDBRIDGE_PT_main(Panel):
         if fps_differs(context.scene):
             fps_box = layout.box()
             fps_box.label(
-                text="Scene is %g fps, PMM is %d fps"
+                text=iface_("Scene is %g fps, PMM is %d fps")
                 % (round(scene_fps(context.scene), 3), PMM_FPS),
                 icon="TIME",
             )
@@ -67,7 +68,7 @@ class MMDBRIDGE_PT_main(Panel):
             header = box.row()
             header.alert = True
             header.label(
-                text="Scale is %.3f, not %.1f" % (current_scale(settings), UNIT_SCALE),
+                text=iface_("Scale is %.3f, not %.1f") % (current_scale(settings), UNIT_SCALE),
                 icon="ERROR",
             )
             header.operator(
@@ -75,13 +76,13 @@ class MMDBRIDGE_PT_main(Panel):
             )
             draw_wrapped(
                 box,
-                "Camera keyframe interpolation may not match MMD exactly because of the different distance scale.",
+                iface_("Camera keyframe interpolation may not match MMD exactly because of the different distance scale."),
             )
             fix = box.operator("ninesync.set_import_scale", text="Import at Scale 1.0 From Now On", icon="IMPORT")
             fix.scale = UNIT_SCALE
             fix.dismiss = True
         header, box = layout.panel("ninesync_models", default_closed=False)
-        header.label(text="PMX Models (%d)" % len(settings.targets))
+        header.label(text=iface_("PMX Models (%d)") % len(settings.targets))
         header.operator("ninesync.scan", text="", icon="FILE_REFRESH", emboss=False)
         if box is not None and not len(settings.targets):
             box.label(text="Press the refresh icon to read the PMM")

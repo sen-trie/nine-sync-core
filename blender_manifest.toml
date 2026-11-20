@@ -15,4 +15,4 @@ copyright = ["2026 sentrie"]
 files = "Read PMM, PMX and audio; write PMM, PMX, .x and temporary VMD"
 
 [build]
-paths_exclude_pattern = ["__pycache__/", "/tests/", "/tools/", "/docs/", "/debug-src/", "/src/", "/.github/", "/.git/", ".gitignore", "CLAUDE.md", "*.pyc"]
+paths_exclude_pattern = ["__pycache__/", "/tests/", "/tools/", "/docs/", "/debug-src/", "/src/", "/.github/", "/.git/", ".gitignore", "CLAUDE.md", "*.pyc", "*.po", "*.pot"]

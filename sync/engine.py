@@ -4,6 +4,7 @@ import os
 import time
 import traceback
 import types
+from bpy.app.translations import pgettext_iface as iface_, pgettext_rpt as rpt_
 
 from .. import hooks
 from ..common.addon import addon_version
@@ -191,12 +192,12 @@ def sync_steps(scene, run):
     path = bpy.path.abspath(settings.filepath)
     log.info("sync start: %s", path)
     sweep_stale_temp()
-    yield from run.tick(0.02, "Reading PMM")
+    yield from run.tick(0.02, iface_("Reading PMM"))
     with phase("read"):
         with open(path, "rb") as handle:
             data = handle.read()
     digest = log_file_state(path, data)
-    yield from run.tick(0.05, "Parsing PMM")
+    yield from run.tick(0.05, iface_("Parsing PMM"))
     with phase("parse"):
         project = parsed_copy(digest)
         if project is None:
@@ -223,7 +224,7 @@ def sync_steps(scene, run):
         current_scale(settings),
         "auto from model" if settings.auto_scale else "manual",
     )
-    yield from run.tick(0.08, "Checking for changes")
+    yield from run.tick(0.08, iface_("Checking for changes"))
     with phase("plan"):
         plan = build_plan(scene, project, run.force, run.force_keys, check_edits=False)
     rows = {row.key: row for row in settings.targets}
@@ -234,16 +235,13 @@ def sync_steps(scene, run):
     rank = {index: position for position, index in enumerate(order)}
     entries = sorted(plan.items, key=lambda e: rank.get(getattr(by_key.get(e.key), "index", None), len(rank)))
     for position, entry in enumerate(entries):
-        verb = "Importing" if entry.run_parts else "Checking"
-        yield from run.tick(
-            0.1 + 0.7 * position / len(entries),
-            "%s model %d of %d: %s" % (verb, position + 1, len(entries), entry.pmm_name),
-        )
+        text = iface_("Importing model %d of %d: %s") if entry.run_parts else iface_("Checking model %d of %d: %s")
+        yield from run.tick(0.1 + 0.7 * position / len(entries), text % (position + 1, len(entries), entry.pmm_name))
         row = rows.get(entry.key)
         model = by_key.get(entry.key)
         if row is not None and model is not None:
             apply_entry(run, entry, row, model, settings)
-    yield from run.tick(0.82, "Updating camera and light")
+    yield from run.tick(0.82, iface_("Updating camera and light"))
     with phase("camera_light"):
         upgrade_scene_settings(settings, plan.source, plan.scene)
         run.imported += import_scene_elements(scene, project, settings, plan)
@@ -252,20 +250,20 @@ def sync_steps(scene, run):
             "PMM has %d accessory(ies); install NineSync: FX to import them",
             len(project.accessories),
         )
-    yield from run.tick(0.88, "Running add-on hooks")
+    yield from run.tick(0.88, iface_("Running add-on hooks"))
     context = hook_context(scene, project, path, settings, run)
     with phase("hooks"):
         yield from hook_steps(run, context, SyncCancelled, 0.88, 0.94)
     if run.hook_failed:
         log.warning("%d hook item(s) failed; see the lines above", run.hook_failed)
-    yield from run.tick(0.94, "Updating audio")
+    yield from run.tick(0.94, iface_("Updating audio"))
     try:
         with phase("audio"):
             if import_audio(scene, project, settings):
                 run.imported += 1
     except Exception as error:
         log.error("audio failed: %s\n%s", error, traceback.format_exc())
-    yield from run.tick(0.98, "Finalizing")
+    yield from run.tick(0.98, iface_("Finalizing"))
     scene.frame_set(scene.frame_current)
     log.info(
         "sync done: %d item(s) imported, %d model(s) synced, %d unchanged, %d blocked, %d model(s) in PMM",
@@ -286,16 +284,16 @@ def sync(scene, force=False, force_keys=()):
 
 
 def status_line(run):
-    parts = ["Synced %d item(s)" % run.imported]
+    parts = [rpt_("Synced %d item(s)") % run.imported]
     if run.skipped:
-        parts.append("%d unchanged" % run.skipped)
+        parts.append(rpt_("%d unchanged") % run.skipped)
     if run.blocked:
-        parts.append("%d blocked" % run.blocked)
+        parts.append(rpt_("%d blocked") % run.blocked)
     if run.failed:
-        parts.append("%d model(s) failed" % run.failed)
+        parts.append(rpt_("%d model(s) failed") % run.failed)
     if run.hook_failed:
-        parts.append("%d accessory/effect item(s) failed" % run.hook_failed)
-    return "%s at %s" % (", ".join(parts), time.strftime("%H:%M:%S"))
+        parts.append(rpt_("%d accessory/effect item(s) failed") % run.hook_failed)
+    return rpt_("%s at %s") % (", ".join(parts), time.strftime("%H:%M:%S"))
 
 
 # One sync, advanced a step at a time, so a modal operator and a plain call share every
@@ -325,15 +323,15 @@ class SyncDriver:
         except SyncCancelled:
             self.outcome = "cancelled"
             done = self.run.synced + self.run.skipped
-            settings.status = "Cancelled after %d of %d model(s)" % (done, self.run.total)
+            settings.status = rpt_("Cancelled after %d of %d model(s)") % (done, self.run.total)
             log.info("sync cancelled after %d model(s)", done)
             self.scene.frame_set(self.scene.frame_current)
         except (PmmError, OSError) as error:
             log.error("PMM read failed: %s", error)
-            settings.status = "PMM read failed: %s" % error
+            settings.status = rpt_("PMM read failed: %s") % error
         except Exception as error:
             log.error("sync failed: %s\n%s", error, traceback.format_exc())
-            settings.status = "Sync failed: %s" % error
+            settings.status = rpt_("Sync failed: %s") % error
         else:
             self.progress.update(fraction, text)
             settings.status = text

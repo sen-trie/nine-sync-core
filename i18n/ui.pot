@@ -1,0 +1,1360 @@
+# NineSync UI catalog. Generated layout: edit msgstr values only; see DEVELOPER_GUIDE.md#translations.
+msgid ""
+msgstr ""
+"Project-Id-Version: NineSync core\n"
+"Report-Msgid-Bugs-To: https://github.com/sen-trie/nine-sync-release/issues\n"
+"Language: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"X-NineSync-Domain: core\n"
+
+#. kind: tooltip
+#: __init__.py:114
+msgid "List only the bones the PMM moves that no Rigify control follows"
+msgstr ""
+
+#. kind: label
+#: __init__.py:114 ui/panels/remap.py:294 ui/panels/remap.py:345
+msgid "Only Missing"
+msgstr ""
+
+#. kind: label
+#: sync/analysis.py:86
+msgid "No PMM selected"
+msgstr ""
+
+#. kind: label
+#: sync/analysis.py:93
+msgid "Could not read the PMM: %s"
+msgstr ""
+
+#. kind: label
+#: sync/analysis.py:101
+msgid "Camera and light could not be read"
+msgstr ""
+
+#. kind: label
+#: sync/analysis.py:103 sync/plan.py:63
+msgid "Camera"
+msgstr ""
+
+#. kind: label
+#: sync/analysis.py:103 sync/plan.py:64
+msgid "Light"
+msgstr ""
+
+#. kind: label
+#: sync/analysis.py:115
+msgid "%s: no keys"
+msgstr ""
+
+#. kind: label
+#: sync/analysis.py:116
+msgid "%s: %d key(s), frames %d-%d"
+msgstr ""
+
+#. kind: label
+#: sync/engine.py:195
+msgid "Reading PMM"
+msgstr ""
+
+#. kind: label
+#: sync/engine.py:200
+msgid "Parsing PMM"
+msgstr ""
+
+#. kind: label
+#: sync/engine.py:227
+msgid "Checking for changes"
+msgstr ""
+
+#. kind: label
+#: sync/engine.py:238
+msgid "Checking model %d of %d: %s"
+msgstr ""
+
+#. kind: label
+#: sync/engine.py:238
+msgid "Importing model %d of %d: %s"
+msgstr ""
+
+#. kind: label
+#: sync/engine.py:244
+msgid "Updating camera and light"
+msgstr ""
+
+#. kind: label
+#: sync/engine.py:253
+msgid "Running add-on hooks"
+msgstr ""
+
+#. kind: label
+#: sync/engine.py:259
+msgid "Updating audio"
+msgstr ""
+
+#. kind: label
+#: sync/engine.py:266
+msgid "Finalizing"
+msgstr ""
+
+#. kind: report
+#: sync/engine.py:287
+msgid "Synced %d item(s)"
+msgstr ""
+
+#. kind: report
+#: sync/engine.py:289
+msgid "%d unchanged"
+msgstr ""
+
+#. kind: report
+#: sync/engine.py:291
+msgid "%d blocked"
+msgstr ""
+
+#. kind: report
+#: sync/engine.py:293
+msgid "%d model(s) failed"
+msgstr ""
+
+#. kind: report
+#: sync/engine.py:295
+msgid "%d accessory/effect item(s) failed"
+msgstr ""
+
+#. kind: report
+#: sync/engine.py:296
+msgid "%s at %s"
+msgstr ""
+
+#. kind: report
+#: sync/engine.py:326
+msgid "Cancelled after %d of %d model(s)"
+msgstr ""
+
+#. kind: report
+#: sync/engine.py:331
+msgid "PMM read failed: %s"
+msgstr ""
+
+#. kind: report
+#: sync/engine.py:334
+msgid "Sync failed: %s"
+msgstr ""
+
+#. kind: label
+#: sync/hook_phase.py:99
+msgid "Running %s"
+msgstr ""
+
+#. kind: label
+#: sync/mmd_tools_link.py:80
+msgid "mmd_tools is not installed or enabled"
+msgstr ""
+
+#. kind: label
+#: sync/mmd_tools_link.py:90
+msgid "mmd_tools %s is too old; update it to %s or newer"
+msgstr ""
+
+#. kind: label
+#: sync/mmd_tools_link.py:97
+msgid "mmd_tools has no usable module '%s' (%s); this version is not supported, use %s or newer"
+msgstr ""
+
+#. kind: label
+#: sync/mmd_tools_link.py:102
+msgid "mmd_tools '%s' lacks %s; this version is not supported, use %s or newer"
+msgstr ""
+
+#. kind: label
+#: sync/plan.py:55
+msgid "Create"
+msgstr ""
+
+#. kind: label
+#: sync/plan.py:56
+msgid "Update"
+msgstr ""
+
+#. kind: label
+#: sync/plan.py:57
+msgid "Skip (Unchanged)"
+msgstr ""
+
+#. kind: label
+#: sync/plan.py:58
+msgid "Blocked"
+msgstr ""
+
+#. kind: label
+#: sync/plan.py:60 ui/panels/main.py:109
+msgid "Motion"
+msgstr ""
+
+#. kind: label
+#: sync/plan.py:61 ui/panels/main.py:112
+msgid "Shapekey"
+msgstr ""
+
+#. kind: label
+#: sync/plan.py:62 ui/properties.py:318
+msgid "Visibility"
+msgstr ""
+
+#. kind: label
+#: ui/helpers.py:32
+msgid "Get %s"
+msgstr ""
+
+#. kind: label
+#: ui/helpers.py:41
+msgid "This PMM has %d accessory(ies)"
+msgstr ""
+
+#. kind: label
+#: ui/helpers.py:44
+msgid "Install NineSync: FX to import them and their MME effects."
+msgstr ""
+
+#. kind: label
+#: ui/helpers.py:46
+msgid "Get NineSync: FX"
+msgstr ""
+
+#. kind: label
+#: ui/operators.py:35
+msgctxt "Operator"
+msgid "Sync Now"
+msgstr ""
+
+#. kind: tooltip
+#: ui/operators.py:36
+msgid "Sync the selected models from the PMM. Unchanged models are skipped. Esc cancels between models; Ctrl+Z undoes the whole sync"
+msgstr ""
+
+#. kind: label
+#: ui/operators.py:39 ui/panels/preview.py:169
+msgid "Force Resync"
+msgstr ""
+
+#. kind: tooltip
+#: ui/operators.py:39
+msgid "Import every selected model even when nothing changed"
+msgstr ""
+
+#. kind: report
+#: ui/operators.py:57
+msgid "A sync is already running"
+msgstr ""
+
+#. kind: report
+#: ui/operators.py:66
+msgid "PMM file not found"
+msgstr ""
+
+#. kind: label
+#: ui/operators.py:130
+msgctxt "Operator"
+msgid "Preview"
+msgstr ""
+
+#. kind: tooltip
+#: ui/operators.py:131
+msgid "Read the PMM and show which PMX models changed since the last sync. Changes nothing in the scene"
+msgstr ""
+
+#. kind: label
+#: ui/operators.py:154
+msgid "Sync Now"
+msgstr ""
+
+#. kind: label
+#: ui/operators.py:154
+msgid "Sync Preview"
+msgstr ""
+
+#. kind: label
+#: ui/operators.py:164
+msgctxt "Operator"
+msgid "Read Models"
+msgstr ""
+
+#. kind: report
+#: ui/operators.py:181
+msgid "Found %d model(s), %d accessory(ies)"
+msgstr ""
+
+#. kind: label
+#: ui/operators.py:189
+msgctxt "Operator"
+msgid "Clean"
+msgstr ""
+
+#. kind: tooltip
+#: ui/operators.py:190
+msgid "Remove data created by this add-on. Your own actions, clips and shape keys are never touched"
+msgstr ""
+
+#. kind: label
+#: ui/operators.py:193
+msgid "Model animation clips"
+msgstr ""
+
+#. kind: tooltip
+#: ui/operators.py:193
+msgid "Remove bridge-created motion, shapekey and physics clips and their NLA tracks"
+msgstr ""
+
+#. kind: label
+#: ui/operators.py:198
+msgid "Reset bones and shape keys the clips animated"
+msgstr ""
+
+#. kind: tooltip
+#: ui/operators.py:198
+msgid "Return only the bones and shape keys that the removed clips animated to their rest values"
+msgstr ""
+
+#. kind: tooltip
+#: ui/operators.py:203
+msgid "Remove the MMDUV_ shape keys, offset attributes, shader nodes and drivers"
+msgstr ""
+
+#. kind: label
+#: ui/operators.py:203
+msgid "UV morph data"
+msgstr ""
+
+#. kind: label
+#: ui/operators.py:208
+msgid "Camera and light rigs"
+msgstr ""
+
+#. kind: tooltip
+#: ui/operators.py:208
+msgid "Delete the MMD camera and sun rigs and their animation"
+msgstr ""
+
+#. kind: label
+#: ui/operators.py:213
+msgid "Accessories & effects (NineSync: FX)"
+msgstr ""
+
+#. kind: tooltip
+#: ui/operators.py:213
+msgid "Delete imported accessory objects, their effects and their animation"
+msgstr ""
+
+#. kind: label
+#: ui/operators.py:218
+msgid "Audio strip"
+msgstr ""
+
+#. kind: tooltip
+#: ui/operators.py:218
+msgid "Remove the sound strip added by the bridge"
+msgstr ""
+
+#. kind: label
+#: ui/operators.py:235
+msgid "Only data created by this add-on is removed. Actions, clips and shape keys you made or picked yourself are kept."
+msgstr ""
+
+#. kind: report
+#: ui/operators.py:261
+msgid "Cleaned at %s"
+msgstr ""
+
+#. kind: report
+#: ui/operators.py:265
+msgid "Removed %d clip(s), %d UV key(s), %d rig(s), %d accessory(ies), %d audio strip(s); reset %d channel(s)"
+msgstr ""
+
+#. kind: label
+#: ui/operators.py:281
+msgctxt "Operator"
+msgid "Support Report"
+msgstr ""
+
+#. kind: tooltip
+#: ui/operators.py:282
+msgid "Copy a support report with versions, settings, model status and the recent log to the clipboard. User folders are redacted, but check it before posting"
+msgstr ""
+
+#. kind: report
+#: ui/operators.py:294
+msgid "Support report copied (%d lines) and saved to the %s text"
+msgstr ""
+
+#. kind: label
+#: ui/operators.py:302
+msgctxt "Operator"
+msgid "Set Import Scale"
+msgstr ""
+
+#. kind: tooltip
+#: ui/operators.py:303
+msgid "Import new MMD models and motions at this scale from now on (presets mmd_tools' importers, remembers it in the add-on preferences and shares it with NineSync: FX when installed). Models already in the scene keep their scale; re-import them to clear the camera warning"
+msgstr ""
+
+#. kind: report
+#: ui/operators.py:320
+msgid "New imports will use scale %g (%s)"
+msgstr ""
+
+#. kind: report
+#: ui/operators.py:320
+msgid "saved for next start"
+msgstr ""
+
+#. kind: label
+#: ui/operators.py:326
+msgctxt "Operator"
+msgid "Dismiss"
+msgstr ""
+
+#. kind: label
+#: ui/operators.py:338
+msgctxt "Operator"
+msgid "Spawn MMD Camera"
+msgstr ""
+
+#. kind: tooltip
+#: ui/operators.py:339
+msgid "Create the MMD camera rig that the Syncer uses, or select the existing one, and pick it as Create PMM's MMD Camera if none is picked"
+msgstr ""
+
+#. kind: report
+#: ui/operators.py:353
+msgid "Could not create the MMD camera: %s"
+msgstr ""
+
+#. kind: report
+#: ui/operators.py:364
+msgid "MMD camera rig: %s"
+msgstr ""
+
+#. kind: label
+#: ui/operators.py:371
+msgctxt "Operator"
+msgid "Find MMD Armatures"
+msgstr ""
+
+#. kind: tooltip
+#: ui/operators.py:372
+msgid "List the mmd_tools models in this file and find the PMX each was loaded from"
+msgstr ""
+
+#. kind: label
+#: ui/operators.py:393
+msgctxt "Operator"
+msgid "Add Selected Meshes"
+msgstr ""
+
+#. kind: tooltip
+#: ui/operators.py:394
+msgid "List the selected mesh objects to be written as .x accessories (blocking props). Meshes that belong to an mmd_tools model are skipped"
+msgstr ""
+
+#. kind: report
+#: ui/operators.py:410
+msgid "No new mesh objects are selected"
+msgstr ""
+
+#. kind: label
+#: ui/operators.py:417
+msgctxt "Operator"
+msgid "Remove Prop"
+msgstr ""
+
+#. kind: tooltip
+#: ui/operators.py:418
+msgid "Take this mesh off the prop list (the object itself is not touched)"
+msgstr ""
+
+#. kind: label
+#: ui/operators.py:432
+msgctxt "Operator"
+msgid "Read Materials"
+msgstr ""
+
+#. kind: tooltip
+#: ui/operators.py:433
+msgid "List this mesh's materials. New ones start from their texture's average colour; colours already picked are kept"
+msgstr ""
+
+#. kind: label
+#: ui/operators.py:447
+msgctxt "Operator"
+msgid "Bake Root Motion"
+msgstr ""
+
+#. kind: tooltip
+#: ui/operators.py:448
+msgid "Move this model's root empty motion onto its parent bone and reset the root. Changes the .blend. Keys already on the bone are kept, and new keys are made only on existing keyframes"
+msgstr ""
+
+#. kind: report
+#: ui/operators.py:469
+msgid "'%s': root motion moved onto the parent bone, %d key(s)"
+msgstr ""
+
+#. kind: report
+#: ui/operators.py:471
+msgid "'%s' is scaled; the scale stays in Blender but MMD bones cannot hold it"
+msgstr ""
+
+#. kind: label
+#: ui/operators.py:478
+msgctxt "Operator"
+msgid "Create PMM"
+msgstr ""
+
+#. kind: tooltip
+#: ui/operators.py:479
+msgid "Write an MMD project with the checked models, the chosen camera and optionally the existing animation. Reads the scene only; Link to Syncer also sets it as the Syncer's PMM so MMD changes can be synced back"
+msgstr ""
+
+#. kind: report
+#: ui/operators.py:514
+msgid "Created %s at %s"
+msgstr ""
+
+#. kind: report
+#: ui/operators.py:517
+msgid "Created %s with %d model(s), %d camera key(s), %d prop(s)"
+msgstr ""
+
+#. kind: label
+#: ui/panels/audio.py:7
+msgid "Audio"
+msgstr ""
+
+#. kind: label
+#: ui/panels/camera.py:7
+msgid "Camera & Light"
+msgstr ""
+
+#. kind: label
+#: ui/panels/create.py:15
+msgid "Create MMD Project"
+msgstr ""
+
+#. kind: label
+#: ui/panels/create.py:26
+msgid "Needs mmd_tools"
+msgstr ""
+
+#. kind: label
+#: ui/panels/create.py:32
+msgid "assets/kagamine.pmm is missing, so Create PMM cannot run."
+msgstr ""
+
+#. kind: label
+#: ui/panels/create.py:39
+msgid "MMD Armatures (%d)"
+msgstr ""
+
+#. kind: label
+#: ui/panels/create.py:43
+msgid "Press the refresh icon to find models"
+msgstr ""
+
+#. kind: label
+#: ui/panels/create.py:50
+msgid "Bake Root Motion"
+msgstr ""
+
+#. kind: label
+#: ui/panels/create.py:57
+msgid "Props (.x) (%d)"
+msgstr ""
+
+#. kind: label
+#: ui/panels/create.py:76
+msgid "Written to an accessories folder beside the PMM"
+msgstr ""
+
+#. kind: label
+#: ui/panels/main.py:45
+msgid "Source PMM:"
+msgstr ""
+
+#. kind: label
+#: ui/panels/main.py:61
+msgid "Scene is %g fps, PMM is %d fps"
+msgstr ""
+
+#. kind: label
+#: ui/panels/main.py:71
+msgid "Scale is %.3f, not %.1f"
+msgstr ""
+
+#. kind: label
+#: ui/panels/main.py:79
+msgid "Camera keyframe interpolation may not match MMD exactly because of the different distance scale."
+msgstr ""
+
+#. kind: label
+#: ui/panels/main.py:81
+msgid "Import at Scale 1.0 From Now On"
+msgstr ""
+
+#. kind: label
+#: ui/panels/main.py:85
+msgid "PMX Models (%d)"
+msgstr ""
+
+#. kind: label
+#: ui/panels/main.py:88
+msgid "Press the refresh icon to read the PMM"
+msgstr ""
+
+#. kind: label
+#: ui/panels/main.py:99
+msgid "Blender"
+msgstr ""
+
+#. kind: label
+#: ui/panels/options.py:7
+msgid "Options"
+msgstr ""
+
+#. kind: label
+#: ui/panels/preview.py:15
+msgid "assigned"
+msgstr ""
+
+#. kind: label
+#: ui/panels/preview.py:16
+msgid "will auto-assign"
+msgstr ""
+
+#. kind: label
+#: ui/panels/preview.py:17
+msgid "ambiguous"
+msgstr ""
+
+#. kind: label
+#: ui/panels/preview.py:18
+msgid "unassigned"
+msgstr ""
+
+#. kind: label
+#: ui/panels/preview.py:20
+msgid "bone(s)"
+msgstr ""
+
+#. kind: label
+#: ui/panels/preview.py:20
+msgid "morph(s)"
+msgstr ""
+
+#. kind: label
+#: ui/panels/preview.py:25
+msgid "frames %d-%d"
+msgstr ""
+
+#. kind: label
+#: ui/panels/preview.py:25
+msgid "no keys"
+msgstr ""
+
+#. kind: label
+#: ui/panels/preview.py:31
+msgid " +%d more"
+msgstr ""
+
+#. kind: label
+#: ui/panels/preview.py:35 ui/panels/preview.py:210 ui/panels/preview.py:212
+msgid "%d key(s), %s"
+msgstr ""
+
+#. kind: label
+#: ui/panels/preview.py:41
+msgid "No previous record"
+msgstr ""
+
+#. kind: label
+#: ui/panels/preview.py:41
+msgid "Not synced yet"
+msgstr ""
+
+#. kind: label
+#: ui/panels/preview.py:43
+msgid "Previous sync"
+msgstr ""
+
+#. kind: label
+#: ui/panels/preview.py:48
+msgid "%d %s changed: %s"
+msgstr ""
+
+#. kind: label
+#: ui/panels/preview.py:63
+msgid "Into"
+msgstr ""
+
+#. kind: label
+#: ui/panels/preview.py:63
+msgid "New"
+msgstr ""
+
+#. kind: label
+#: ui/panels/preview.py:87
+msgid "Not synced"
+msgstr ""
+
+#. kind: label
+#: ui/panels/preview.py:99
+msgid "Unchanged"
+msgstr ""
+
+#. kind: label
+#: ui/panels/preview.py:99
+msgid "Unchanged, your edits are kept"
+msgstr ""
+
+#. kind: label
+#: ui/panels/preview.py:107
+msgid "Nothing to preview"
+msgstr ""
+
+#. kind: label
+#: ui/panels/preview.py:115
+msgid "Changed PMX Models (%d)"
+msgstr ""
+
+#. kind: label
+#: ui/panels/preview.py:117
+msgid "No PMX model changed since the last sync"
+msgstr ""
+
+#. kind: label
+#: ui/panels/preview.py:127
+msgid "%d PMX model(s) not selected"
+msgstr ""
+
+#. kind: label
+#: ui/panels/preview.py:136
+msgid "Camera and Light"
+msgstr ""
+
+#. kind: label
+#: ui/panels/preview.py:155
+msgid "PMM Motion Inspector"
+msgstr ""
+
+#. kind: label
+#: ui/panels/preview.py:173
+msgid "Read PMM Motion"
+msgstr ""
+
+#. kind: label
+#: ui/panels/preview.py:185
+msgid "Out of date: read again"
+msgstr ""
+
+#. kind: label
+#: ui/panels/preview.py:209
+msgid "Source bones: %d animated of %d"
+msgstr ""
+
+#. kind: label
+#: ui/panels/preview.py:211
+msgid "Source morphs: %d animated of %d"
+msgstr ""
+
+#. kind: label
+#: ui/panels/preview.py:214
+msgid "Visibility: hidden on %d of %d key(s)"
+msgstr ""
+
+#. kind: label
+#: ui/panels/preview.py:218
+msgid "Target: %s (%s)"
+msgstr ""
+
+#. kind: label
+#: ui/panels/preview.py:218
+msgid "none"
+msgstr ""
+
+#. kind: label
+#: ui/panels/preview.py:225
+msgid "Reaches target: %d of %d animated bones"
+msgstr ""
+
+#. kind: label
+#: ui/panels/preview.py:226
+msgid "%d key(s) on matched bones"
+msgstr ""
+
+#. kind: label
+#: ui/panels/preview.py:227
+msgid "Reaches target: %d of %d animated morphs"
+msgstr ""
+
+#. kind: label
+#: ui/panels/preview.py:228
+msgid "%d key(s) on matched morphs"
+msgstr ""
+
+#. kind: label
+#: ui/panels/preview.py:230
+msgid "%d bone(s) match by their 15 byte VMD name"
+msgstr ""
+
+#. kind: label
+#: ui/panels/preview.py:232
+msgid "%d morph(s) match by English or truncated name"
+msgstr ""
+
+#. kind: label
+#: ui/panels/preview.py:235
+msgid "%d unmatched bone(s) hold no motion; nothing is lost"
+msgstr ""
+
+#. kind: label
+#: ui/panels/preview.py:237
+msgid "Motion omitted, bones not reachable"
+msgstr ""
+
+#. kind: label
+#: ui/panels/preview.py:238
+msgid "Animated morphs not on the target"
+msgstr ""
+
+#. kind: label
+#: ui/panels/readout.py:16
+msgid "MMD Values (current frame)"
+msgstr ""
+
+#. kind: label
+#: ui/panels/readout.py:34
+msgid "Camera position: %.2f, %.2f, %.2f"
+msgstr ""
+
+#. kind: label
+#: ui/panels/readout.py:38
+msgid "Camera angle: %.2f, %.2f, %.2f"
+msgstr ""
+
+#. kind: label
+#: ui/panels/readout.py:41
+msgid "Distance: %.2f"
+msgstr ""
+
+#. kind: label
+#: ui/panels/readout.py:44
+msgid "View angle: %.1f"
+msgstr ""
+
+#. kind: label
+#: ui/panels/readout.py:46
+msgid "No MMD camera yet"
+msgstr ""
+
+#. kind: label
+#: ui/panels/readout.py:56
+msgid "Light RGB: %d, %d, %d"
+msgstr ""
+
+#. kind: label
+#: ui/panels/readout.py:60
+msgid "Light position: %.2f, %.2f, %.2f"
+msgstr ""
+
+#. kind: label
+#: ui/panels/remap.py:108
+msgctxt "Operator"
+msgid "Show Mappings"
+msgstr ""
+
+#. kind: tooltip
+#: ui/panels/remap.py:109
+msgid "List which Rigify control each MMD bone drives, as a tree"
+msgstr ""
+
+#. kind: label
+#: ui/panels/remap.py:127
+msgctxt "Operator"
+msgid "Close"
+msgstr ""
+
+#. kind: label
+#: ui/panels/remap.py:137 ui/panels/remap.py:150
+msgid "Show Mappings"
+msgstr ""
+
+#. kind: label
+#: ui/panels/remap.py:148 ui/panels/remap.py:341
+msgid "No Rigify rig on this target"
+msgstr ""
+
+#. kind: label
+#: ui/panels/remap.py:152
+msgid "MMD bone  >  Rigify control"
+msgstr ""
+
+#. kind: label
+#: ui/panels/remap.py:163
+msgid "Close"
+msgstr ""
+
+#. kind: label
+#: ui/panels/remap.py:282
+msgctxt "Operator"
+msgid "Edit Mappings"
+msgstr ""
+
+#. kind: tooltip
+#: ui/panels/remap.py:283
+msgid "Choose which Rigify control follows each MMD bone. Search by either name"
+msgstr ""
+
+#. kind: label
+#: ui/panels/remap.py:288
+msgid "Search"
+msgstr ""
+
+#. kind: tooltip
+#: ui/panels/remap.py:288
+msgid "Words matched against the MMD bone and the Rigify control"
+msgstr ""
+
+#. kind: tooltip
+#: ui/panels/remap.py:294
+msgid "List only the bones the PMM moves that no Rigify control follows, to choose one for each"
+msgstr ""
+
+#. kind: label
+#: ui/panels/remap.py:322
+msgid "Done"
+msgstr ""
+
+#. kind: label
+#: ui/panels/remap.py:347
+msgid "MMD bone:"
+msgstr ""
+
+#. kind: label
+#: ui/panels/remap.py:348
+msgid "Rigify control:"
+msgstr ""
+
+#. kind: label
+#: ui/panels/remap.py:359
+msgid "Add Mapping"
+msgstr ""
+
+#. kind: label
+#: ui/panels/remap.py:360
+msgid "Reset All To Defaults"
+msgstr ""
+
+#. kind: label
+#: ui/panels/remap.py:368
+msgctxt "Operator"
+msgid "Add Mapping"
+msgstr ""
+
+#. kind: tooltip
+#: ui/panels/remap.py:369
+msgid "Add a mapping: choose any bone of the rig and the Rigify control that follows it"
+msgstr ""
+
+#. kind: label
+#: ui/panels/remap.py:386
+msgctxt "Operator"
+msgid "Remove Mapping"
+msgstr ""
+
+#. kind: tooltip
+#: ui/panels/remap.py:387
+msgid "Remove this mapping you added"
+msgstr ""
+
+#. kind: label
+#: ui/panels/remap.py:404
+msgctxt "Operator"
+msgid "Reset Mapping"
+msgstr ""
+
+#. kind: tooltip
+#: ui/panels/remap.py:405
+msgid "Put the mapping back to the built-in table"
+msgstr ""
+
+#. kind: label
+#: ui/panels/remap.py:422
+msgid "Rigify Remap"
+msgstr ""
+
+#. kind: label
+#: ui/panels/remap.py:446
+msgid "Clip"
+msgstr ""
+
+#. kind: label
+#: ui/panels/tools.py:12
+msgid "Tools"
+msgstr ""
+
+#. kind: label
+#: ui/panels/tools.py:30
+msgid "Log: Text Editor > %s"
+msgstr ""
+
+#. kind: tooltip
+#: ui/preferences.py:82
+msgid "Preset the scale of mmd_tools' model and motion importers (and NineSync: FX's accessory importer) every time Blender starts"
+msgstr ""
+
+#. kind: label
+#: ui/preferences.py:82
+msgid "Set Import Scale"
+msgstr ""
+
+#. kind: label
+#: ui/preferences.py:88
+msgid "Import Scale"
+msgstr ""
+
+#. kind: tooltip
+#: ui/preferences.py:88
+msgid "Scale preset for mmd_tools and NineSync imports"
+msgstr ""
+
+#. kind: tooltip
+#: ui/properties.py:71
+msgid "Leave the motion on the MMD bones, as an MMD focused rig takes it there"
+msgstr ""
+
+#. kind: label
+#: ui/properties.py:71
+msgid "Nothing"
+msgstr ""
+
+#. kind: tooltip
+#: ui/properties.py:72
+msgid "Carry the PMM motion over onto the Rigify controls"
+msgstr ""
+
+#. kind: label
+#: ui/properties.py:72
+msgid "Rigify focused"
+msgstr ""
+
+#. kind: label
+#: ui/properties.py:128
+msgid "Enabled"
+msgstr ""
+
+#. kind: label
+#: ui/properties.py:129
+msgid "Target"
+msgstr ""
+
+#. kind: tooltip
+#: ui/properties.py:132
+msgid "Action that receives this model's armature (bone) animation on every sync. Leave empty to create a new clip on its own NLA track"
+msgstr ""
+
+#. kind: label
+#: ui/properties.py:132
+msgid "Motion Clip"
+msgstr ""
+
+#. kind: tooltip
+#: ui/properties.py:138
+msgid "Action that receives this model's shape key (morph) animation on every sync, for the main body mesh. Leave empty to create a new clip on its own NLA track. Other shape key holders such as the morph placeholder keep automatic clips"
+msgstr ""
+
+#. kind: label
+#: ui/properties.py:138
+msgid "Shapekey Clip"
+msgstr ""
+
+#. kind: tooltip
+#: ui/properties.py:146
+msgid "For a Rigify rig converted with MMD Tools Append. Until chosen, it follows the kind of rig: Nothing for an MMD focused one, whose imported keys already land on the controls"
+msgstr ""
+
+#. kind: label
+#: ui/properties.py:146
+msgid "Remap"
+msgstr ""
+
+#. kind: tooltip
+#: ui/properties.py:153
+msgid "Action that receives the Rigify controls' keys from the remap on every sync. Leave empty to create a new clip on its own NLA track"
+msgstr ""
+
+#. kind: label
+#: ui/properties.py:153
+msgid "Rigify Clip"
+msgstr ""
+
+#. kind: label
+#: ui/properties.py:160 ui/panels/main.py:115
+msgid "MMD Leg IK"
+msgstr ""
+
+#. kind: tooltip
+#: ui/properties.py:160
+msgid "Solve the leg IK the way MMD does and key the thigh and knee as FK, so the knees land where MMD puts them. Blender's IK solver can pick a different knee position on fast leg lifts. This replaces the thigh and knee keys inside the PMM span with one key per frame, so it is off by default"
+msgstr ""
+
+#. kind: label
+#: ui/properties.py:170
+msgid "Baked Physics VMD"
+msgstr ""
+
+#. kind: tooltip
+#: ui/properties.py:170
+msgid "Experimental: VMD baked from MMD with MMDBridge. Applied as a clip above the PMM clip"
+msgstr ""
+
+#. kind: label
+#: ui/properties.py:180 ui/properties.py:206
+msgid "Include"
+msgstr ""
+
+#. kind: label
+#: ui/properties.py:181 ui/properties.py:282
+msgid "Model"
+msgstr ""
+
+#. kind: tooltip
+#: ui/properties.py:182
+msgid "Original PMX the model was loaded from. MMD loads the model from this path when it opens the project"
+msgstr ""
+
+#. kind: label
+#: ui/properties.py:182
+msgid "PMX File"
+msgstr ""
+
+#. kind: label
+#: ui/properties.py:193
+msgid "Color"
+msgstr ""
+
+#. kind: label
+#: ui/properties.py:207
+msgid "Mesh"
+msgstr ""
+
+#. kind: label
+#: ui/properties.py:213
+msgid "Colors"
+msgstr ""
+
+#. kind: label
+#: ui/properties.py:217 ui/properties.py:290
+msgid "PMM File"
+msgstr ""
+
+#. kind: label
+#: ui/properties.py:219
+msgid "Auto Scale From Model"
+msgstr ""
+
+#. kind: tooltip
+#: ui/properties.py:219
+msgid "Use the scale the first enabled model was imported with in mmd_tools"
+msgstr ""
+
+#. kind: tooltip
+#: ui/properties.py:224
+msgid "Motion scale passed to the mmd_tools VMD importer when Auto Scale is off"
+msgstr ""
+
+#. kind: label
+#: ui/properties.py:224
+msgid "Scale"
+msgstr ""
+
+#. kind: tooltip
+#: ui/properties.py:232
+msgid "Layer a VMD baked with MMDBridge above the PMM clip to reproduce MMD's own rigid body results"
+msgstr ""
+
+#. kind: label
+#: ui/properties.py:232
+msgid "MMDBridge Physics (Experimental)"
+msgstr ""
+
+#. kind: tooltip
+#: ui/properties.py:237
+msgid "PMM keyframes are 30 fps. Scale every key frame by scene fps / 30 so motion keeps its real speed in a scene with a different frame rate"
+msgstr ""
+
+#. kind: label
+#: ui/properties.py:237
+msgid "Retime to Scene FPS"
+msgstr ""
+
+#. kind: tooltip
+#: ui/properties.py:242
+msgid "Add the audio file stored in the PMM to the video sequencer, starting at frame 0, as MMD plays it"
+msgstr ""
+
+#. kind: label
+#: ui/properties.py:242
+msgid "Sync Audio"
+msgstr ""
+
+#. kind: label
+#: ui/properties.py:247
+msgid "Audio File"
+msgstr ""
+
+#. kind: tooltip
+#: ui/properties.py:247
+msgid "Audio file to use instead of the one stored in the PMM. Leave empty to use the PMM path, then the PMM folder"
+msgstr ""
+
+#. kind: tooltip
+#: ui/properties.py:253
+msgid "Apply UV morphs, including the ones inside group morphs, by offsetting the base texture in the material nodes. Needed for effects such as the > < eyes"
+msgstr ""
+
+#. kind: label
+#: ui/properties.py:253
+msgid "UV Morphs"
+msgstr ""
+
+#. kind: label
+#: ui/properties.py:258
+msgid "Sync Camera"
+msgstr ""
+
+#. kind: label
+#: ui/properties.py:259
+msgid "Sync Light"
+msgstr ""
+
+#. kind: tooltip
+#: ui/properties.py:262
+msgid "Hide and show each model's meshes where the PMM hides and shows the model, in the viewport and in renders. The keys play from their own NLA track, so your own visibility keys stay on top"
+msgstr ""
+
+#. kind: label
+#: ui/properties.py:262
+msgid "Sync Model Visibility"
+msgstr ""
+
+#. kind: tooltip
+#: ui/properties.py:267
+msgid "Make the camera follow the model and bone stored in each PMM camera keyframe, and the model that bone is bound to through MMD's outside parent (a controller riding on another model)"
+msgstr ""
+
+#. kind: label
+#: ui/properties.py:267
+msgid "Sync Constraints"
+msgstr ""
+
+#. kind: tooltip
+#: ui/properties.py:272
+msgid "Bind the bones MMD binds to another model's bone (outside parent), such as a weapon riding on the body or a controller on a model"
+msgstr ""
+
+#. kind: label
+#: ui/properties.py:272
+msgid "Sync Model Constraints"
+msgstr ""
+
+#. kind: tooltip
+#: ui/properties.py:277
+msgid "Also inherit the bone rotation, not only its position"
+msgstr ""
+
+#. kind: label
+#: ui/properties.py:277
+msgid "Follow Bone Rotation"
+msgstr ""
+
+#. kind: tooltip
+#: ui/properties.py:282
+msgid "PMM model shown in the PMM Motion Inspector"
+msgstr ""
+
+#. kind: tooltip
+#: ui/properties.py:290
+msgid "Where Create PMM saves the project"
+msgstr ""
+
+#. kind: label
+#: ui/properties.py:295 ui/panels/create.py:36
+msgid "MMD Camera"
+msgstr ""
+
+#. kind: tooltip
+#: ui/properties.py:295
+msgid "MMD camera rig whose motion is written into the project. Leave empty to keep MMD's default camera"
+msgstr ""
+
+#. kind: label
+#: ui/properties.py:301
+msgid "Link to Syncer"
+msgstr ""
+
+#. kind: tooltip
+#: ui/properties.py:301
+msgid "Set the new PMM as the Syncer's PMM and map its models to these objects. Off leaves the .blend exactly as it is"
+msgstr ""
+
+#. kind: label
+#: ui/properties.py:306
+msgid "Clean MMD Labels"
+msgstr ""
+
+#. kind: tooltip
+#: ui/properties.py:306
+msgid "Write a copy of each PMX to a models folder beside the PMM with English names, so MMD shows no Null_xx or garbled rows, and with keyed hidden bones unhidden so they play. The original PMX is not touched"
+msgstr ""
+
+#. kind: label
+#: ui/properties.py:311 ui/panels/create.py:77
+msgid "Export Animation"
+msgstr ""
+
+#. kind: tooltip
+#: ui/properties.py:311
+msgid "Write the animation Blender already has into the project. Off creates the models and camera at their initial pose"
+msgstr ""
+
+#. kind: label
+#: ui/properties.py:316
+msgid "Bones"
+msgstr ""
+
+#. kind: label
+#: ui/properties.py:317
+msgid "Morphs"
+msgstr ""
+
+#. kind: tooltip
+#: ui/properties.py:318
+msgid "Hide the model in MMD where all of its meshes are hidden in Blender (Disable in Viewports or in Renders), keyed or not"
+msgstr ""
+
+#. kind: label
+#: ui/properties.py:323
+msgid "Markers"
+msgstr ""
+
+#. kind: tooltip
+#: ui/properties.py:323
+msgid "Write the timeline markers as keyframes on a hidden 'Markers' accessory, at MMD's 30 fps frames. MMD has no markers of its own; Sync does not read them back"
+msgstr ""
+
+#. kind: label
+#: ui/relink.py:10
+msgid "Another copy of NineSync: PMM Bridge replaced this add-on's settings. They were re-linked; press the button again, and remove the other copy in Preferences > Add-ons"
+msgstr ""

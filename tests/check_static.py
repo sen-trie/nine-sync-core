@@ -15,7 +15,8 @@ ALLOWED = {
     "top": {"common", "top"},
     "sync": {"common", "top", "sync"},
     "ui": {"common", "top", "sync", "ui"},
-    "root": {"common", "top", "sync", "ui"},
+    "i18n": {"i18n"},
+    "root": {"common", "top", "sync", "ui", "i18n"},
 }
 
 
@@ -29,7 +30,7 @@ def sources():
 
 
 def layer_of(parts):
-    if parts[0] in ("common", "sync", "ui"):
+    if parts[0] in ("common", "sync", "ui", "i18n"):
         return parts[0]
     if parts[0] in TOP_LEVEL:
         return "top"

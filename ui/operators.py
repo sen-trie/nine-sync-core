@@ -3,6 +3,7 @@ import os
 import time
 from bpy.props import BoolProperty, FloatProperty, IntProperty, StringProperty
 from bpy.types import Operator
+from bpy.app.translations import pgettext_iface as iface_, pgettext_rpt as rpt_
 
 from .. import hooks
 from ..common.constants import REPORT_TEXT_NAME
@@ -14,7 +15,7 @@ from ..sync.audio import describe_audio
 from ..sync.clean import run_clean
 from ..sync.analysis import analyze, clear_analysis
 from ..sync.engine import SyncDriver, sync_running
-from ..sync.mmd_tools_link import mmd_tools_available, mmd_tools_status
+from ..sync.mmd_tools_link import mmd_tools_available, mmd_tools_notice, mmd_tools_status
 from ..sync.project_export import create_pmm, refresh_export_items
 from ..sync.rigs import ensure_camera_rig
 from ..sync.report import build_report
@@ -58,9 +59,8 @@ class MMDBRIDGE_OT_sync_now(Operator):
         path = bpy.path.abspath(context.scene.mmd_bridge.filepath)
         log.info("Sync Now pressed")
         if not mmd_tools_available():
-            detail = mmd_tools_status()[1]
-            self.report({"ERROR"}, detail)
-            log.error("mmd_tools unusable: %s", detail)
+            self.report({"ERROR"}, mmd_tools_notice())
+            log.error("mmd_tools unusable: %s", mmd_tools_status()[1])
             return False
         if not os.path.isfile(path):
             self.report({"ERROR"}, "PMM file not found")
@@ -78,11 +78,11 @@ class MMDBRIDGE_OT_sync_now(Operator):
         run = driver.run
         changed = run.imported or run.synced or run.failed
         if driver.outcome == "cancelled":
-            self.report({"WARNING"}, status)
+            self.report({"WARNING"}, rpt_(status))
         elif driver.ok and run.hook_failed:
-            self.report({"WARNING"}, status)
+            self.report({"WARNING"}, rpt_(status))
         else:
-            self.report({"INFO"} if driver.ok else {"ERROR"}, status)
+            self.report({"INFO"} if driver.ok else {"ERROR"}, rpt_(status))
         return {"FINISHED"} if driver.ok or changed else {"CANCELLED"}
 
     # Blocking path for scripts and background mode, where no event loop can tick.
@@ -142,7 +142,7 @@ class NINESYNC_OT_preview(Operator):
             return {"FINISHED"}
         result = analyze(context.scene)
         if result.error:
-            self.report({"WARNING"}, result.error)
+            self.report({"WARNING"}, rpt_(result.error))
         redraw_all()
         return {"FINISHED"}
 
@@ -178,7 +178,7 @@ class MMDBRIDGE_OT_scan(Operator):
         settings.audio_note = describe_audio(project, settings)
         self.report(
             {"INFO"},
-            "Found %d model(s), %d accessory(ies)"
+            rpt_("Found %d model(s), %d accessory(ies)")
             % (len(project.models), len(project.accessories)),
         )
         return {"FINISHED"}
@@ -232,7 +232,7 @@ class MMDBRIDGE_OT_clean(Operator):
         layout = self.layout
         draw_wrapped(
             layout,
-            "Only data created by this add-on is removed. Actions, clips and shape keys you made or picked yourself are kept.",
+            iface_("Only data created by this add-on is removed. Actions, clips and shape keys you made or picked yourself are kept."),
             52,
         )
         layout.prop(self, "animation")
@@ -258,11 +258,11 @@ class MMDBRIDGE_OT_clean(Operator):
             "audio": self.audio,
         }
         counts = run_clean(context.scene, settings, options)
-        settings.status = "Cleaned at %s" % time.strftime("%H:%M:%S")
+        settings.status = rpt_("Cleaned at %s") % time.strftime("%H:%M:%S")
         clear_analysis()
         self.report(
             {"INFO"},
-            "Removed %d clip(s), %d UV key(s), %d rig(s), %d accessory(ies), %d audio strip(s); reset %d channel(s)"
+            rpt_("Removed %d clip(s), %d UV key(s), %d rig(s), %d accessory(ies), %d audio strip(s); reset %d channel(s)")
             % (
                 counts["clips"],
                 counts["uv_keys"],
@@ -291,7 +291,7 @@ class MMDBRIDGE_OT_copy_report(Operator):
         block.write(text)
         self.report(
             {"INFO"},
-            "Support report copied (%d lines) and saved to the %s text"
+            rpt_("Support report copied (%d lines) and saved to the %s text")
             % (len(text.splitlines()), REPORT_TEXT_NAME),
         )
         return {"FINISHED"}
@@ -317,7 +317,7 @@ class NINESYNC_OT_set_import_scale(Operator):
             context.preferences.is_dirty = True
         applied = apply_import_scale(self.scale)
         log.info("import scale preset to %g for %s", self.scale, applied)
-        self.report({"INFO"}, "New imports will use scale %g (%s)" % (self.scale, ", ".join(applied) or "saved for next start"))
+        self.report({"INFO"}, rpt_("New imports will use scale %g (%s)") % (self.scale, ", ".join(applied) or rpt_("saved for next start")))
         return {"FINISHED"}
 
 
@@ -350,7 +350,7 @@ class NINESYNC_OT_spawn_camera(Operator):
         try:
             root, camera = ensure_camera_rig(context.scene, settings, rebuild=False)
         except Exception as error:
-            self.report({"ERROR"}, "Could not create the MMD camera: %s" % error)
+            self.report({"ERROR"}, rpt_("Could not create the MMD camera: %s") % error)
             log.error("spawn camera failed: %s", error)
             return {"CANCELLED"}
         context.scene.camera = camera
@@ -361,7 +361,7 @@ class NINESYNC_OT_spawn_camera(Operator):
         if root.name in context.view_layer.objects:
             root.select_set(True)
             context.view_layer.objects.active = root
-        self.report({"INFO"}, "MMD camera rig: %s" % root.name)
+        self.report({"INFO"}, rpt_("MMD camera rig: %s") % root.name)
         redraw_all()
         return {"FINISHED"}
 
@@ -466,9 +466,9 @@ class NINESYNC_OT_convert_root_motion(Operator):
             self.report({"ERROR"}, str(error))
             log.error("convert root motion failed: %s", error)
             return {"CANCELLED"}
-        self.report({"INFO"}, "'%s': root motion moved onto the parent bone, %d key(s)" % (root.name, keys))
+        self.report({"INFO"}, rpt_("'%s': root motion moved onto the parent bone, %d key(s)") % (root.name, keys))
         if stretched:
-            self.report({"WARNING"}, "'%s' is scaled; the scale stays in Blender but MMD bones cannot hold it" % root.name)
+            self.report({"WARNING"}, rpt_("'%s' is scaled; the scale stays in Blender but MMD bones cannot hold it") % root.name)
         redraw_all()
         return {"FINISHED"}
 
@@ -511,10 +511,10 @@ class NINESYNC_OT_create_pmm(Operator):
             log.error("create PMM failed: %s", error)
             return {"CANCELLED"}
         settings.export_path = path
-        settings.status = "Created %s at %s" % (os.path.basename(path), time.strftime("%H:%M:%S"))
+        settings.status = rpt_("Created %s at %s") % (os.path.basename(path), time.strftime("%H:%M:%S"))
         self.report(
             {"INFO"},
-            "Created %s with %d model(s), %d camera key(s), %d prop(s)"
+            rpt_("Created %s with %d model(s), %d camera key(s), %d prop(s)")
             % (os.path.basename(path), models, camera_keys, props),
         )
         for warning in warnings:

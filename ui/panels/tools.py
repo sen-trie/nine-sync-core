@@ -1,4 +1,5 @@
 from bpy.types import Panel
+from bpy.app.translations import pgettext_iface as iface_
 
 from ...common.constants import LOG_TEXT_NAME, NINESYNC_CATEGORY
 from ...sync.mmd_tools_link import mmd_tools_available
@@ -26,4 +27,4 @@ class NINESYNC_PT_tools(Panel):
         tools = layout.row(align=True)
         tools.operator("ninesync.clean", icon="TRASH")
         tools.operator("ninesync.copy_report", icon="COPYDOWN")
-        layout.label(text="Log: Text Editor > %s" % LOG_TEXT_NAME)
+        layout.label(text=iface_("Log: Text Editor > %s") % LOG_TEXT_NAME)

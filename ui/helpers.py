@@ -1,5 +1,6 @@
 import bpy
 import textwrap
+from bpy.app.translations import pgettext_iface as iface_
 
 from .. import hooks
 from ..common.constants import FX_URL, WRAP_CHAR, WRAP_MARGIN
@@ -28,7 +29,7 @@ def draw_dependency_notices(layout):
         box = layout.box()
         box.alert = True
         box.label(text=message, icon="ERROR")
-        box.operator("wm.url_open", text="Get %s" % label, icon="URL").url = url
+        box.operator("wm.url_open", text=iface_("Get %s") % label, icon="URL").url = url
 
 
 # Shown when the PMM has accessories but FX is not installed.
@@ -37,10 +38,10 @@ def draw_fx_notice(layout, settings):
         return
     box = layout.box()
     box.label(
-        text="This PMM has %d accessory(ies)" % settings.pmm_accessory_count,
+        text=iface_("This PMM has %d accessory(ies)") % settings.pmm_accessory_count,
         icon="INFO",
     )
-    draw_wrapped(box, "Install NineSync: FX to import them and their MME effects.")
+    draw_wrapped(box, iface_("Install NineSync: FX to import them and their MME effects."))
     if FX_URL:
         box.operator("wm.url_open", text="Get NineSync: FX", icon="URL").url = FX_URL
 

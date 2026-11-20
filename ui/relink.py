@@ -1,12 +1,13 @@
 import bpy
 import importlib
+from bpy.app.translations import pgettext_n as n_, pgettext_rpt as rpt_
 
 from ..common.constants import ADDON_PACKAGE
 from ..common.logger import log
 from ..common.scene_utils import redraw_all
 
 
-STALE_SETTINGS_MESSAGE = "Another copy of NineSync: PMM Bridge replaced this add-on's settings. They were re-linked; press the button again, and remove the other copy in Preferences > Add-ons"
+STALE_SETTINGS_MESSAGE = n_("Another copy of NineSync: PMM Bridge replaced this add-on's settings. They were re-linked; press the button again, and remove the other copy in Preferences > Add-ons")
 
 
 _relink = {"pending": False}
@@ -53,5 +54,5 @@ def refuse_if_outdated(operator, context):
     if not settings_outdated(context.scene):
         return False
     schedule_relink()
-    operator.report({"WARNING"}, STALE_SETTINGS_MESSAGE)
+    operator.report({"WARNING"}, rpt_(STALE_SETTINGS_MESSAGE))
     return True

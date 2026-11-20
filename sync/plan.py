@@ -2,6 +2,7 @@ import bpy
 import os
 import struct
 import types
+from bpy.app.translations import pgettext_n as n_
 
 from ..common.constants import ACTION_PREFIX, IMPORT_FORMAT
 from ..common.scene_utils import find_armature, model_key
@@ -51,16 +52,16 @@ from .targets import match_roots, target_usable
 from .visibility import visibility_action_name
 
 
-CREATE = "Create"
-UPDATE = "Update"
-SKIP = "Skip (Unchanged)"
-BLOCKED = "Blocked"
+CREATE = n_("Create")
+UPDATE = n_("Update")
+SKIP = n_("Skip (Unchanged)")
+BLOCKED = n_("Blocked")
 PART_LABELS = {
-    "motion": "Motion",
-    "shape": "Shapekey",
-    "visible": "Visibility",
-    "camera": "Camera",
-    "light": "Light",
+    "motion": n_("Motion"),
+    "shape": n_("Shapekey"),
+    "visible": n_("Visibility"),
+    "camera": n_("Camera"),
+    "light": n_("Light"),
 }
 SCENE_KINDS = ("camera", "light")
 READ_ERRORS = (ValueError, IndexError, OverflowError, struct.error)
