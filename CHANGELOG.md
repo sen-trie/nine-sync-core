@@ -2,7 +2,9 @@
 
 ## 0.9.0
 
-- Back-end improvements to integration, preferences and logging.
+- Back-end improvements to integration, preferences, logging, and diagnostics
+- Optimizations to PMM parsing, animation conversion, dependency evaluation, caching, and incremental synchronization.
+- A model bound to another model now resyncs when that model's motion changes.
 
 ## 0.8.3
 
