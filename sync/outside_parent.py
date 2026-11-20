@@ -458,6 +458,29 @@ def write_solved(armature, own, solved):
             count("outside_parent_keys_written", len(rest))
 
 
+# live(model, bone) for outside_parent_order: True when apply_outside_parents will bind
+# that bone with a constraint, which is when its bone on the mapped armature has no parent.
+# Unmapped models and unknown bones count as solved, which keeps the order they need.
+def live_bindings(settings, bone_table):
+    tables = {}
+
+    def live(model, bone_index):
+        if not 0 <= bone_index < len(model.bone_names):
+            return False
+        if model.index not in tables:
+            item = target_for_index(settings, model.index)
+            armature = find_armature(item.target) if item is not None else None
+            tables[model.index] = bone_table(armature) if armature is not None else None
+        table = tables[model.index]
+        if table is None:
+            return False
+        name = model.bone_names[bone_index]
+        own = table.get(vmd_bone_name(name)) or table.get(name)
+        return own is not None and own.parent is None
+
+    return live
+
+
 # Binds the bones MMD binds to another model's bone (a weapon riding on the body, a prop
 # on a hand). table is the VMD name table of this armature and bone_table builds that of
 # a parent's. Returns how many constraints and solved frames were written.

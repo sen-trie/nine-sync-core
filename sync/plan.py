@@ -17,6 +17,8 @@ from .motion import (
     fingerprint_and_digests,
     ik_fingerprint,
     outside_fingerprint,
+    outside_parent_motion,
+    bone_fingerprint,
     BONE_MORPH_TRACK,
     IK_TRACK,
     OUTSIDE_TRACK,
@@ -420,12 +422,16 @@ CHANGED_TEXT = {
 
 # Plans one part of a mapped model. Every part lives on NLA tracks, so outputs are
 # compared as clips.
-def plan_part(part, item, model, row, root, layout, scene, settings, signature, record, force, check_edits=True):
+def plan_part(part, item, model, row, root, layout, scene, settings, signature, record, force, check_edits=True, parent_motion=None, memo=None):
     label = model_label(model)
     plan = PartPlan(part)
     names, tracks, pack = part_source(part, model)
     with phase("fingerprint", label):
-        plan.fingerprint, plan.tracks = fingerprint_and_digests(names, tracks, pack)
+        if part == "motion":
+            plan.fingerprint, digests = bone_fingerprint(model, memo)
+            plan.tracks = dict(digests)
+        else:
+            plan.fingerprint, plan.tracks = fingerprint_and_digests(names, tracks, pack)
         ik = ik_fingerprint(model) if part == "motion" else ""
         if ik:
             plan.fingerprint = digest_values(plan.fingerprint, ik)
@@ -433,6 +439,9 @@ def plan_part(part, item, model, row, root, layout, scene, settings, signature, 
         outside = outside_fingerprint(model) if part == "motion" else ""
         if outside:
             outside = digest_values(outside, outside_targets(model, settings))
+            moved = parent_motion() if parent_motion is not None else ""
+            if moved:
+                outside = digest_values(outside, moved)
             plan.fingerprint = digest_values(plan.fingerprint, outside)
             plan.tracks[OUTSIDE_TRACK] = outside[:8]
         # Bone morphs are baked into the bones' keys, so their weights belong to the motion.
@@ -470,7 +479,10 @@ def plan_part(part, item, model, row, root, layout, scene, settings, signature, 
 
 
 # Plans one PMM model into an item. Reads the rig and the record; writes nothing.
-def plan_model(model, row, scene, settings, source, force, check_edits=True):
+# parent_motion, when given, returns the hash of the motion of the other models this one
+# is bound to; it is called only for a mapped model whose motion is planned. memo holds
+# the plan's bone fingerprints (motion.bone_fingerprint).
+def plan_model(model, row, scene, settings, source, force, check_edits=True, parent_motion=None, memo=None):
     key = model_key(model)
     item = PlanItem(key, model.name or model.name_en or key)
     item.source = source
@@ -516,7 +528,7 @@ def plan_model(model, row, scene, settings, source, force, check_edits=True):
     morph_signature = digest_values(sorted(resolved.items()), groups)
     if model.bones:
         item.parts["motion"] = plan_part(
-            "motion", item, model, row, root, layout, scene, settings, bone_signature, record, force, check_edits
+            "motion", item, model, row, root, layout, scene, settings, bone_signature, record, force, check_edits, parent_motion, memo
         )
     if model.morphs and layout.meshes:
         item.parts["shape"] = plan_part(
@@ -644,10 +656,14 @@ def build_plan(scene, project, force=False, force_keys=(), check_edits=True):
     plan.source = source
     rows = {row.key: row for row in settings.targets}
     claimed = {}
+    memo = {}
     for model in project.models:
         key = model_key(model)
         forced = force or key in force_keys
-        item = plan_model(model, rows.get(key), scene, settings, source, forced, check_edits)
+        parent_motion = None
+        if settings.sync_model_constraints:
+            parent_motion = lambda model=model: outside_parent_motion(model, project.models, memo)
+        item = plan_model(model, rows.get(key), scene, settings, source, forced, check_edits, parent_motion, memo)
         if item.selected and item.target_name:
             claimed.setdefault(item.target_name, []).append(item)
         plan.items.append(item)

@@ -2,7 +2,7 @@ import hashlib
 import struct
 import types
 
-from ..pmm import REST_EPSILON, bone_track_moves, encode_name, outside_parent_keys
+from ..pmm import OUTSIDE_FREE, REST_EPSILON, bone_track_moves, encode_name, outside_parent_keys
 
 
 BONE_KEY = struct.Struct("<i3d4d")
@@ -129,6 +129,73 @@ def outside_fingerprint(model):
     return digest_values(
         [(model.bone_names[b] if 0 <= b < len(model.bone_names) else b, found[b]) for b in sorted(found)]
     )
+
+
+# The indices of the other models a model's bones are bound to at some frame. live, when
+# given, names the bones whose binding becomes a live constraint (live(model, bone)); they
+# are left out, since a constraint follows its parent whenever the parent syncs.
+def outside_parent_models(model, live=None):
+    found = set()
+    for bone, keys in outside_bindings(model).items():
+        if live is not None and live(model, bone):
+            continue
+        for _frame, parent in keys:
+            if parent is not None and parent[0] not in (model.index, OUTSIDE_FREE):
+                found.add(parent[0])
+    return found
+
+
+# The bone fingerprint and per-track digests of a model, computed once per plan when memo
+# (keyed by model index) is given: a parent model's motion part and the models bound to
+# it read the same value. Callers copy the digest table before changing it.
+def bone_fingerprint(model, memo=None):
+    if memo is not None and model.index in memo:
+        return memo[model.index]
+    value = fingerprint_and_digests(model.bone_names, model.bones, pack_bone_key)
+    if memo is not None:
+        memo[model.index] = value
+    return value
+
+
+# Hash of the PMM motion of those other models (bone and IK tracks), "" when there are
+# none. Their pose decides where the bound bones are solved, so an edit to a parent
+# model's motion has to resync the bound model too.
+def outside_parent_motion(model, models, memo=None):
+    others = sorted(outside_parent_models(model))
+    if not others:
+        return ""
+    by_index = {m.index: m for m in models}
+    parts = []
+    for index in others:
+        parent = by_index.get(index)
+        parts.append((index, None if parent is None else (bone_fingerprint(parent, memo)[0], ik_fingerprint(parent))))
+    return digest_values(parts)
+
+
+# Model indices in sync order: a model after the other models its solved bones are bound
+# to, so the solve reads their new motion, otherwise in PMM order. Bindings that become
+# live constraints (see live above) add no order, so a prop on a hand that the body in turn
+# follows (a two-handed weapon) still syncs before the body, whatever the PMM order; MMD
+# plays such a pair the same in either order. A cycle of solved bindings cannot be honoured
+# in full: it is broken at its model first in PMM order, which syncs last.
+def outside_parent_order(models, live=None):
+    present = {m.index for m in models}
+    needs = {m.index: sorted(outside_parent_models(m, live) & present) for m in models}
+    order = []
+    state = {}
+
+    def visit(index):
+        if state.get(index):
+            return
+        state[index] = "open"
+        for other in needs[index]:
+            visit(other)
+        state[index] = "done"
+        order.append(index)
+
+    for model in models:
+        visit(model.index)
+    return order
 
 
 # A short stable hash of any repr-able values, for settings and rig signatures.

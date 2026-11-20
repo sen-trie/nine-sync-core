@@ -73,6 +73,49 @@ checks.check("empty tracks fingerprint", len(bone_print(empty)) == 32)
 twin_a, twin_b = make_model(0, "same"), make_model(1, "same")
 checks.check("duplicate names keep separate keys", scene_utils.model_key(twin_a) != scene_utils.model_key(twin_b))
 
+# Outside parents across models: a bound model's motion fingerprint follows its parent
+# model's motion, and parents sync before the models bound to them.
+def bind(model, parent_index, bone=0):
+    model.outside_parents = [0]
+    model.outside_keys = [pmm.OutsideKey(0, ((parent_index, bone),))]
+    return model
+
+
+parent, child = make_model(0, "parent"), bind(make_model(1, "child"), 0)
+checks.check("parent model found", motion.outside_parent_models(child) == {0})
+checks.check("unbound model has no parent motion", motion.outside_parent_motion(parent, [parent, child]) == "")
+before = motion.outside_parent_motion(child, [parent, child])
+moved_parent = make_model(0, "parent", shift=1.0)
+checks.check("parent motion edit changes the child", motion.outside_parent_motion(child, [moved_parent, child]) != before)
+morphed = make_model(0, "parent")
+morphed.morphs[0][1] = pmm.MorphKey(5, 0.5)
+checks.check("parent morph edit leaves the child", motion.outside_parent_motion(child, [morphed, child]) == before)
+shared = {}
+motion.bone_fingerprint(parent, shared)
+checks.check("shared fingerprint memo gives the same hash", motion.outside_parent_motion(child, [parent, child], shared) == before)
+checks.check("memo holds the plain fingerprint", shared[0] == motion.fingerprint_and_digests(parent.bone_names, parent.bones, motion.pack_bone_key))
+released = make_model(1, "child")
+released.outside_parents = [0]
+released.outside_keys = [pmm.OutsideKey(0, ((pmm.OUTSIDE_FREE, 0),))]
+checks.check("released slot has no parent model", motion.outside_parent_models(released) == set())
+self_bound = bind(make_model(1, "child"), 1)
+checks.check("self binding has no parent model", motion.outside_parent_models(self_bound) == set())
+checks.check("parents sync first", motion.outside_parent_order([child, parent]) == [0, 1])
+chain = [bind(make_model(0, "a"), 1), bind(make_model(1, "b"), 2), make_model(2, "c")]
+checks.check("parent chains sync root first", motion.outside_parent_order(chain) == [2, 1, 0])
+loop = [bind(make_model(0, "a"), 1), bind(make_model(1, "b"), 0), make_model(2, "c")]
+checks.check("bound cycles keep every model once", sorted(motion.outside_parent_order(loop)) == [0, 1, 2])
+missing = [bind(make_model(0, "a"), 5)]
+checks.check("parent outside the PMM is ignored", motion.outside_parent_order(missing) == [0])
+# A two-handed weapon listed first: its root rides the body's hand by a live constraint,
+# the body's solved bone follows the weapon. The weapon must sync first in either order.
+weapon, body = bind(make_model(0, "weapon"), 1), bind(make_model(1, "body"), 0)
+live = lambda model, bone: model.index == 0
+checks.check("weapon first: without live bindings the body syncs first", motion.outside_parent_order([weapon, body]) == [1, 0])
+checks.check("weapon first: a live binding adds no order", motion.outside_parent_order([weapon, body], live) == [0, 1])
+checks.check("body first: same order", motion.outside_parent_order([body, weapon], live) == [0, 1])
+checks.check("live bindings are left out of the parent models", motion.outside_parent_models(weapon, live) == set())
+
 # Summaries.
 rest = pmm.BoneKey(0, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0), INTERP)
 base.bone_names.append("idle")

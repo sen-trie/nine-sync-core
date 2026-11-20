@@ -15,7 +15,9 @@ from ..pmm import PmmError, parse_pmm
 from .analysis import clear_analysis, content_digest, parsed_copy
 from .audio import describe_audio, import_audio
 from .model_import import sync_target
-from .plan import BLOCKED, PART_LABELS, build_plan, parse_checked
+from .motion import outside_parent_order
+from .outside_parent import live_bindings
+from .plan import BLOCKED, PART_LABELS, build_plan, parse_checked, vmd_bone_table
 from .hook_phase import hook_steps
 from .progress import SyncProgress, note_progress
 from .retime import retime_factor, retime_project
@@ -226,7 +228,11 @@ def sync_steps(scene, run):
         plan = build_plan(scene, project, run.force, run.force_keys, check_edits=False)
     rows = {row.key: row for row in settings.targets}
     by_key = {model_key(m): m for m in project.models}
-    entries = plan.items
+    # Parents before the models whose solved bones are bound to them; otherwise the plan's
+    # (PMM) order.
+    order = outside_parent_order(project.models, live_bindings(settings, vmd_bone_table))
+    rank = {index: position for position, index in enumerate(order)}
+    entries = sorted(plan.items, key=lambda e: rank.get(getattr(by_key.get(e.key), "index", None), len(rank)))
     for position, entry in enumerate(entries):
         verb = "Importing" if entry.run_parts else "Checking"
         yield from run.tick(
