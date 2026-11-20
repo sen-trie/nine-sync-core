@@ -1,6 +1,8 @@
 import bpy
 import math
 
+import numpy as np
+
 from .constants import ACTION_PREFIX, FRAME_EPSILON
 from .logger import log
 
@@ -48,6 +50,87 @@ def create_fcurve(owner, data_path, index, group, frame):
         if found is not None:
             return found
     return None
+
+
+# Writes many keys into an existing curve in one pass, as keyframe_insert per frame
+# followed by making every key in the span linear would, without a Python round trip per
+# key: a key already on one of the frames moves by the value change (what Blender does
+# when it replaces a key), the others are added; inside a span every key but the first
+# then gets auto clamped handles. span (low, high), or a list of them, is the range made
+# linear, by default the frames' own; keys on the frames in hold are made constant
+# instead. Keys outside both are left alone. frames must be sorted and integral; returns
+# how many keys were added.
+def merge_linear_keys(fcurve, frames, values, span=None, hold=()):
+    points = fcurve.keyframe_points
+    count = len(points)
+    frames = np.asarray(frames, dtype=np.float64)
+    values = np.asarray(values, dtype=np.float64)
+    co = np.empty(2 * count)
+    left = np.empty(2 * count)
+    right = np.empty(2 * count)
+    interpolation = np.empty(count, dtype=np.int32)
+    if count:
+        points.foreach_get("co", co)
+        points.foreach_get("handle_left", left)
+        points.foreach_get("handle_right", right)
+        points.foreach_get("interpolation", interpolation)
+    existing = co[0::2]
+    # Blender finds the key to replace within 0.01 of the frame; keys are sorted.
+    slot = np.searchsorted(existing, frames - 0.01)
+    hit = slot < count
+    hit[hit] &= np.abs(existing[slot[hit]] - frames[hit]) < 0.01
+    replaced = slot[hit]
+    delta = values[hit] - co[2 * replaced + 1]
+    co[2 * replaced + 1] = values[hit]
+    left[2 * replaced + 1] += delta
+    right[2 * replaced + 1] += delta
+    fresh = ~hit
+    added = int(fresh.sum())
+    if added:
+        points.add(added)
+        new_co = np.empty(2 * added)
+        new_co[0::2] = frames[fresh]
+        new_co[1::2] = values[fresh]
+        co = np.concatenate([co, new_co])
+        left = np.concatenate([left, new_co])
+        right = np.concatenate([right, new_co])
+        interpolation = np.concatenate([interpolation, np.empty(added, dtype=np.int32)])
+    if span is None and len(frames):
+        span = (frames[0], frames[-1])
+    inside = auto = None
+    if span is not None:
+        keyed = co[0::2]
+        inside = np.zeros(len(keyed), dtype=bool)
+        auto = np.zeros(len(keyed), dtype=bool)
+        for low, high in [span] if np.isscalar(span[0]) else span:
+            run = (keyed >= low) & (keyed <= high)
+            inside |= run
+            if run.any():
+                auto |= run & (keyed != keyed[run].min())
+        interpolation[inside] = LINEAR_INTERPOLATION
+        if len(hold):
+            interpolation[np.isin(np.rint(keyed), np.asarray(list(hold), dtype=np.float64))] = CONSTANT_INTERPOLATION
+    points.foreach_set("co", co)
+    points.foreach_set("handle_left", left)
+    points.foreach_set("handle_right", right)
+    points.foreach_set("interpolation", interpolation)
+    if inside is not None and auto.any():
+        # Handles in the span are never evaluated, but a user who turns the keys to
+        # Bezier should get a smooth curve through them, not handles left over from the
+        # curve the keys replaced, so they become auto clamped there. The first key of a
+        # span keeps its own: its left handle shapes the segment coming into the span.
+        for prop in ("handle_left_type", "handle_right_type"):
+            types = np.empty(len(points), dtype=np.int32)
+            points.foreach_get(prop, types)
+            types[auto] = AUTO_CLAMPED_HANDLE
+            points.foreach_set(prop, types)
+    fcurve.update()
+    return added
+
+
+LINEAR_INTERPOLATION = bpy.types.Keyframe.bl_rna.properties["interpolation"].enum_items["LINEAR"].value
+CONSTANT_INTERPOLATION = bpy.types.Keyframe.bl_rna.properties["interpolation"].enum_items["CONSTANT"].value
+AUTO_CLAMPED_HANDLE = bpy.types.Keyframe.bl_rna.properties["handle_left_type"].enum_items["AUTO_CLAMPED"].value
 
 
 # Replaces every key with linear ones. Used for shape keys the bridge computes

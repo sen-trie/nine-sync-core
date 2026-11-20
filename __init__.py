@@ -26,6 +26,7 @@ from .common.logger import log, setup_logging
 from .sync.analysis import clear_analysis
 from .sync.engine import abandon_sync
 from .sync.frames import clear_internal_frames
+from .sync.solve_cache import clear as clear_solve_cache
 from .sync.tempfiles import sweep_stale_temp
 from .ui import CLASSES
 from .ui.preferences import (
@@ -70,6 +71,7 @@ def ninesync_load_handler(*_args):
     republish_shared()
     abandon_sync()
     clear_analysis()
+    clear_solve_cache()
     try:
         if settings_outdated(bpy.context.scene):
             schedule_relink()
@@ -174,6 +176,7 @@ def unregister():
         return
     abandon_sync()
     clear_analysis()
+    clear_solve_cache()
     clear_internal_frames()
     teardown()
 

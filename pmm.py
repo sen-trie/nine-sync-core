@@ -282,6 +282,15 @@ class Reader:
         self.pos += layout.size
         return values
 
+    # count fixed-size records in one bounds check; per-record unpack calls dominate the
+    # parse of long key sections.
+    def records(self, layout, count):
+        size = layout.size * count
+        self.need(size)
+        view = memoryview(self.data)[self.pos : self.pos + size]
+        self.pos += size
+        return layout.iter_unpack(view)
+
     def raw(self, length):
         self.need(length)
         chunk = self.data[self.pos : self.pos + length]
@@ -395,26 +404,16 @@ def read_scene_track(reader, initial_layout, additional_layout, build_payload, f
 
 
 def read_bone_track(reader, bone_count):
-    initials = []
-    for _ in range(bone_count):
-        v = reader.unpack(BONE_INITIAL)
-        initials.append((v[0], v[3], tuple(v[4:7]), tuple(v[7:11]), v[2]))
-    additional = {}
-    for _ in range(reader.count()):
-        v = reader.unpack(BONE_ADDITIONAL)
-        additional[v[0]] = (v[1], v[4], tuple(v[5:8]), tuple(v[8:12]), v[3])
+    initials = [(v[0], v[3], tuple(v[4:7]), tuple(v[7:11]), v[2]) for v in reader.records(BONE_INITIAL, bone_count)]
+    count = reader.count()
+    additional = {v[0]: (v[1], v[4], tuple(v[5:8]), tuple(v[8:12]), v[3]) for v in reader.records(BONE_ADDITIONAL, count)}
     return [collect_bone_chain(initials[i], additional) for i in range(bone_count)]
 
 
 def read_morph_track(reader, morph_count):
-    initials = []
-    for _ in range(morph_count):
-        v = reader.unpack(MORPH_INITIAL)
-        initials.append((v[0], v[3], v[2]))
-    additional = {}
-    for _ in range(reader.count()):
-        v = reader.unpack(MORPH_ADDITIONAL)
-        additional[v[0]] = (v[1], v[4], v[3])
+    initials = [(v[0], v[3], v[2]) for v in reader.records(MORPH_INITIAL, morph_count)]
+    count = reader.count()
+    additional = {v[0]: (v[1], v[4], v[3]) for v in reader.records(MORPH_ADDITIONAL, count)}
     return [collect_morph_chain(initials[i], additional) for i in range(morph_count)]
 
 
