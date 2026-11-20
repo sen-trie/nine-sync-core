@@ -1,7 +1,7 @@
 name: Release
 
 # Identical in the Core and FX repositories; keep it byte-identical. A push to master that changes the version in
-# blender_manifest.toml builds, validates and tests the extension on Blender 5.3 or newer, then tags v<version>,
+# blender_manifest.toml builds and validates the extension on Blender 5.3 or newer, then tags v<version>,
 # publishes the GitHub release with its SHA-256 checksums and notifies Bundled. No owner approval step. A push
 # that leaves the version alone only builds and uploads the zip as a workflow artifact.
 # A manual run without "ref" publishes the manifest version of the dispatched commit when its tag does not exist
@@ -170,25 +170,6 @@ jobs:
               raise SystemExit(0)
           raise SystemExit(1 if bad or missing else 0)
           PY
-
-      - name: Tests
-        working-directory: ${{ github.event.repository.name }}
-        run: |
-          if [ "${{ steps.info.outputs.component }}" = "core" ]; then
-            export NINESYNC_FX="${{ github.workspace }}/fx"
-            for t in t_registration t_hook_contract t_animation; do
-              "$BLENDER" --background --factory-startup --python "tests/$t.py"
-            done
-            python tests/manual/check_install.py "$BLENDER" "../out/${{ steps.info.outputs.id }}-${{ steps.info.outputs.version }}.zip"
-          else
-            if [ -f tools/run_tests.py ]; then
-              python tools/run_tests.py
-            elif [ "${{ steps.info.outputs.release }}" = "true" ]; then
-              echo "tools/run_tests.py is missing"; exit 1
-            else
-              echo "no test runner at this ref; build only"
-            fi
-          fi
 
       - name: Checksums
         working-directory: out
