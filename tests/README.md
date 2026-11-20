@@ -56,4 +56,4 @@ blender --background /path/to/file.blend --python tests/manual/check_blend.py
 python tests/manual/check_install.py /path/to/blender [core.zip] [fx.zip]
 ```
 
-`validate_real.py` imports each model from the path stored in the PMM, so those PMX files must exist. If FX is installed in the profile it also checks the integrated path. Neither script saves a `.blend` or changes a PMM. Record results in `docs/VALIDATION.md` (local to the owner's checkout, like `CLAUDE.md`).
+`validate_real.py` imports each model from the path stored in the PMM, so those PMX files must exist. If FX is installed in the profile it also checks the integrated path. Neither script saves a `.blend` or changes a PMM. Record results in `docs/VALIDATION.md` (local to the owner's checkout).
