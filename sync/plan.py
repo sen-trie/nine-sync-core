@@ -33,6 +33,7 @@ from .motion import (
     track_range,
     visibility_hides,
     VISIBILITY_TRACK,
+    table_aliases,
     vmd_bone_name,
 )
 from .retime import retime_factor
@@ -163,30 +164,55 @@ def bone_name_table(armature):
     return table
 
 
-# The name a bone's track carries in the VMD when its own is over 15 bytes: the start of
-# the name and the bone's PMX index, so two bones that share a start stay apart and the
-# PMM's own cut name (which can end in half a character) is never what is matched.
+# The PMX name of a bone whose name another bone already had: mmd_tools keeps it
+# unique as name_j "左腕親1.001", but the PMM still calls both bones "左腕親1".
+def shared_name(name, names):
+    stem, dot, digits = name.rpartition(".")
+    if dot and digits.isdigit() and stem in names:
+        return stem
+    return None
+
+
+# True when two bones of the armature share a PMX name (see shared_name).
+def repeats_bone_names(armature):
+    if armature is None:
+        return False
+    names = set()
+    for bone in armature.pose.bones:
+        mmd_bone = getattr(bone, "mmd_bone", None)
+        if mmd_bone is not None and mmd_bone.name_j:
+            names.add(mmd_bone.name_j)
+    return any(shared_name(name, names) for name in names)
+
+
+# The name a bone's track carries in the VMD when its own cannot single it out: over 15
+# bytes, or shared with another bone (NEO rigs repeat 左腕+, 左腕親1 and the like on
+# separate chains, and the PMM keys them apart by index). It is the start of the name
+# and the bone's PMX index, so the bones stay apart and the PMM's own cut name (which
+# can end in half a character) is never what is matched.
 def bone_aliases(armature):
     found = {}
+    named = []
     for bone in armature.pose.bones:
         mmd_bone = getattr(bone, "mmd_bone", None)
         name = mmd_bone.name_j if mmd_bone is not None else ""
         index = getattr(mmd_bone, "bone_id", -1) if mmd_bone is not None else -1
-        if not name or index < 0 or len(name.encode("cp932", "replace")) <= 15:
+        if not name or index < 0:
+            continue
+        named.append((name, index))
+    names = {name for name, _index in named}
+    counts = {}
+    pmx_names = []
+    for name, index in named:
+        name = shared_name(name, names) or name
+        pmx_names.append((name, index))
+        counts[name] = counts.get(name, 0) + 1
+    for name, index in pmx_names:
+        if counts[name] < 2 and len(name.encode("cp932", "replace")) <= 15:
             continue
         suffix = "~%d" % index
         stem = encode_name(name, 15 - len(suffix)).rstrip(b"\x00")
         found[index] = stem.decode("cp932", "replace") + suffix
-    return found
-
-
-# The alias keys of a vmd_bone_table by the PMX index they end in.
-def table_aliases(table):
-    found = {}
-    for key in table:
-        head, mark, tail = key.rpartition("~")
-        if mark and tail.isdigit():
-            found[int(tail)] = key
     return found
 
 
@@ -321,6 +347,10 @@ def part_settings(part, scene, settings, root, signature, row):
     # Added only when on, so records of syncs made without it stay valid.
     if part == "motion" and getattr(row, "solve_leg_ik", False):
         extra = (extra, "mmd_leg_ik")
+    # Rigs that repeat bone names have imported differently since their tracks got index
+    # aliases, so their older records no longer match; others' records stay valid.
+    if part == "motion" and repeats_bone_names(find_armature(root)):
+        extra = (extra, "shared_names")
     current = digest_values(
         "format", IMPORT_FORMAT, part, retime, scale, frame_range, root.name, extra, signature
     )

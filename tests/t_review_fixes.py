@@ -172,6 +172,55 @@ long_model.bones = [[bone_key(0), bone_key(5, 1.0)], [bone_key(0), bone_key(5, 1
 report = plan_mod.map_bones(long_model, table)
 checks.check("plan reports the shared name as cut", report.matched == 1 and report.cut == ["左腕捩じりボーン補助一"], (report.matched, report.cut))
 
+# NEO rigs (会話仕様プラグインNEO) repeat bone names on separate chains; mmd_tools keeps
+# name_j unique as "左腕親1.001" while the PMM keys both bones as "左腕親1" by index.
+# mmd_tools is not loaded here, so a stand-in mmd_bone carries name_j and bone_id.
+if not hasattr(bpy.types.PoseBone, "mmd_bone"):
+    class StandInMmdBone(bpy.types.PropertyGroup):
+        name_j: bpy.props.StringProperty()
+        bone_id: bpy.props.IntProperty(default=-1)
+
+    bpy.utils.register_class(StandInMmdBone)
+    bpy.types.PoseBone.mmd_bone = bpy.props.PointerProperty(type=StandInMmdBone)
+neo_data = bpy.data.armatures.new("neo_arm")
+neo = bpy.data.objects.new("neo_arm", neo_data)
+scene.collection.objects.link(neo)
+bpy.context.view_layer.objects.active = neo
+bpy.ops.object.mode_set(mode="EDIT")
+neo_bones = (("左腕親1", "左腕親1"), ("左腕", "左腕"), ("左腕親1.001", "左腕親1.001"), ("Bone.R", "右腕"))
+for name, _name_j in neo_bones:
+    bone = neo_data.edit_bones.new(name)
+    bone.head, bone.tail = (0, 0, 0), (0, 0.5, 0)
+bpy.ops.object.mode_set(mode="OBJECT")
+for index, (name, name_j) in enumerate(neo_bones):
+    neo.pose.bones[name].mmd_bone.name_j = name_j
+    neo.pose.bones[name].mmd_bone.bone_id = index
+neo_table = plan_mod.vmd_bone_table(neo)
+neo_aliases = plan_mod.bone_aliases(neo)
+checks.check("shared names get index aliases", sorted(neo_aliases) == [0, 2], neo_aliases)
+neo_model = pmm.PmmModel()
+neo_model.name = "neo"
+neo_model.bone_names = ["左腕親1", "左腕", "左腕親1", "右腕"]
+neo_model.bones = [[bone_key(0), bone_key(5, 1.0)], [bone_key(0)], [bone_key(0)], [bone_key(0)]]
+reached = [motion.track_bone(neo_table, i, n) for i, n in enumerate(neo_model.bone_names)]
+checks.check(
+    "each shared-name track reaches its own bone",
+    reached == [neo.pose.bones[n] for n, _j in neo_bones],
+    [b.name if b else None for b in reached],
+)
+vmd_bones = pmm.read_vmd(pmm.build_vmd(neo_model, aliases=neo_aliases))[0]
+keyed = {pmm.decode_text(name.rstrip(b"\x00")): len(keys) for name, keys in vmd_bones.items()}
+checks.check(
+    "keyed bone keeps its keys apart from its namesake",
+    keyed.get(neo_aliases[0]) == 2 and keyed.get(neo_aliases[2]) == 1 and "左腕親1" not in keyed,
+    keyed,
+)
+checks.check("plan maps every NEO track", plan_mod.map_bones(neo_model, neo_table).matched == 4)
+checks.check(
+    "only a rig with repeated names marks its motion hash",
+    plan_mod.repeats_bone_names(neo) and not plan_mod.repeats_bone_names(arm) and not plan_mod.repeats_bone_names(None),
+)
+
 # C5: the additive switch read from and written to the accessory state.
 acc = pmm.PmmAccessory()
 acc.index, acc.name, acc.path, acc.additive = 0, "glow", "C:\\glow.x", True

@@ -1,6 +1,6 @@
 from ..common.animation import find_fcurve
 from ..common.logger import log
-from .motion import ik_switches, vmd_bone_name
+from .motion import ik_switches, table_aliases, track_bone
 
 
 # IK bone name -> the constraints its switch turns on and off, chosen as mmd_tools' own
@@ -45,12 +45,13 @@ def apply_ik_keys(armature, model, table):
     anim = armature.animation_data
     driven = {fc.data_path for fc in anim.drivers} if anim is not None else set()
     constraints = ik_switch_table(armature)
+    aliases = table_aliases(table)
     keyed = 0
     for index, bone_index in enumerate(model.constraints):
         if not 0 <= bone_index < len(model.bone_names):
             continue
         name = model.bone_names[bone_index]
-        ik_bone = table.get(vmd_bone_name(name)) or table.get(name)
+        ik_bone = track_bone(table, bone_index, name, aliases)
         points = switches.get(index)
         if ik_bone is None:
             if points:

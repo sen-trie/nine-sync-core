@@ -9,7 +9,7 @@ from ..common.logger import log
 from ..common.scene_utils import find_armature
 from ..common.timing import accumulate, count, phase
 from ..pmm import OUTSIDE_FREE
-from .motion import outside_bindings, vmd_bone_name
+from .motion import outside_bindings, track_bone
 from .frames import internal_frames
 from . import solve_cache
 
@@ -475,7 +475,7 @@ def live_bindings(settings, bone_table):
         if table is None:
             return False
         name = model.bone_names[bone_index]
-        own = table.get(vmd_bone_name(name)) or table.get(name)
+        own = track_bone(table, bone_index, name)
         return own is not None and own.parent is None
 
     return live
@@ -496,7 +496,7 @@ def apply_outside_parents(armature, model, table, settings, bone_table):
         if not 0 <= bone_index < len(model.bone_names):
             continue
         name = model.bone_names[bone_index]
-        own = table.get(vmd_bone_name(name)) or table.get(name)
+        own = track_bone(table, bone_index, name)
         if own is None:
             log.warning("outside parent of '%s' skipped: no such bone on '%s'", name, armature.name)
             continue
@@ -527,7 +527,7 @@ def apply_outside_parents(armature, model, table, settings, bone_table):
                 tables[pointer] = bone_table(parent_armature)
             parent_name = model.outside_bones.get(pair, "")
             parent_table = tables[pointer]
-            parent = parent_table.get(vmd_bone_name(parent_name)) or parent_table.get(parent_name)
+            parent = track_bone(parent_table, pair[1], parent_name)
             if parent is None or (parent_armature == armature and parent.name == own.name):
                 log.warning(
                     "outside parent of '%s' skipped: bone '%s' not found on '%s'",

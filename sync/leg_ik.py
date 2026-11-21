@@ -6,7 +6,7 @@ from mathutils import Matrix, Quaternion, Vector
 from ..common.animation import create_fcurve, find_fcurve, rewrite_fcurve
 from ..common.logger import log
 from ..pmm import curve_values
-from .motion import ik_switches, vmd_bone_name
+from .motion import ik_switches, table_aliases, track_bone
 
 
 # Blender and MMD differ by swapping the Y and Z axes, so a rotation crosses over by
@@ -291,11 +291,12 @@ def ik_parameters(armature, knee, ik_bone, constraint):
 # do not follow mmd_tools' setup are left to Blender's own solver.
 def find_leg_chains(armature, model, table):
     chains = []
+    aliases = table_aliases(table)
     for index, bone_index in enumerate(model.constraints):
         if not 0 <= bone_index < len(model.bone_names):
             continue
         name = model.bone_names[bone_index]
-        ik_bone = table.get(vmd_bone_name(name)) or table.get(name)
+        ik_bone = track_bone(table, bone_index, name, aliases)
         if ik_bone is None:
             continue
         for knee in armature.pose.bones:
@@ -408,8 +409,9 @@ def solve_leg_ik(armature, model, table, scale):
         log.info("leg IK: no two-bone knee chain found on '%s'", armature.name)
         return 0
     tracks = {}
+    aliases = table_aliases(table)
     for index, name in enumerate(model.bone_names):
-        bone = table.get(vmd_bone_name(name)) or table.get(name)
+        bone = track_bone(table, index, name, aliases)
         if bone is not None and bone.name not in tracks:
             tracks[bone.name] = KeyTrack(model.bones[index], scale)
     switches = ik_switches(model)

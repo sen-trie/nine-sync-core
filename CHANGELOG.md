@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.3
+
+- Fixed bones staying in the rest pose on models whose PMX repeats bone names (such as rigs built with NEO).
+
 ## 0.9.2
 
 - Added One-Click Setup. Syncing PMM's automatically imports the PMM's models and links them.

@@ -246,3 +246,25 @@ def summarize_model(model):
 # PMM name reaches the importer cut.
 def vmd_bone_name(name):
     return encode_name(name).rstrip(b"\x00").decode("cp932", "replace")
+
+
+# The alias keys of a vmd_bone_table by the PMX index they end in.
+def table_aliases(table):
+    found = {}
+    for key in table:
+        head, mark, tail = key.rpartition("~")
+        if mark and tail.isdigit():
+            found[int(tail)] = key
+    return found
+
+
+# The pose bone the PMM track at index reaches. MMD keys bones by index, so a bone with
+# an alias (a long name, or one another bone shares, as on NEO rigs) is found by it;
+# the others by the name the VMD carries, then by their full name.
+def track_bone(table, index, name, aliases=None):
+    if aliases is None:
+        aliases = table_aliases(table)
+    alias = aliases.get(index)
+    if alias is not None:
+        return table.get(alias)
+    return table.get(vmd_bone_name(name)) or table.get(name)
