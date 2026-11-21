@@ -320,6 +320,11 @@ class MMDBridgeSettings(PropertyGroup):
         description="Hide the model in MMD where all of its meshes are hidden in Blender (Disable in Viewports or in Renders), keyed or not",
         default=True,
     )
+    export_initial_keys: BoolProperty(
+        name="Initial Keys",
+        description="Write the current pose of everything that has no keyframes (camera, bones, morphs) as its frame 0 key, so a camera moved or a model posed without keying still reaches MMD. The scene is not changed",
+        default=True,
+    )
     export_markers: BoolProperty(
         name="Markers",
         description="Write the timeline markers as keyframes on a hidden 'Markers' accessory, at MMD's 30 fps frames. MMD has no markers of its own; Sync does not read them back",

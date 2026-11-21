@@ -23,6 +23,7 @@ from ...sync.rigify import (
     sync_slots,
 )
 from ...sync.targets import target_usable
+from ..helpers import draw_field
 
 
 # Rows whose target is a Rigify rig converted with MMD Tools Append.
@@ -438,12 +439,10 @@ class NINESYNC_PT_remap(Panel):
         for row in rigify_rows(settings):
             box = layout.box()
             box.label(text=row.pmm_name, icon="ARMATURE_DATA")
-            box.prop(row, "rigify_mode")
+            draw_field(box, row, "rigify_mode", "Remap", "MODIFIER")
             col = box.column()
             col.enabled = remap_on(row)
-            clip_row = col.row(align=True)
-            clip_row.label(text="", icon="NLA")
-            clip_row.prop(row, "rigify_clip", text="Clip")
+            draw_field(col, row, "rigify_clip", "Clip", "NLA")
             index = list(settings.targets).index(row)
             buttons = col.row(align=True)
             buttons.operator("ninesync.show_rigify_map", icon="OUTLINER").index = index

@@ -9,7 +9,7 @@ from ..common.constants import (
     TEMP_PREFIX,
 )
 from ..common.logger import log
-from ..common.scene_utils import fps_differs, model_key, scene_fps
+from ..common.scene_utils import child_of_type, fps_differs, model_key, scene_fps
 from ..pmm import (
     PmmError,
     PmmModel,
@@ -24,13 +24,16 @@ from ..pmm_writer import build_pmm
 from .accessory_export import collect_accessories, marker_accessory
 from .mmd_tools_link import mmd_module
 from .pmx_labels import write_labelled_pmx
-from .retime import retime_keys
+from .bone_morphs import unbake_bone_morphs
+from .morphs import expand_group_morph, group_morph_table
+from .retime import retime_factor, retime_keys, retime_project
 from .root_motion import has_root_motion
 from .scale import export_scale
 from .sync_state import rig_layout
 from .targets import refresh_targets, target_usable
 from .tempfiles import remove_file, temp_vmd_path
 from .frames import internal_frames
+from .export_actions import bone_channels, camera_channels, export_actions, morph_channels
 
 
 def template_path():
@@ -85,27 +88,32 @@ def refresh_export_items(settings):
 # Bone names, morph names and IK bone indices in the order MMD loads them from the
 # PMX itself, since a PMM refers to both by index. Every morph is listed, system
 # ones included: leaving some out makes MMD report a different model structure.
-# A PMD goes through mmd_tools' own PMD-to-PMX conversion, so its bone list is
-# whatever that conversion produces; unverified against MMD's PMD handling.
+# A PMD goes through mmd_tools' own PMD-to-PMX conversion for its bones, which match
+# what MMD saves. Its morphs do not: MMD lists a PMD's skins in file order with the
+# base skin first, while the conversion drops the base, so they are read from the PMD.
+# PMD skin types 1-4 are the same panels as PMX morph categories.
 # Timeline rows and morph panels follow what MMD saves for the same PMX: the two fixed
 # rows, one per own display frame, one for facial when there are morphs; and the first
 # morph of each panel (brow, eye, mouth, other), -1 for an empty one.
 def read_pmx_layout(path):
     if path.lower().endswith(".pmd"):
         pmx = mmd_module("core.pmd.importer").import_pmd_to_pmx(path)
+        skins = mmd_module("core.pmd").load(path).morphs
+        morph_names = [m.name for m in skins]
+        categories = [m.type for m in skins]
     else:
         pmx = mmd_module("core.pmx").load(path)
+        morph_names = [m.name for m in pmx.morphs]
+        categories = [m.category for m in pmx.morphs]
     bone_names = [b.name for b in pmx.bones]
-    morphs = pmx.morphs
     constraints = [i for i, b in enumerate(pmx.bones) if b.isIK]
     own_frames = sum(1 for frame in pmx.display if not frame.isSpecial)
-    frame_rows = 2 + own_frames + (1 if morphs else 0)
-    categories = [m.category for m in morphs]
+    frame_rows = 2 + own_frames + (1 if morph_names else 0)
     panels = tuple(
         categories.index(panel) if panel in categories else -1 for panel in (1, 2, 3, 4)
     )
     hidden = {i for i, b in enumerate(pmx.bones) if not b.visible}
-    return bone_names, [m.name for m in morphs], constraints, frame_rows, panels, hidden, outside_parents(pmx)
+    return bone_names, morph_names, constraints, frame_rows, panels, hidden, outside_parents(pmx)
 
 
 # The outside parent slots MMD keeps for a model: -1 for the whole model, then every IK
@@ -121,17 +129,27 @@ def outside_parents(pmx):
 
 
 # Runs mmd_tools' own VMD exporter into a temp file and reads it back. Its scale is
-# the inverse of the importer's, so an export lands where a sync would put it.
+# the inverse of the importer's, so an export lands where a sync would put it. The
+# exporter starts at min(1, frame_start), skips earlier frames and always samples its
+# start, so in Blender's default scene (starting at 1) it would miss the frame 0 key a
+# sync wrote and add a frame 1 key to every track. The scene start is lowered to 0 for
+# the call and put back.
 def export_vmd(settings, **params):
     exporter = mmd_module("core.vmd.exporter")
+    scene = bpy.context.scene
+    saved = scene.frame_start
     path = temp_vmd_path(TEMP_PREFIX + "export_")
     try:
+        if saved > 0:
+            scene.frame_start = 0
         exporter.VMDExporter().export(
             filepath=path, scale=1.0 / export_scale(settings), **params
         )
         with open(path, "rb") as stream:
             return read_vmd(stream.read())
     finally:
+        if scene.frame_start != saved:
+            scene.frame_start = saved
         remove_file(path)
 
 
@@ -149,10 +167,11 @@ def anchored(keys):
     return keys
 
 
-# Maps the exporter's frame numbers to PMM frames: it subtracts min(1, frame_start),
-# and sync multiplies PMM frames by the retime factor.
+# Maps the exporter's frame numbers to PMM frames: it subtracts its start frame
+# (min(0, frame_start), see export_vmd), and sync multiplies PMM frames by the retime
+# factor.
 def to_pmm_frames(keys, scene, hold_cuts=False):
-    offset = min(1, scene.frame_start)
+    offset = min(0, scene.frame_start)
     shifted = [k._replace(frame=k.frame + offset) for k in keys]
     factor = export_factor(scene)
     if abs(factor - 1.0) < 1e-6:
@@ -199,7 +218,7 @@ def collect_visibility(scene, root):
     meshes = list(layout.meshes) if layout is not None else []
     if not meshes:
         return []
-    frames = sorted(visibility_key_frames(meshes) | {scene.frame_start})
+    frames = sorted(visibility_key_frames(meshes) | {min(0, scene.frame_start)})
     current, subframe = scene.frame_current, scene.frame_subframe
     keys = []
     try:
@@ -224,7 +243,80 @@ def collect_visibility(scene, root):
     return folded
 
 
-def collect_model(scene, settings, index, root, path):
+# True when a bone track has a key after frame 0 that leaves its frame 0 pose. Only those
+# keys are lost on a bone MMD hides; a track holding one pose plays nothing.
+def plays_later(keys):
+    if not keys:
+        return False
+    first = keys[0]
+    return any(
+        any(abs(a - b) > 1e-6 for a, b in zip(k.location, first.location))
+        or any(abs(a - b) > 1e-6 for a, b in zip(k.rotation, first.rotation))
+        for k in keys[1:]
+    )
+
+
+# The Syncer's PMM read twice, as written and retimed the way a sync retimes it, so an
+# export can take back what a sync turned into something else. None when no PMM is set
+# or it cannot be read. Read once per export.
+class LinkedSource:
+    def __init__(self, scene, settings):
+        self.raw = self.retimed = None
+        self.rows = {}
+        path = bpy.path.abspath(settings.filepath)
+        if not os.path.isfile(path):
+            return
+        try:
+            self.raw = parse_pmm_file(path)
+            self.retimed = parse_pmm_file(path)
+        except (OSError, PmmError) as error:
+            log.warning("export: linked PMM not read (%s)", error)
+            self.raw = self.retimed = None
+            return
+        retime_project(self.retimed, retime_factor(scene, settings))
+        self.rows = {t.target: t.key for t in settings.targets if t.enabled and t.target is not None}
+
+    # (as written, retimed) PMM model the root was synced from, or None.
+    def models(self, root):
+        key = self.rows.get(root)
+        if key is None or self.raw is None:
+            return None
+        pick = lambda project: next((m for m in project.models if model_key(m) == key), None)
+        raw, retimed = pick(self.raw), pick(self.retimed)
+        return (raw, retimed) if raw is not None and retimed is not None else None
+
+
+# Vertex morphs a group morph moves in this PMM model. Sync adds the group's share into
+# their shape keys, so their curves no longer hold only their own track.
+def group_driven_vertex(root, model):
+    groups = group_morph_table(root)
+    driven = set()
+    for name, keys in zip(model.morph_names, model.morphs):
+        if name in groups and any(abs(k.weight) > 1e-6 for k in keys):
+            driven |= {leaf for kind, leaf, _f in expand_group_morph(groups, name, 1.0) if kind == "vertex_morphs"}
+    return driven
+
+
+# Morph tracks a synced model can only give back from its PMM: bone, group, material and
+# UV morphs have no shape key Blender exports, and vertex morphs a group drives carry
+# the group's share. Vertex morphs of their own come from Blender, where they can be
+# edited.
+def restore_linked_morphs(model, root, raw):
+    vertex = {m.name for m in root.mmd_root.vertex_morphs} - group_driven_vertex(root, raw)
+    by_name = {n: i for i, n in enumerate(model.morph_names)}
+    restored = 0
+    for name, keys in zip(raw.morph_names, raw.morphs):
+        slot = by_name.get(name)
+        if slot is None or name in vertex or not keys:
+            continue
+        model.morphs[slot] = list(keys)
+        restored += 1
+    return restored
+
+
+def collect_model(scene, settings, index, root, path, linked=None):
+    warnings = []
+    source = linked.models(root) if linked is not None else None
     bone_names, morph_names, constraints, frame_rows, panels, hidden, outside = read_pmx_layout(path)
     model = PmmModel()
     model.index = index
@@ -248,9 +340,23 @@ def collect_model(scene, settings, index, root, path):
         if want_morphs:
             mesh = rig.morph_slider.placeholder(binded=True) or rig.firstMesh()
         if armature is not None or mesh is not None:
-            bones, morphs, _ = export_vmd(
-                settings, armature=armature, mesh=mesh, model_name=model.name
-            )
+            initial = settings.export_initial_keys
+            entries = {}
+            if armature is not None:
+                entries[armature] = bone_channels(armature) if initial else []
+            keys = mesh.data.shape_keys if mesh is not None else None
+            if keys is not None:
+                entries[keys] = morph_channels(keys) if initial else []
+            # Offsets come out of the bones only when the morph tracks go back in.
+            unbake = armature is not None and source is not None and want_morphs
+            always = {armature} if unbake else set()
+            with export_actions(entries, always) as clip_warnings:
+                if armature in always:
+                    unbake_bone_morphs(armature, root, source[1])
+                bones, morphs, _ = export_vmd(
+                    settings, armature=armature, mesh=mesh, model_name=model.name
+                )
+            warnings += clip_warnings
             by_bone = {encode_name(n): i for i, n in enumerate(bone_names)}
             by_morph = {encode_name(n): i for i, n in enumerate(morph_names)}
             for name, keys in bones.items():
@@ -265,6 +371,9 @@ def collect_model(scene, settings, index, root, path):
                 slot = by_morph.get(name)
                 if slot is not None:
                     model.morphs[slot] = anchored(to_pmm_frames(keys, scene))
+    if want_morphs and source is not None:
+        restored = restore_linked_morphs(model, root, source[0])
+        log.info("export model %d: %d morph track(s) taken from the linked PMM", index, restored)
     if settings.export_animation and settings.export_visibility:
         model.visibility = collect_visibility(scene, root)
     log.info(
@@ -277,7 +386,7 @@ def collect_model(scene, settings, index, root, path):
         sum(len(k) for k in model.morphs),
         [(k.frame, k.visible) for k in model.visibility][:10] or "always shown",
     )
-    return model, {slot for slot in hidden if len(model.bones[slot]) > 1}
+    return model, {slot for slot in hidden if plays_later(model.bones[slot])}, warnings
 
 
 # MMD shows a bone flagged not visible in the PMX at its frame 0 state and never
@@ -289,6 +398,27 @@ def hidden_bone_warning(model, root, stuck):
         len(stuck),
         model.bone_names[min(stuck)],
     )
+
+
+# The play range of the Syncer's PMM, with its start and end switches, when this export
+# holds models synced from it. A sync leaves the scene range alone, so Blender's default
+# 1-250 would cut the project short. None when nothing exported is linked or the PMM
+# cannot be read.
+def linked_play_range(settings, roots):
+    linked = {t.target for t in settings.targets if t.enabled and t.target is not None}
+    path = bpy.path.abspath(settings.filepath)
+    if not linked.intersection(roots) or not os.path.isfile(path):
+        return None
+    try:
+        project = parse_pmm_file(path)
+    except (OSError, PmmError) as error:
+        log.warning("play range: linked PMM not read (%s); using the scene range", error)
+        return None
+    if project.play_range is None:
+        return None
+    played = project.play_range
+    log.info("play range taken from the linked PMM: %d-%d (start %s, end %s)", played.start, played.end, played.use_start, played.use_end)
+    return played.start, played.end, played.use_start, played.use_end
 
 
 # Points the Syncer at the new file and assigns each exported model to its Blender
@@ -326,12 +456,14 @@ def create_pmm(scene, settings, out_path):
     roots = []
     warnings = []
     taken = set()
+    linked = LinkedSource(scene, settings) if settings.export_animation else None
     for item in items:
         path = bpy.path.abspath(item.pmx_path)
         if not os.path.isfile(path):
             raise PmmError("PMX file not found for '%s': %s" % (item.target.name, path))
         root = item.target
-        model, stuck = collect_model(scene, settings, len(models), root, path)
+        model, stuck, clip_warnings = collect_model(scene, settings, len(models), root, path, linked)
+        warnings += clip_warnings
         if settings.export_mmd_labels and path.lower().endswith(".pmx"):
             model.path, model.name_en = write_labelled_pmx(
                 root, model.index, path, out_path, stuck, taken
@@ -353,14 +485,24 @@ def create_pmm(scene, settings, out_path):
     # rig the user's scene camera points at.
     rig_root = settings.export_camera_object if settings.export_animation else None
     if rig_root is not None:
-        _, _, cameras = export_vmd(settings, camera=rig_root)
+        camera = child_of_type(rig_root, "CAMERA")
+        entries = {rig_root: []}
+        if camera is not None:
+            entries[camera] = []
+        if settings.export_initial_keys:
+            entries.update(camera_channels(rig_root, camera))
+        with export_actions(entries) as clip_warnings:
+            _, _, cameras = export_vmd(settings, camera=rig_root)
+        warnings += clip_warnings
         camera_keys = anchored(to_pmm_frames(cameras, scene, True))
         log.info("export camera '%s': %d key(s)", rig_root.name, len(camera_keys))
-    factor = export_factor(scene)
-    play_range = (
-        int(round(scene.frame_start / factor)),
-        int(round(scene.frame_end / factor)),
-    )
+    play_range = linked_play_range(settings, [root for root, _path in roots])
+    if play_range is None:
+        factor = export_factor(scene)
+        play_range = (
+            int(round(scene.frame_start / factor)),
+            int(round(scene.frame_end / factor)),
+        )
     props = [i.target for i in settings.export_props if i.enabled and i.target is not None]
     accessories = collect_accessories(scene, settings, props, out_path) if props else []
     prop_count = len(accessories)

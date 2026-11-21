@@ -24,13 +24,32 @@ def find_armature(root):
     return None
 
 
+# Marks a collection the bridge made, so it is still found once Blender has renamed it
+# (MMD_Camera.001 in a second scene).
+COLLECTION_TAG = "ninesync_collection"
+
+
+# The bridge's collection of that name inside this scene only, or None. Collections are
+# looked up per scene: one found in another scene would share that scene's rig.
+def find_scene_collection(scene, name):
+    found = None
+    for collection in scene.collection.children_recursive:
+        if collection.get(COLLECTION_TAG) == name:
+            return collection
+        if found is None and collection.name == name:
+            found = collection
+    return found
+
+
+# The scene's own bridge collection, created and linked to this scene when it has none.
+# A collection of the same name in another scene is never linked in.
 def ensure_collection(scene, name):
-    collection = bpy.data.collections.get(name)
+    collection = find_scene_collection(scene, name)
     if collection is None:
         collection = bpy.data.collections.new(name)
-        log.info("created collection '%s'", name)
-    if collection not in scene.collection.children_recursive:
+        collection[COLLECTION_TAG] = name
         scene.collection.children.link(collection)
+        log.info("created collection '%s' in scene '%s'", collection.name, scene.name)
     return collection
 
 

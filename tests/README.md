@@ -15,6 +15,7 @@ Run from the repo root. Each file is a standalone script that prints `ok` or `FA
 | `t_selective_sync.py`          | Blender or `bpy`                                       | display-track parsing, camera and light planned and imported independently (with stand-in importers), model visibility keys, NLA ownership and removal                                                          |
 | `t_leg_ik.py`                  | `bpy`                                                  | signed interpolation bytes, free slerp, leg IK solve with model limits, append bones, bone-morph baking                                                                                                         |
 | `t_review_fixes.py`            | Blender or `bpy`                                       | names cut as MMD cuts them, identical fast hashing and morph sampling, IK switch keys, carried bone names, additive accessories, import-format records, parse reuse, UV morph helpers, the undo step            |
+| `t_export_fixes.py`            | Blender or `bpy`                                       | baked tracks retimed with cuts held, export merging NLA clips with the active action, initial keys, IDs put back, hidden bones holding one pose, morph un-bake thinning |
 | `manual/check_install.py`      | Blender                                                | extension zip: install, enable, restart, preferences id, uninstall                                                                                                                                              |
 | `manual/validate_real.py`      | Blender, mmd_tools, PMX files                          | a real sync checked against values from the PMM, resync, 60 fps retime, Clean                                                                                                                                   |
 | `manual/validate_rigify.py`    | Blender, mmd_tools, a Rigify-converted `.blend`, a VMD | the Rigify remap on every limb in FK and IK against the plain MMD pose                                                                                                                                          |
@@ -35,6 +36,7 @@ blender --background --factory-startup --python tests/t_integration_contract.py
 blender --background --factory-startup --python tests/t_sync_plan.py
 blender --background --factory-startup --python tests/t_selective_sync.py
 blender --background --factory-startup --python tests/t_review_fixes.py
+blender --background --factory-startup --python tests/t_export_fixes.py
 ```
 
 With the wheel (`pip install bpy==5.3.0`, Python 3.13) use `python tests/t_registration.py` and so on. `tests/support.py` lowers `MIN_BLENDER` for older wheels. CI (`.github/workflows/ci.yml`) runs these on the wheel, which is not Blender 5.3.

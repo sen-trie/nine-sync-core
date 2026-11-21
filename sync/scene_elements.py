@@ -74,7 +74,7 @@ def rebuild_element(scene, project, settings, kind):
 # A skipped camera still becomes the scene camera when that option asks for it; that
 # changes no animation.
 def keep_scene_camera(scene):
-    rig = find_scene_rig("camera")
+    rig = find_scene_rig(scene, "camera")
     if rig is not None and scene.camera != rig[1]:
         scene.camera = rig[1]
         log.info("scene camera set to '%s'", rig[1].name)

@@ -6,12 +6,12 @@ from bpy.types import Operator
 from bpy.app.translations import pgettext_iface as iface_, pgettext_rpt as rpt_
 
 from .. import hooks
-from ..common.constants import REPORT_TEXT_NAME
+from ..common.constants import REPORT_TEXT_NAME, UNIT_SCALE
 from ..common.logger import log
 from ..common.scene_utils import redraw_all
 from ..pmm import PmmError, parse_pmm_file
 from ..sync.accessory_export import refresh_prop_colors
-from ..sync.audio import describe_audio
+from ..sync.audio import describe_audio, find_audio_file
 from ..sync.clean import run_clean
 from ..sync.analysis import analyze, clear_analysis
 from ..sync.engine import SyncDriver, sync_running
@@ -21,6 +21,7 @@ from ..sync.rigs import ensure_camera_rig
 from ..sync.report import build_report
 from ..sync.root_motion import convert_root_motion
 from ..sync.scale import current_scale
+from ..sync.setup import setup_models
 from ..sync.targets import refresh_targets
 from .helpers import draw_wrapped
 from .panels.preview import draw_preview
@@ -123,6 +124,92 @@ class MMDBRIDGE_OT_sync_now(Operator):
 
     def release(self, context):
         context.window_manager.event_timer_remove(self._timer)
+
+
+# The scale One-Click Setup imports models at. With Sync Camera on it is always 1.0, the
+# one scale at which the camera's keyframe interpolation matches MMD. Otherwise the Set
+# Import Scale preference when it is on, else the Options scale (0.08 by default, the
+# same as mmd_tools' importer).
+def setup_scale(settings):
+    if settings.sync_camera:
+        return UNIT_SCALE
+    prefs = addon_preferences()
+    if prefs is not None and prefs.use_import_scale:
+        return prefs.import_scale
+    return settings.scale
+
+
+class NINESYNC_OT_one_click_setup(Operator):
+    bl_idname = "ninesync.one_click_setup"
+    bl_label = "One-Click Setup"
+    bl_description = "Read the PMM, import every model it uses that is not in the scene yet with mmd_tools, link them and sync. Imports at scale 1.0 while Sync Camera is on, so the camera matches MMD; otherwise at the import scale. Accessories and effects follow when NineSync: FX is installed"
+    bl_options = {"REGISTER", "UNDO"}
+
+    filepath: StringProperty(subtype="FILE_PATH", options={"SKIP_SAVE"})
+    filter_glob: StringProperty(default="*.pmm", options={"HIDDEN"})
+
+    @classmethod
+    def poll(cls, context):
+        return mmd_tools_available() and not sync_running()
+
+    # Asks for a PMM only when the Source PMM field does not point at one.
+    def invoke(self, context, event):
+        if refuse_if_outdated(self, context):
+            return {"CANCELLED"}
+        path = bpy.path.abspath(context.scene.mmd_bridge.filepath)
+        if os.path.isfile(path):
+            self.filepath = path
+            return self.execute(context)
+        self.filepath = path or "project.pmm"
+        context.window_manager.fileselect_add(self)
+        return {"RUNNING_MODAL"}
+
+    def execute(self, context):
+        if refuse_if_outdated(self, context):
+            return {"CANCELLED"}
+        settings = context.scene.mmd_bridge
+        path = bpy.path.abspath(self.filepath or settings.filepath)
+        if not os.path.isfile(path):
+            self.report({"ERROR"}, "PMM file not found")
+            return {"CANCELLED"}
+        try:
+            project = parse_pmm_file(path)
+        except (OSError, PmmError) as error:
+            self.report({"ERROR"}, str(error))
+            log.error("one-click setup failed: %s", error)
+            return {"CANCELLED"}
+        log.info("One-Click Setup pressed for %s", path)
+        if os.path.normcase(bpy.path.abspath(settings.filepath)) != os.path.normcase(path):
+            settings.filepath = path
+        scale = setup_scale(settings)
+        settings.scale = scale
+        imported, missing, failed = setup_models(settings, project, path, scale)
+        others = sorted(
+            t.target.name
+            for t in settings.targets
+            if t.target is not None
+            and t.pmm_name not in imported
+            and abs(t.target.empty_display_size * 0.2 - scale) > 1e-6
+        )
+        if others:
+            self.report({"WARNING"}, rpt_("Already in the scene at another scale than %g, so their motion will not line up: %s") % (scale, ", ".join(others)))
+        settings.pmm_accessory_count = len(project.accessories)
+        if find_audio_file(project, settings):
+            settings.sync_audio = True
+        settings.audio_note = describe_audio(project, settings)
+        clear_analysis()
+        self.report(
+            {"INFO"},
+            rpt_("Imported %d model(s) at scale %g, %d already in the scene")
+            % (len(imported), scale, len(project.models) - len(imported) - len(missing) - len(failed)),
+        )
+        if missing:
+            self.report({"WARNING"}, rpt_("PMX not found for: %s") % ", ".join(missing))
+        if failed:
+            self.report({"WARNING"}, rpt_("mmd_tools could not import: %s") % ", ".join(failed))
+        bpy.ops.ninesync.sync_now("EXEC_DEFAULT" if bpy.app.background else "INVOKE_DEFAULT")
+        redraw_all()
+        return {"FINISHED"}
 
 
 class NINESYNC_OT_preview(Operator):

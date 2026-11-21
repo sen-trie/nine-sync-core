@@ -8,7 +8,7 @@ from ...common.constants import (
     LIGHT_COLLECTION,
     NINESYNC_CATEGORY,
 )
-from ...common.scene_utils import child_of_type, find_rig_root
+from ...common.scene_utils import child_of_type, find_rig_root, find_scene_collection
 from ...sync.scale import current_scale
 
 
@@ -24,7 +24,7 @@ class MMDBRIDGE_PT_readout(Panel):
     def draw(self, context):
         layout = self.layout
         scale = current_scale(context.scene.mmd_bridge)
-        camera_collection = bpy.data.collections.get(CAMERA_COLLECTION)
+        camera_collection = find_scene_collection(context.scene, CAMERA_COLLECTION)
         root = find_rig_root(camera_collection, "CAMERA") if camera_collection else None
         camera = child_of_type(root, "CAMERA") if root else None
         if root is not None and camera is not None:
@@ -44,7 +44,7 @@ class MMDBRIDGE_PT_readout(Panel):
                 layout.label(text=iface_("View angle: %.1f") % math.degrees(mmd_camera.angle))
         else:
             layout.label(text="No MMD camera yet")
-        light_collection = bpy.data.collections.get(LIGHT_COLLECTION)
+        light_collection = find_scene_collection(context.scene, LIGHT_COLLECTION)
         light_root = (
             find_rig_root(light_collection, "LIGHT") if light_collection else None
         )

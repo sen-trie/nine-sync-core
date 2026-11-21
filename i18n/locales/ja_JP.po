@@ -19,7 +19,7 @@ msgstr "PMMが動かしているボーンのうち、Rigifyコントロールが
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: __init__.py:114 ui/panels/remap.py:294 ui/panels/remap.py:345
+#: __init__.py:114 ui/panels/remap.py:295 ui/panels/remap.py:346
 #, fuzzy
 msgid "Only Missing"
 msgstr "未割り当てのみ"
@@ -264,14 +264,14 @@ msgstr "ブロック"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: sync/plan.py:60 ui/panels/main.py:109
+#: sync/plan.py:60
 #, fuzzy
 msgid "Motion"
 msgstr "モーション"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: sync/plan.py:61 ui/panels/main.py:112
+#: sync/plan.py:61
 #, fuzzy
 msgid "Shapekey"
 msgstr "シェイプキー"
@@ -285,35 +285,35 @@ msgstr "表示"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/helpers.py:32
+#: ui/helpers.py:43
 #, fuzzy
 msgid "Get %s"
 msgstr "%s を入手"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/helpers.py:41
+#: ui/helpers.py:52
 #, fuzzy
 msgid "This PMM has %d accessory(ies)"
 msgstr "このPMMには%d個のアクセサリーがあります"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/helpers.py:44
+#: ui/helpers.py:55
 #, fuzzy
 msgid "Install NineSync: FX to import them and their MME effects."
 msgstr "それらとMMEエフェクトをインポートするには、NineSync: FXをインストールしてください。"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/helpers.py:46
+#: ui/helpers.py:57
 #, fuzzy
 msgid "Get NineSync: FX"
 msgstr "NineSync: FX を入手"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/operators.py:35
+#: ui/operators.py:36
 #, fuzzy
 msgctxt "Operator"
 msgid "Sync Now"
@@ -321,42 +321,73 @@ msgstr "今すぐ同期"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: tooltip
-#: ui/operators.py:36
+#: ui/operators.py:37
 #, fuzzy
 msgid "Sync the selected models from the PMM. Unchanged models are skipped. Esc cancels between models; Ctrl+Z undoes the whole sync"
 msgstr "PMMから選択したモデルを同期します。変更のないモデルはスキップされます。Escでモデルの合間にキャンセルでき、Ctrl+Zで同期全体を元に戻せます"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/operators.py:39 ui/panels/preview.py:169
+#: ui/operators.py:40 ui/panels/preview.py:169
 #, fuzzy
 msgid "Force Resync"
 msgstr "強制再同期"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: tooltip
-#: ui/operators.py:39
+#: ui/operators.py:40
 #, fuzzy
 msgid "Import every selected model even when nothing changed"
 msgstr "変更がなくても選択したモデルをすべてインポートします"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: report
-#: ui/operators.py:57
+#: ui/operators.py:58
 #, fuzzy
 msgid "A sync is already running"
 msgstr "同期はすでに実行中です"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: report
-#: ui/operators.py:66
+#: ui/operators.py:67 ui/operators.py:173
 #, fuzzy
 msgid "PMM file not found"
 msgstr "PMMファイルが見つかりません"
 
+#. kind: label
+#: ui/operators.py:144
+msgctxt "Operator"
+msgid "One-Click Setup"
+msgstr ""
+
+#. kind: tooltip
+#: ui/operators.py:145
+msgid "Read the PMM, import every model it uses that is not in the scene yet with mmd_tools, link them and sync. Imports at scale 1.0 while Sync Camera is on, so the camera matches MMD; otherwise at the import scale. Accessories and effects follow when NineSync: FX is installed"
+msgstr ""
+
+#. kind: report
+#: ui/operators.py:195
+msgid "Already in the scene at another scale than %g, so their motion will not line up: %s"
+msgstr ""
+
+#. kind: report
+#: ui/operators.py:203
+msgid "Imported %d model(s) at scale %g, %d already in the scene"
+msgstr ""
+
+#. kind: report
+#: ui/operators.py:207
+msgid "PMX not found for: %s"
+msgstr ""
+
+#. kind: report
+#: ui/operators.py:209
+msgid "mmd_tools could not import: %s"
+msgstr ""
+
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/operators.py:130
+#: ui/operators.py:217
 #, fuzzy
 msgctxt "Operator"
 msgid "Preview"
@@ -364,28 +395,28 @@ msgstr "プレビュー"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: tooltip
-#: ui/operators.py:131
+#: ui/operators.py:218
 #, fuzzy
 msgid "Read the PMM and show which PMX models changed since the last sync. Changes nothing in the scene"
 msgstr "PMMを読み込み、前回の同期以降に変更されたPMXモデルを表示します。シーンは変更しません"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/operators.py:154
+#: ui/operators.py:241
 #, fuzzy
 msgid "Sync Now"
 msgstr "今すぐ同期"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/operators.py:154
+#: ui/operators.py:241
 #, fuzzy
 msgid "Sync Preview"
 msgstr "同期プレビュー"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/operators.py:164
+#: ui/operators.py:251
 #, fuzzy
 msgctxt "Operator"
 msgid "Read Models"
@@ -393,14 +424,14 @@ msgstr "モデルを読み込む"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: report
-#: ui/operators.py:181
+#: ui/operators.py:268
 #, fuzzy
 msgid "Found %d model(s), %d accessory(ies)"
 msgstr "%d個のモデル、%d個のアクセサリーが見つかりました"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/operators.py:189
+#: ui/operators.py:276
 #, fuzzy
 msgctxt "Operator"
 msgid "Clean"
@@ -408,119 +439,119 @@ msgstr "クリーン"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: tooltip
-#: ui/operators.py:190
+#: ui/operators.py:277
 #, fuzzy
 msgid "Remove data created by this add-on. Your own actions, clips and shape keys are never touched"
 msgstr "このアドオンが作成したデータを削除します。ご自身のアクション、クリップ、シェイプキーには触れません"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/operators.py:193
+#: ui/operators.py:280
 #, fuzzy
 msgid "Model animation clips"
 msgstr "モデルのアニメーションクリップ"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: tooltip
-#: ui/operators.py:193
+#: ui/operators.py:280
 #, fuzzy
 msgid "Remove bridge-created motion, shapekey and physics clips and their NLA tracks"
 msgstr "ブリッジが作成したモーション、シェイプキー、物理のクリップとそのNLAトラックを削除します"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/operators.py:198
+#: ui/operators.py:285
 #, fuzzy
 msgid "Reset bones and shape keys the clips animated"
 msgstr "ボーンとシェイプキーをリセット"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: tooltip
-#: ui/operators.py:198
+#: ui/operators.py:285
 #, fuzzy
 msgid "Return only the bones and shape keys that the removed clips animated to their rest values"
 msgstr "削除したクリップがアニメーションさせていたボーンとシェイプキーだけを、レスト値に戻します"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: tooltip
-#: ui/operators.py:203
+#: ui/operators.py:290
 #, fuzzy
 msgid "Remove the MMDUV_ shape keys, offset attributes, shader nodes and drivers"
 msgstr "MMDUV_ シェイプキー、オフセット属性、シェーダーノード、ドライバーを削除します"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/operators.py:203
+#: ui/operators.py:290
 #, fuzzy
 msgid "UV morph data"
 msgstr "UVモーフのデータ"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/operators.py:208
+#: ui/operators.py:295
 #, fuzzy
 msgid "Camera and light rigs"
 msgstr "カメラとライトのリグ"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: tooltip
-#: ui/operators.py:208
+#: ui/operators.py:295
 #, fuzzy
 msgid "Delete the MMD camera and sun rigs and their animation"
 msgstr "MMDカメラとサンのリグ、およびそのアニメーションを削除します"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/operators.py:213
+#: ui/operators.py:300
 #, fuzzy
 msgid "Accessories & effects (NineSync: FX)"
 msgstr "アクセサリーとエフェクト (NineSync: FX)"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: tooltip
-#: ui/operators.py:213
+#: ui/operators.py:300
 #, fuzzy
 msgid "Delete imported accessory objects, their effects and their animation"
 msgstr "インポートしたアクセサリーオブジェクト、そのエフェクト、アニメーションを削除します"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/operators.py:218
+#: ui/operators.py:305
 #, fuzzy
 msgid "Audio strip"
 msgstr "オーディオストリップ"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: tooltip
-#: ui/operators.py:218
+#: ui/operators.py:305
 #, fuzzy
 msgid "Remove the sound strip added by the bridge"
 msgstr "ブリッジが追加したサウンドストリップを削除します"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/operators.py:235
+#: ui/operators.py:322
 #, fuzzy
 msgid "Only data created by this add-on is removed. Actions, clips and shape keys you made or picked yourself are kept."
 msgstr "このアドオンが作成したデータのみが削除されます。ご自身で作成または選択したアクション、クリップ、シェイプキーは残ります。"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: report
-#: ui/operators.py:261
+#: ui/operators.py:348
 #, fuzzy
 msgid "Cleaned at %s"
 msgstr "%s にクリーンしました"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: report
-#: ui/operators.py:265
+#: ui/operators.py:352
 #, fuzzy
 msgid "Removed %d clip(s), %d UV key(s), %d rig(s), %d accessory(ies), %d audio strip(s); reset %d channel(s)"
 msgstr "%d個のクリップ、%d個のUVキー、%d個のリグ、%d個のアクセサリー、%d個のオーディオストリップを削除し、%d個のチャンネルをリセットしました"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/operators.py:281
+#: ui/operators.py:368
 #, fuzzy
 msgctxt "Operator"
 msgid "Support Report"
@@ -528,21 +559,21 @@ msgstr "サポートレポート"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: tooltip
-#: ui/operators.py:282
+#: ui/operators.py:369
 #, fuzzy
 msgid "Copy a support report with versions, settings, model status and the recent log to the clipboard. User folders are redacted, but check it before posting"
 msgstr "バージョン、設定、モデルの状態、最近のログを含むサポートレポートをクリップボードにコピーします。ユーザーフォルダーは伏せ字になりますが、投稿前に確認してください"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: report
-#: ui/operators.py:294
+#: ui/operators.py:381
 #, fuzzy
 msgid "Support report copied (%d lines) and saved to the %s text"
 msgstr "サポートレポートをコピーし (%d行)、%s テキストに保存しました"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/operators.py:302
+#: ui/operators.py:389
 #, fuzzy
 msgctxt "Operator"
 msgid "Set Import Scale"
@@ -550,28 +581,28 @@ msgstr "インポートスケールを設定"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: tooltip
-#: ui/operators.py:303
+#: ui/operators.py:390
 #, fuzzy
 msgid "Import new MMD models and motions at this scale from now on (presets mmd_tools' importers, remembers it in the add-on preferences and shares it with NineSync: FX when installed). Models already in the scene keep their scale; re-import them to clear the camera warning"
 msgstr "今後、新しいMMDモデルとモーションをこのスケールでインポートします (mmd_toolsのインポーターにプリセットし、アドオンの環境設定に記憶し、NineSync: FXがインストールされていれば共有します)。すでにシーンにあるモデルのスケールは変わりません。カメラの警告を消すには再インポートしてください"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: report
-#: ui/operators.py:320
+#: ui/operators.py:407
 #, fuzzy
 msgid "New imports will use scale %g (%s)"
 msgstr "今後の新規インポートはスケール %g を使用します (%s)"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: report
-#: ui/operators.py:320
+#: ui/operators.py:407
 #, fuzzy
 msgid "saved for next start"
 msgstr "次回起動時のために保存"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/operators.py:326
+#: ui/operators.py:413
 #, fuzzy
 msgctxt "Operator"
 msgid "Dismiss"
@@ -579,7 +610,7 @@ msgstr "非表示にする"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/operators.py:338
+#: ui/operators.py:425
 #, fuzzy
 msgctxt "Operator"
 msgid "Spawn MMD Camera"
@@ -587,28 +618,28 @@ msgstr "MMDカメラを生成"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: tooltip
-#: ui/operators.py:339
+#: ui/operators.py:426
 #, fuzzy
 msgid "Create the MMD camera rig that the Syncer uses, or select the existing one, and pick it as Create PMM's MMD Camera if none is picked"
 msgstr "シンクロナイザーが使うMMDカメラリグを作成するか既存のものを選択し、未選択ならPMM作成のMMDカメラとして設定します"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: report
-#: ui/operators.py:353
+#: ui/operators.py:440
 #, fuzzy
 msgid "Could not create the MMD camera: %s"
 msgstr "MMDカメラを作成できませんでした: %s"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: report
-#: ui/operators.py:364
+#: ui/operators.py:451
 #, fuzzy
 msgid "MMD camera rig: %s"
 msgstr "MMDカメラリグ: %s"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/operators.py:371
+#: ui/operators.py:458
 #, fuzzy
 msgctxt "Operator"
 msgid "Find MMD Armatures"
@@ -616,14 +647,14 @@ msgstr "MMDアーマチュアを検索"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: tooltip
-#: ui/operators.py:372
+#: ui/operators.py:459
 #, fuzzy
 msgid "List the mmd_tools models in this file and find the PMX each was loaded from"
 msgstr "このファイル内のmmd_toolsモデルを一覧し、それぞれの読み込み元PMXを探します"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/operators.py:393
+#: ui/operators.py:480
 #, fuzzy
 msgctxt "Operator"
 msgid "Add Selected Meshes"
@@ -631,21 +662,21 @@ msgstr "選択したメッシュを追加"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: tooltip
-#: ui/operators.py:394
+#: ui/operators.py:481
 #, fuzzy
 msgid "List the selected mesh objects to be written as .x accessories (blocking props). Meshes that belong to an mmd_tools model are skipped"
 msgstr "選択したメッシュオブジェクトを .x アクセサリー (ブロッキングプロップ) として書き出す一覧に追加します。mmd_toolsモデルに属するメッシュはスキップされます"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: report
-#: ui/operators.py:410
+#: ui/operators.py:497
 #, fuzzy
 msgid "No new mesh objects are selected"
 msgstr "新しいメッシュオブジェクトが選択されていません"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/operators.py:417
+#: ui/operators.py:504
 #, fuzzy
 msgctxt "Operator"
 msgid "Remove Prop"
@@ -653,14 +684,14 @@ msgstr "プロップを削除"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: tooltip
-#: ui/operators.py:418
+#: ui/operators.py:505
 #, fuzzy
 msgid "Take this mesh off the prop list (the object itself is not touched)"
 msgstr "このメッシュをプロップ一覧から外します (オブジェクト自体には触れません)"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/operators.py:432
+#: ui/operators.py:519
 #, fuzzy
 msgctxt "Operator"
 msgid "Read Materials"
@@ -668,14 +699,14 @@ msgstr "マテリアルを読み込む"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: tooltip
-#: ui/operators.py:433
+#: ui/operators.py:520
 #, fuzzy
 msgid "List this mesh's materials. New ones start from their texture's average colour; colours already picked are kept"
 msgstr "このメッシュのマテリアルを一覧します。新しいものはテクスチャの平均色から始まり、すでに選んだ色は保持されます"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/operators.py:447
+#: ui/operators.py:534
 #, fuzzy
 msgctxt "Operator"
 msgid "Bake Root Motion"
@@ -683,28 +714,28 @@ msgstr "ルートモーションをベイク"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: tooltip
-#: ui/operators.py:448
+#: ui/operators.py:535
 #, fuzzy
 msgid "Move this model's root empty motion onto its parent bone and reset the root. Changes the .blend. Keys already on the bone are kept, and new keys are made only on existing keyframes"
 msgstr "このモデルのルートエンプティのモーションを親ボーンに移し、ルートをリセットします。.blendを変更します。ボーンにすでにあるキーは保持され、新しいキーは既存のキーフレーム上にのみ作られます"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: report
-#: ui/operators.py:469
+#: ui/operators.py:556
 #, fuzzy
 msgid "'%s': root motion moved onto the parent bone, %d key(s)"
 msgstr "'%s': ルートモーションを親ボーンに移しました (%d個のキー)"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: report
-#: ui/operators.py:471
+#: ui/operators.py:558
 #, fuzzy
 msgid "'%s' is scaled; the scale stays in Blender but MMD bones cannot hold it"
 msgstr "'%s' はスケールされています。スケールはBlender上に残りますが、MMDのボーンは保持できません"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/operators.py:478
+#: ui/operators.py:565
 #, fuzzy
 msgctxt "Operator"
 msgid "Create PMM"
@@ -712,21 +743,21 @@ msgstr "PMMを作成"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: tooltip
-#: ui/operators.py:479
+#: ui/operators.py:566
 #, fuzzy
 msgid "Write an MMD project with the checked models, the chosen camera and optionally the existing animation. Reads the scene only; Link to Syncer also sets it as the Syncer's PMM so MMD changes can be synced back"
 msgstr "チェックしたモデル、選択したカメラ、必要に応じて既存のアニメーションを含むMMDプロジェクトを書き出します。シーンは読み取るだけです。シンクロナイザーにリンクすると、MMD側の変更を同期できるようにシンクロナイザーのPMMにも設定します"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: report
-#: ui/operators.py:514
+#: ui/operators.py:601
 #, fuzzy
 msgid "Created %s at %s"
 msgstr "%s を %s に作成しました"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: report
-#: ui/operators.py:517
+#: ui/operators.py:604
 #, fuzzy
 msgid "Created %s with %d model(s), %d camera key(s), %d prop(s)"
 msgstr "%s を作成しました (%d個のモデル、%d個のカメラキー、%d個のプロップ)"
@@ -737,6 +768,11 @@ msgstr "%s を作成しました (%d個のモデル、%d個のカメラキー、
 #, fuzzy
 msgid "Audio"
 msgstr "オーディオ"
+
+#. kind: label
+#: ui/panels/audio.py:20
+msgid "Audio File:"
+msgstr ""
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
@@ -768,35 +804,35 @@ msgstr "assets/kagamine.pmm が見つからないため、PMM作成は実行で�
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/panels/create.py:39
+#: ui/panels/create.py:37
 #, fuzzy
 msgid "MMD Armatures (%d)"
 msgstr "MMDアーマチュア (%d)"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/panels/create.py:43
+#: ui/panels/create.py:41
 #, fuzzy
 msgid "Press the refresh icon to find models"
 msgstr "更新アイコンを押してモデルを探します"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/panels/create.py:50
+#: ui/panels/create.py:48
 #, fuzzy
 msgid "Bake Root Motion"
 msgstr "ルートモーションをベイク"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/panels/create.py:57
+#: ui/panels/create.py:55
 #, fuzzy
 msgid "Props (.x) (%d)"
 msgstr "プロップ (.x) (%d)"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/panels/create.py:76
+#: ui/panels/create.py:74
 #, fuzzy
 msgid "Written to an accessories folder beside the PMM"
 msgstr "PMMの隣のアクセサリーフォルダーに書き出されます"
@@ -810,59 +846,50 @@ msgstr "元のPMM:"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/panels/main.py:61
-#, fuzzy
-msgid "Scene is %g fps, PMM is %d fps"
-msgstr "シーンは %g fps、PMMは %d fps です"
-
-# Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
-#. kind: label
-#: ui/panels/main.py:71
+#: ui/panels/main.py:68
 #, fuzzy
 msgid "Scale is %.3f, not %.1f"
 msgstr "スケールは %.3f です (%.1f ではありません)"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/panels/main.py:79
+#: ui/panels/main.py:76
 #, fuzzy
 msgid "Camera keyframe interpolation may not match MMD exactly because of the different distance scale."
 msgstr "距離スケールが異なるため、カメラのキーフレーム補間がMMDと完全には一致しない場合があります。"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/panels/main.py:81
+#: ui/panels/main.py:78
 #, fuzzy
 msgid "Import at Scale 1.0 From Now On"
 msgstr "今後スケール1.0でインポート"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/panels/main.py:85
+#: ui/panels/main.py:82
 #, fuzzy
 msgid "PMX Models (%d)"
 msgstr "PMXモデル (%d)"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/panels/main.py:88
+#: ui/panels/main.py:85
 #, fuzzy
 msgid "Press the refresh icon to read the PMM"
 msgstr "更新アイコンを押してPMMを読み込みます"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/panels/main.py:99
-#, fuzzy
-msgid "Blender"
-msgstr "Blender"
-
-# Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
-#. kind: label
-#: ui/panels/options.py:7
+#: ui/panels/options.py:10
 #, fuzzy
 msgid "Options"
 msgstr "オプション"
+
+#. kind: label
+#: ui/panels/options.py:26
+msgid "Retime to Scene FPS (Scene is %g fps)"
+msgstr ""
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
@@ -1209,7 +1236,7 @@ msgstr "ライト位置: %.2f, %.2f, %.2f"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/panels/remap.py:108
+#: ui/panels/remap.py:109
 #, fuzzy
 msgctxt "Operator"
 msgid "Show Mappings"
@@ -1217,14 +1244,14 @@ msgstr "マッピングを表示"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: tooltip
-#: ui/panels/remap.py:109
+#: ui/panels/remap.py:110
 #, fuzzy
 msgid "List which Rigify control each MMD bone drives, as a tree"
 msgstr "各MMDボーンがどのRigifyコントロールを動かすかをツリーで表示します"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/panels/remap.py:127
+#: ui/panels/remap.py:128
 #, fuzzy
 msgctxt "Operator"
 msgid "Close"
@@ -1232,35 +1259,35 @@ msgstr "閉じる"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/panels/remap.py:137 ui/panels/remap.py:150
+#: ui/panels/remap.py:138 ui/panels/remap.py:151
 #, fuzzy
 msgid "Show Mappings"
 msgstr "マッピングを表示"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/panels/remap.py:148 ui/panels/remap.py:341
+#: ui/panels/remap.py:149 ui/panels/remap.py:342
 #, fuzzy
 msgid "No Rigify rig on this target"
 msgstr "このターゲットにはRigifyリグがありません"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/panels/remap.py:152
+#: ui/panels/remap.py:153
 #, fuzzy
 msgid "MMD bone  >  Rigify control"
 msgstr "MMDボーン  >  Rigifyコントロール"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/panels/remap.py:163
+#: ui/panels/remap.py:164
 #, fuzzy
 msgid "Close"
 msgstr "閉じる"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/panels/remap.py:282
+#: ui/panels/remap.py:283
 #, fuzzy
 msgctxt "Operator"
 msgid "Edit Mappings"
@@ -1268,70 +1295,70 @@ msgstr "マッピングを編集"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: tooltip
-#: ui/panels/remap.py:283
+#: ui/panels/remap.py:284
 #, fuzzy
 msgid "Choose which Rigify control follows each MMD bone. Search by either name"
 msgstr "各MMDボーンに追従するRigifyコントロールを選びます。どちらの名前でも検索できます"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/panels/remap.py:288
+#: ui/panels/remap.py:289
 #, fuzzy
 msgid "Search"
 msgstr "検索"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: tooltip
-#: ui/panels/remap.py:288
+#: ui/panels/remap.py:289
 #, fuzzy
 msgid "Words matched against the MMD bone and the Rigify control"
 msgstr "MMDボーンとRigifyコントロールの両方に照合する語句"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: tooltip
-#: ui/panels/remap.py:294
+#: ui/panels/remap.py:295
 #, fuzzy
 msgid "List only the bones the PMM moves that no Rigify control follows, to choose one for each"
 msgstr "PMMが動かしているボーンのうち、Rigifyコントロールが追従していないものだけを表示し、それぞれに選択できるようにします"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/panels/remap.py:322
+#: ui/panels/remap.py:323
 #, fuzzy
 msgid "Done"
 msgstr "完了"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/panels/remap.py:347
+#: ui/panels/remap.py:348
 #, fuzzy
 msgid "MMD bone:"
 msgstr "MMDボーン:"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/panels/remap.py:348
+#: ui/panels/remap.py:349
 #, fuzzy
 msgid "Rigify control:"
 msgstr "Rigifyコントロール:"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/panels/remap.py:359
+#: ui/panels/remap.py:360
 #, fuzzy
 msgid "Add Mapping"
 msgstr "マッピングを追加"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/panels/remap.py:360
+#: ui/panels/remap.py:361
 #, fuzzy
 msgid "Reset All To Defaults"
 msgstr "すべて初期値に戻す"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/panels/remap.py:368
+#: ui/panels/remap.py:369
 #, fuzzy
 msgctxt "Operator"
 msgid "Add Mapping"
@@ -1339,14 +1366,14 @@ msgstr "マッピングを追加"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: tooltip
-#: ui/panels/remap.py:369
+#: ui/panels/remap.py:370
 #, fuzzy
 msgid "Add a mapping: choose any bone of the rig and the Rigify control that follows it"
 msgstr "マッピングを追加します。リグの任意のボーンと、それに追従するRigifyコントロールを選びます"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/panels/remap.py:386
+#: ui/panels/remap.py:387
 #, fuzzy
 msgctxt "Operator"
 msgid "Remove Mapping"
@@ -1354,14 +1381,14 @@ msgstr "マッピングを削除"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: tooltip
-#: ui/panels/remap.py:387
+#: ui/panels/remap.py:388
 #, fuzzy
 msgid "Remove this mapping you added"
 msgstr "追加したこのマッピングを削除します"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/panels/remap.py:404
+#: ui/panels/remap.py:405
 #, fuzzy
 msgctxt "Operator"
 msgid "Reset Mapping"
@@ -1369,24 +1396,17 @@ msgstr "マッピングをリセット"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: tooltip
-#: ui/panels/remap.py:405
+#: ui/panels/remap.py:406
 #, fuzzy
 msgid "Put the mapping back to the built-in table"
 msgstr "マッピングを組み込みのテーブルに戻します"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/panels/remap.py:422
+#: ui/panels/remap.py:423
 #, fuzzy
 msgid "Rigify Remap"
 msgstr "Rigifyリマップ"
-
-# Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
-#. kind: label
-#: ui/panels/remap.py:446
-#, fuzzy
-msgid "Clip"
-msgstr "クリップ"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
@@ -1530,7 +1550,7 @@ msgstr "Rigifyクリップ"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/properties.py:160 ui/panels/main.py:115
+#: ui/properties.py:160
 #, fuzzy
 msgid "MMD Leg IK"
 msgstr "MMD 足IK"
@@ -1663,7 +1683,7 @@ msgstr "PMMのキーフレームは30 fpsです。フレームレートの異な
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/properties.py:237
+#: ui/properties.py:237 ui/panels/options.py:28
 #, fuzzy
 msgid "Retime to Scene FPS"
 msgstr "シーンのFPSにリタイム"
@@ -1796,7 +1816,7 @@ msgstr "PMM作成でプロジェクトを保存する場所"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/properties.py:295 ui/panels/create.py:36
+#: ui/properties.py:295
 #, fuzzy
 msgid "MMD Camera"
 msgstr "MMDカメラ"
@@ -1838,7 +1858,7 @@ msgstr "各PMXのコピーを、英語名にしてPMMの隣のmodelsフォルダ
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
-#: ui/properties.py:311 ui/panels/create.py:77
+#: ui/properties.py:311 ui/panels/create.py:75
 #, fuzzy
 msgid "Export Animation"
 msgstr "アニメーションを書き出す"
@@ -1871,16 +1891,26 @@ msgstr "モーフ"
 msgid "Hide the model in MMD where all of its meshes are hidden in Blender (Disable in Viewports or in Renders), keyed or not"
 msgstr "Blenderですべてのメッシュが非表示 (ビューポートで無効またはレンダーで無効) のとき、キーの有無にかかわらずMMDでもモデルを非表示にします"
 
-# Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: label
 #: ui/properties.py:323
+msgid "Initial Keys"
+msgstr ""
+
+#. kind: tooltip
+#: ui/properties.py:323
+msgid "Write the current pose of everything that has no keyframes (camera, bones, morphs) as its frame 0 key, so a camera moved or a model posed without keying still reaches MMD. The scene is not changed"
+msgstr ""
+
+# Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
+#. kind: label
+#: ui/properties.py:328
 #, fuzzy
 msgid "Markers"
 msgstr "マーカー"
 
 # Machine-drafted pilot; needs review by a native speaker before the fuzzy flag is removed.
 #. kind: tooltip
-#: ui/properties.py:323
+#: ui/properties.py:328
 #, fuzzy
 msgid "Write the timeline markers as keyframes on a hidden 'Markers' accessory, at MMD's 30 fps frames. MMD has no markers of its own; Sync does not read them back"
 msgstr "タイムラインマーカーを、非表示の 'Markers' アクセサリー上にMMDの30 fpsフレームでキーフレームとして書き込みます。MMDには独自のマーカーはなく、同期では読み戻しません"
@@ -1895,8 +1925,17 @@ msgstr "このアドオンの設定を別のコピーのNineSync: PMM Bridgeが�
 #~ msgid "%s model %d of %d: %s"
 #~ msgstr "%s モデル %d/%d: %s"
 
+#~ msgid "Blender"
+#~ msgstr "Blender"
+
 #~ msgid "Checking"
 #~ msgstr "確認中"
 
+#~ msgid "Clip"
+#~ msgstr "クリップ"
+
 #~ msgid "Importing"
 #~ msgstr "インポート中"
+
+#~ msgid "Scene is %g fps, PMM is %d fps"
+#~ msgstr "シーンは %g fps、PMMは %d fps です"

@@ -16,11 +16,12 @@ class MMDBRIDGE_PT_camera(Panel):
         layout = self.layout
         settings = context.scene.mmd_bridge
         layout.prop(settings, "sync_camera")
-        row = layout.row()
-        row.separator(factor=2.0)
-        column = row.column()
-        column.enabled = settings.sync_camera
-        column.prop(settings, "follow_camera")
-        if settings.follow_camera:
-            column.prop(settings, "follow_rotation")
+        # One top-level row per sub-option: a column nested in a row packs its rows
+        # tighter than the panel's own.
+        children = ["follow_camera"] + (["follow_rotation"] if settings.follow_camera else [])
+        for name in children:
+            row = layout.row()
+            row.enabled = settings.sync_camera
+            row.separator(factor=2.0)
+            row.prop(settings, name)
         layout.prop(settings, "sync_light")

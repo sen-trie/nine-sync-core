@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.2
+
+- Added One-Click Setup. Syncing PMM's automatically imports the PMM's models and links them.
+
 ## 0.9.1
 
 - The interface, tooltips and messages can now be translated through Blender's language settings.

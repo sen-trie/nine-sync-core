@@ -19,7 +19,7 @@ from ..common.constants import (
     UV_KEY_PREFIX,
 )
 from ..common.logger import log
-from ..common.scene_utils import find_rig_root
+from ..common.scene_utils import find_rig_root, find_scene_collection
 from .audio import sequence_strips
 from .ik import restore_ik_influence
 from .mmd_tools_link import mmd_tools_modules
@@ -149,9 +149,9 @@ def clean_uv_data(root, counts):
 
 
 # Deletes the camera and light rigs, empties the collections and their actions.
-def clean_camera_light(counts):
+def clean_camera_light(scene, counts):
     for name in (CAMERA_COLLECTION, LIGHT_COLLECTION):
-        collection = bpy.data.collections.get(name)
+        collection = find_scene_collection(scene, name)
         if collection is None:
             continue
         for mmd_type in ("CAMERA", "LIGHT"):
@@ -233,7 +233,7 @@ def run_clean(scene, settings, options):
         purge_actions(ACTION_PREFIX)
     if options["scene"]:
         settings.scene_record = ""
-        clean_camera_light(counts)
+        clean_camera_light(scene, counts)
     if options.get("fx"):
         for result in hooks.run("clean", scene, options):
             for name, value in (result or {}).items():

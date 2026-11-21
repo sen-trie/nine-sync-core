@@ -10,19 +10,31 @@ def retime_factor(scene, settings):
     return scene_fps(scene) / PMM_FPS
 
 
+# True for the second key of a cut: one frame after the key before it, with the keys on
+# either side of the pair more than a frame away. A run of three or more keys a frame
+# apart is a baked track (a camera keyed on every frame), not a cut.
+def is_cut(frames, index):
+    if index < 1 or frames[index] - frames[index - 1] > 1:
+        return False
+    before = index < 2 or frames[index - 1] - frames[index - 2] > 1
+    after = index + 1 >= len(frames) or frames[index + 1] - frames[index] > 1
+    return before and after
+
+
 # Scales key frames by the factor; keys landing on the same frame collapse into one.
-# hold_cuts keeps keys that were one frame apart on consecutive frames, so a camera
-# cut stays a cut.
+# hold_cuts keeps the two keys of a cut on consecutive frames, so a camera cut stays a
+# cut, while a baked track is scaled like any other.
 def retime_keys(keys, factor, hold_cuts=False):
+    ordered = sorted(keys, key=lambda k: k.frame)
+    frames = [k.frame for k in ordered]
     scaled = {}
-    previous_old = None
     previous_new = None
-    for key in sorted(keys, key=lambda k: k.frame):
+    for index, key in enumerate(ordered):
         new = int(round(key.frame * factor))
-        if hold_cuts and previous_old is not None and key.frame - previous_old <= 1:
+        if hold_cuts and is_cut(frames, index):
             new = previous_new + 1
         scaled[new] = key._replace(frame=new)
-        previous_old, previous_new = key.frame, new
+        previous_new = new
     return [scaled[frame] for frame in sorted(scaled)]
 
 

@@ -386,11 +386,13 @@ def set_camera_state(tail, key):
     return state + tail[len(state) :]
 
 
-def set_play_range(tail, start, end):
+# use_start and use_end are MMD's play start and end switches; a range copied from
+# another project keeps that project's switches.
+def set_play_range(tail, start, end, use_start=True, use_end=True):
     state = bytearray(tail[PLAYBACK_OFFSET : PLAYBACK_OFFSET + 28])
     struct.pack_into("<i", state, 12, 0)
-    state[18] = 1
-    state[19] = 1
+    state[18] = 1 if use_start else 0
+    state[19] = 1 if use_end else 0
     struct.pack_into("<ii", state, 20, max(0, start), max(0, end))
     return tail[:PLAYBACK_OFFSET] + bytes(state) + tail[PLAYBACK_OFFSET + 28 :]
 

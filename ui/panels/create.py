@@ -7,7 +7,7 @@ from ...common.constants import NINESYNC_CATEGORY
 from ...sync.mmd_tools_link import mmd_tools_available
 from ...sync.project_export import template_path
 from ...sync.root_motion import has_root_motion
-from ..helpers import draw_wrapped
+from ..helpers import draw_field, draw_wrapped
 from ..relink import settings_outdated
 
 
@@ -31,10 +31,8 @@ class NINESYNC_PT_create(Panel):
             box.alert = True
             draw_wrapped(box, iface_("assets/kagamine.pmm is missing, so Create PMM cannot run."))
         layout.operator("ninesync.spawn_camera", icon="CAMERA_DATA")
-        split = layout.split(factor=0.55)
-        split.enabled = settings.export_animation
-        split.label(text="MMD Camera")
-        split.prop(settings, "export_camera_object", text="")
+        camera = draw_field(layout, settings, "export_camera_object", "MMD Camera", "CAMERA_DATA")
+        camera.enabled = settings.export_animation
         header, box = layout.panel("ninesync_export_models", default_closed=False)
         header.label(text=iface_("MMD Armatures (%d)") % len(settings.export_items))
         header.operator("ninesync.refresh_export", text="", icon="FILE_REFRESH", emboss=False)
@@ -83,6 +81,7 @@ class NINESYNC_PT_create(Panel):
         row = layout.row(align=True)
         row.enabled = settings.export_animation
         row.prop(settings, "export_markers", toggle=True)
+        row.prop(settings, "export_initial_keys", toggle=True)
         row = layout.row()
         row.scale_y = 1.5
         row.operator("ninesync.create_pmm", icon="EXPORT")

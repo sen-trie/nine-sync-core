@@ -17,4 +17,5 @@ class MMDBRIDGE_PT_audio(Panel):
         layout = self.layout
         settings = context.scene.mmd_bridge
         layout.prop(settings, "sync_audio")
-        layout.prop(settings, "audio_path")
+        layout.label(text="Audio File:")
+        layout.prop(settings, "audio_path", text="")

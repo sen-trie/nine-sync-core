@@ -24,6 +24,17 @@ def draw_wrapped(layout, text, width=None):
         column.label(text=line)
 
 
+# One labelled field: icon and label in a fixed left column, the field filling the rest.
+# A label passed as the property's own text shares the row with the field and gets
+# squeezed or cut, so labels of neighbouring rows would start and end at different
+# places.
+def draw_field(layout, data, prop, text, icon="NONE", factor=0.45):
+    split = layout.split(factor=factor, align=True)
+    split.label(text=text, icon=icon)
+    split.prop(data, prop, text="")
+    return split
+
+
 def draw_dependency_notices(layout):
     for label, message, url in missing_dependencies():
         box = layout.box()

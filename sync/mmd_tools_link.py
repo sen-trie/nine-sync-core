@@ -24,6 +24,7 @@ REQUIRED_API = (
     ("core.camera", ("MMDCamera",)),
     ("core.light", ("MMDLight",)),
     ("core.pmx", ("load",)),
+    ("core.pmd", ("load",)),
     ("core.pmd.importer", ("import_pmd_to_pmx",)),
     ("translations", ("translateFromJp",)),
     ("auto_scene_setup", ()),

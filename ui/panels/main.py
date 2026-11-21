@@ -4,17 +4,17 @@ from bpy.app.translations import pgettext_iface as iface_
 from ...common.constants import (
     NINESYNC_CATEGORY,
     NINESYNC_MAIN_LABEL,
-    PMM_FPS,
     UNIT_SCALE,
 )
-from ...common.scene_utils import fps_differs, scene_fps
 from ...sync.engine import sync_running
 from ...sync.mmd_tools_link import mmd_tools_available
 from ...sync.progress import progress_state
 from ...sync.scale import current_scale, scale_warning_active
+from ...sync.setup import pmm_linked
 from ...sync.targets import item_state, item_status_text
 from ..helpers import (
     draw_dependency_notices,
+    draw_field,
     draw_fx_notice,
     draw_wrapped,
     status_icon,
@@ -45,6 +45,11 @@ class MMDBRIDGE_PT_main(Panel):
         layout.label(text="Source PMM:")
         layout.prop(settings, "filepath", text="")
         running = sync_running()
+        if not pmm_linked(settings):
+            setup = layout.row()
+            setup.enabled = not running
+            setup.scale_y = 1.5
+            setup.operator("ninesync.one_click_setup", icon="IMPORT")
         row = layout.row(align=True)
         row.enabled = not running
         row.scale_y = 1.5
@@ -55,14 +60,6 @@ class MMDBRIDGE_PT_main(Panel):
             layout.progress(factor=state["fraction"], type="BAR", text=state["text"])
         else:
             draw_wrapped(layout, settings.status)
-        if fps_differs(context.scene):
-            fps_box = layout.box()
-            fps_box.label(
-                text=iface_("Scene is %g fps, PMM is %d fps")
-                % (round(scene_fps(context.scene), 3), PMM_FPS),
-                icon="TIME",
-            )
-            fps_box.prop(settings, "retime_fps")
         if scale_warning_active(settings):
             box = layout.box()
             header = box.row()
@@ -96,25 +93,16 @@ class MMDBRIDGE_PT_main(Panel):
             header.label(text=item.pmm_name, icon=status_icon(state))
             if body is None:
                 continue
-            body.prop(item, "target", text="Blender")
+            draw_field(body, item, "target", "Model", "ARMATURE_DATA")
             note = item_status_text(item)
             if note:
                 note_row = body.row()
                 note_row.alert = state == "ERROR"
-                note_row.scale_y = 0.85
                 note_row.label(text=note)
             if item.target is not None:
-                clip_row = body.row(align=True)
-                clip_row.label(text="", icon="NLA")
-                clip_row.prop(item, "clip", text="Motion")
-                shape_row = body.row(align=True)
-                shape_row.label(text="", icon="SHAPEKEY_DATA")
-                shape_row.prop(item, "shape_clip", text="Shapekey")
-                ik_row = body.row(align=True)
-                ik_row.label(text="", icon="CON_KINEMATIC")
-                ik_row.prop(item, "solve_leg_ik", text="MMD Leg IK")
+                draw_field(body, item, "clip", "Motion", "NLA")
+                draw_field(body, item, "shape_clip", "Shapekey", "SHAPEKEY_DATA")
+                draw_field(body, item, "solve_leg_ik", "MMD Leg IK", "CON_KINEMATIC")
                 if settings.use_physics_vmd:
-                    physics_row = body.row(align=True)
-                    physics_row.label(text="", icon="PHYSICS")
-                    physics_row.prop(item, "physics_vmd", text="")
+                    draw_field(body, item, "physics_vmd", "Physics", "PHYSICS")
         draw_fx_notice(layout, settings)

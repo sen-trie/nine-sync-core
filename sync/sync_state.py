@@ -7,7 +7,7 @@ from array import array
 from ..common.animation import collect_owners, iter_fcurves, strips_using
 from ..common.constants import CAMERA_COLLECTION, LIGHT_COLLECTION
 from ..common.logger import log
-from ..common.scene_utils import child_of_type, find_rig_root
+from ..common.scene_utils import child_of_type, find_rig_root, find_scene_collection
 from .clips import clip_track_names, find_bridge_clip_any, primary_key_owner
 from .mmd_tools_link import mmd_tools_installed, mmd_tools_modules
 from .visibility import find_visibility_action
@@ -224,9 +224,9 @@ SCENE_RIGS = {"camera": (CAMERA_COLLECTION, "CAMERA"), "light": (LIGHT_COLLECTIO
 
 # (root, child) of the camera or light rig, or None. Looks only: ensure_*_rig would
 # create the collection and the rig.
-def find_scene_rig(kind):
+def find_scene_rig(scene, kind):
     collection_name, mmd_type = SCENE_RIGS[kind]
-    collection = bpy.data.collections.get(collection_name)
+    collection = find_scene_collection(scene, collection_name)
     root = find_rig_root(collection, mmd_type) if collection is not None else None
     if root is None:
         return None
@@ -235,8 +235,8 @@ def find_scene_rig(kind):
 
 
 # What a camera or light import writes: the active action of each rig ID that has one.
-def scene_outputs(kind, lazy=False):
-    rig = find_scene_rig(kind)
+def scene_outputs(scene, kind, lazy=False):
+    rig = find_scene_rig(scene, kind)
     if rig is None:
         return []
     owners = collect_owners(list(rig))
@@ -265,7 +265,7 @@ def write_scene_part(settings, source, kind, planned):
         "settings": planned.settings,
         "keys": planned.keys,
         "range": planned.frame_range,
-        "outputs": scene_outputs(kind),
+        "outputs": scene_outputs(settings.id_data, kind),
     }
     settings.scene_record = json.dumps(record, sort_keys=True, ensure_ascii=False)
 
